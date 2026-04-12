@@ -82,7 +82,13 @@ class Layer1:
 
     MAX_DRAWERS = 15  # at most 15 moments in wake-up
     MAX_CHARS = 3200  # hard cap on total L1 text (~800 tokens)
-    MAX_SCAN = 2000  # don't scan more than this for L1 generation
+    # MAX_SCAN caps how many drawers we read for L1 generation.  This prevents
+    # O(n) full-table scans on large palaces (100K+ drawers) which are too slow
+    # for wake-up.  The tradeoff: the top-15 selection is approximate for very
+    # large datasets — drawers beyond MAX_SCAN are never considered.  This is
+    # acceptable because L1 is a best-effort summary, and L3 deep search covers
+    # the full corpus when precision matters.
+    MAX_SCAN = 2000
 
     def __init__(self, palace_path: str = None, wing: str = None):
         cfg = MempalaceConfig()
@@ -97,7 +103,12 @@ class Layer1:
         """
         _BATCH = 500
 
-        # Fast path: only fetch drawers with importance >= 3
+        # Fast path: only fetch drawers with importance >= 3.
+        # This is an optimization that catches the common case — importance is
+        # the primary signal in generate()'s scoring.  generate() also considers
+        # emotional_weight and weight, but those are rarely set without a
+        # corresponding importance value.  The fallback full-scan below ensures
+        # nothing is missed when the fast path returns too few results.
         importance_filter = {"importance": {"$gte": 3}}
         if self.wing:
             where = {"$and": [{"wing": self.wing}, importance_filter]}
