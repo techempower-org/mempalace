@@ -510,8 +510,10 @@ def test_post_daemon_mine_posts_correct_body(tmp_path):
     class _FakeResp:
         def __enter__(self_inner):
             return self_inner
+
         def __exit__(self_inner, *a):
             return False
+
         def read(self_inner):
             return b'{"returncode": 0}'
 
@@ -555,7 +557,7 @@ def test_post_daemon_mine_no_url_returns_false(tmp_path):
 
 def test_maybe_auto_ingest_routes_through_daemon(tmp_path):
     """When PALACE_DAEMON_URL is set, _maybe_auto_ingest POSTs to /mine instead of spawning."""
-    mempal_dir = tmp_path / "project"
+    mempal_dir = tmp_path / "my-project"
     mempal_dir.mkdir()
     env = {"MEMPAL_DIR": str(mempal_dir), "PALACE_DAEMON_URL": "http://daemon.example:8085"}
     with patch.dict("os.environ", env, clear=True):
@@ -568,11 +570,14 @@ def test_maybe_auto_ingest_routes_through_daemon(tmp_path):
     args, kwargs = mock_post.call_args
     assert args[0] == str(mempal_dir.resolve())
     assert kwargs["mode"] == "projects"
+    # Wing is derived from the dirname (matches local-spawn convo_miner default).
+    # "my-project" → "my_project" via normalize_wing_name.
+    assert kwargs["wing"] == "my_project"
 
 
 def test_mine_sync_routes_through_daemon(tmp_path):
     """When PALACE_DAEMON_URL is set, _mine_sync POSTs to /mine instead of running locally."""
-    mempal_dir = tmp_path / "project"
+    mempal_dir = tmp_path / "my-project"
     mempal_dir.mkdir()
     env = {"MEMPAL_DIR": str(mempal_dir), "PALACE_DAEMON_URL": "http://daemon.example:8085"}
     with patch.dict("os.environ", env, clear=True):
@@ -585,6 +590,7 @@ def test_mine_sync_routes_through_daemon(tmp_path):
     args, kwargs = mock_post.call_args
     assert args[0] == str(mempal_dir.resolve())
     assert kwargs["mode"] == "projects"
+    assert kwargs["wing"] == "my_project"
 
 
 def test_ingest_transcript_routes_through_daemon(tmp_path):
@@ -619,6 +625,45 @@ def test_ingest_transcript_skips_when_too_small(tmp_path):
             with patch("mempalace.hooks_cli._post_daemon_mine") as mock_post:
                 _ingest_transcript(str(transcript))
     mock_post.assert_not_called()
+
+
+def test_ingest_transcript_rejects_traversal(tmp_path):
+    """_ingest_transcript reuses _validate_transcript_path so traversal is rejected.
+
+    Closes a Copilot finding on jphein/mempalace#2: hook_precompact accepts
+    the transcript path from harness JSON; without validation a malicious
+    payload could mine arbitrary files. Reuses the same guard already
+    applied by _count_human_messages.
+    """
+    env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+    with patch.dict("os.environ", env, clear=True):
+        with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+            with patch("mempalace.hooks_cli._post_daemon_mine") as mock_post:
+                _ingest_transcript("/some/dir/../../etc/secret.jsonl")
+    mock_post.assert_not_called()
+
+
+def test_ingest_transcript_rejects_wrong_extension(tmp_path):
+    """_ingest_transcript rejects non-.jsonl/.json paths (extension guard)."""
+    convo_dir = tmp_path / ".claude" / "projects" / "-home-u-Projects-myapp"
+    convo_dir.mkdir(parents=True)
+    transcript = convo_dir / "session.txt"
+    transcript.write_text("a" * 200)
+    env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+    with patch.dict("os.environ", env, clear=True):
+        with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+            with patch("mempalace.hooks_cli._post_daemon_mine") as mock_post:
+                _ingest_transcript(str(transcript))
+    mock_post.assert_not_called()
+
+
+def test_wing_from_mine_dir_normalizes():
+    """Project mine wings derive from dirname via normalize_wing_name (lowercase, _-collapse)."""
+    from mempalace.hooks_cli import _wing_from_mine_dir
+
+    assert _wing_from_mine_dir("/home/u/Projects/realm-watch") == "realm_watch"
+    assert _wing_from_mine_dir("/var/data/My App") == "my_app"
+    assert _wing_from_mine_dir("/srv/MEMPAL") == "mempal"
 
 
 def test_maybe_auto_ingest_ignores_transcript_arg_path(tmp_path):
