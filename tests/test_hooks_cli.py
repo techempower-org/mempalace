@@ -13,12 +13,14 @@ from mempalace.hooks_cli import (
     _count_human_messages,
     _extract_recent_messages,
     _get_mine_targets,
+    _ingest_transcript,
     _log,
     _maybe_auto_ingest,
     _mempalace_python,
     _mine_already_running,
     _mine_sync,
     _parse_harness_input,
+    _post_daemon_mine,
     _sanitize_session_id,
     _validate_transcript_path,
     _wing_from_transcript_path,
@@ -438,7 +440,7 @@ def test_maybe_auto_ingest_with_env(tmp_path):
     """With MEMPAL_DIR set, spawns mine in projects mode against that dir."""
     mempal_dir = tmp_path / "project"
     mempal_dir.mkdir()
-    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}):
+    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}, clear=True):
         with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
             with patch("mempalace.hooks_cli._MINE_PID_FILE", tmp_path / "mine.pid"):
                 with patch("mempalace.hooks_cli.subprocess.Popen") as mock_popen:
@@ -460,7 +462,7 @@ def test_maybe_auto_ingest_uses_mempalace_python(tmp_path):
     """
     mempal_dir = tmp_path / "project"
     mempal_dir.mkdir()
-    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}):
+    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}, clear=True):
         with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
             with patch("mempalace.hooks_cli._MINE_PID_FILE", tmp_path / "mine.pid"):
                 with patch(
@@ -476,7 +478,7 @@ def test_mine_sync_with_env_uses_projects_mode(tmp_path):
     """Precompact sync path uses projects mode when MEMPAL_DIR is set."""
     mempal_dir = tmp_path / "project"
     mempal_dir.mkdir()
-    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}):
+    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}, clear=True):
         with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
             with patch("mempalace.hooks_cli.subprocess.run") as mock_run:
                 _mine_sync()
@@ -489,13 +491,134 @@ def test_mine_sync_uses_mempalace_python(tmp_path):
     """Sync mine command uses _mempalace_python(), not bare sys.executable."""
     mempal_dir = tmp_path / "project"
     mempal_dir.mkdir()
-    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}):
+    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}, clear=True):
         with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
             with patch("mempalace.hooks_cli._mempalace_python", return_value="/fake/venv/python"):
                 with patch("mempalace.hooks_cli.subprocess.run") as mock_run:
                     _mine_sync()
                     cmd = mock_run.call_args[0][0]
                     assert cmd[0] == "/fake/venv/python"
+
+
+# --- daemon-routed mining (PALACE_DAEMON_URL set) ---
+
+
+def test_post_daemon_mine_posts_correct_body(tmp_path):
+    """_post_daemon_mine sends the directory, wing, and mode to the daemon /mine endpoint."""
+    captured = {}
+
+    class _FakeResp:
+        def __enter__(self_inner):
+            return self_inner
+        def __exit__(self_inner, *a):
+            return False
+        def read(self_inner):
+            return b'{"returncode": 0}'
+
+    def fake_urlopen(req, timeout=None):
+        captured["url"] = req.full_url
+        captured["body"] = req.data
+        captured["api_key"] = req.get_header("X-api-key")
+        return _FakeResp()
+
+    env = {"PALACE_DAEMON_URL": "http://daemon.example:8085", "PALACE_API_KEY": "k123"}
+    with patch.dict("os.environ", env, clear=True):
+        with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                ok = _post_daemon_mine("/home/u/.claude/projects/-x", wing="wing_x", mode="convos")
+    assert ok is True
+    assert captured["url"] == "http://daemon.example:8085/mine"
+    body = json.loads(captured["body"].decode())
+    assert body == {"dir": "/home/u/.claude/projects/-x", "wing": "wing_x", "mode": "convos"}
+    assert captured["api_key"] == "k123"
+
+
+def test_post_daemon_mine_returns_false_on_error(tmp_path):
+    """_post_daemon_mine swallows network errors and returns False."""
+    env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+    with patch.dict("os.environ", env, clear=True):
+        with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+            with patch("urllib.request.urlopen", side_effect=ConnectionError("boom")):
+                ok = _post_daemon_mine("/some/dir", wing="wing_x")
+    assert ok is False
+
+
+def test_post_daemon_mine_no_url_returns_false(tmp_path):
+    """Without PALACE_DAEMON_URL, helper short-circuits to False without HTTP."""
+    with patch.dict("os.environ", {}, clear=True):
+        with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+            with patch("urllib.request.urlopen") as mock_open:
+                ok = _post_daemon_mine("/some/dir", wing="wing_x")
+    mock_open.assert_not_called()
+    assert ok is False
+
+
+def test_maybe_auto_ingest_routes_through_daemon(tmp_path):
+    """When PALACE_DAEMON_URL is set, _maybe_auto_ingest POSTs to /mine instead of spawning."""
+    mempal_dir = tmp_path / "project"
+    mempal_dir.mkdir()
+    env = {"MEMPAL_DIR": str(mempal_dir), "PALACE_DAEMON_URL": "http://daemon.example:8085"}
+    with patch.dict("os.environ", env, clear=True):
+        with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+            with patch("mempalace.hooks_cli._post_daemon_mine", return_value=True) as mock_post:
+                with patch("mempalace.hooks_cli.subprocess.Popen") as mock_popen:
+                    _maybe_auto_ingest()
+    mock_popen.assert_not_called()
+    mock_post.assert_called_once()
+    args, kwargs = mock_post.call_args
+    assert args[0] == str(mempal_dir.resolve())
+    assert kwargs["mode"] == "projects"
+
+
+def test_mine_sync_routes_through_daemon(tmp_path):
+    """When PALACE_DAEMON_URL is set, _mine_sync POSTs to /mine instead of running locally."""
+    mempal_dir = tmp_path / "project"
+    mempal_dir.mkdir()
+    env = {"MEMPAL_DIR": str(mempal_dir), "PALACE_DAEMON_URL": "http://daemon.example:8085"}
+    with patch.dict("os.environ", env, clear=True):
+        with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+            with patch("mempalace.hooks_cli._post_daemon_mine", return_value=True) as mock_post:
+                with patch("mempalace.hooks_cli.subprocess.run") as mock_run:
+                    _mine_sync()
+    mock_run.assert_not_called()
+    mock_post.assert_called_once()
+    args, kwargs = mock_post.call_args
+    assert args[0] == str(mempal_dir.resolve())
+    assert kwargs["mode"] == "projects"
+
+
+def test_ingest_transcript_routes_through_daemon(tmp_path):
+    """When PALACE_DAEMON_URL is set, _ingest_transcript POSTs the parent dir + project wing."""
+    convo_dir = tmp_path / ".claude" / "projects" / "-home-u-Projects-myapp"
+    convo_dir.mkdir(parents=True)
+    transcript = convo_dir / "session.jsonl"
+    transcript.write_text("a" * 200)  # > 100 byte threshold
+    env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+    with patch.dict("os.environ", env, clear=True):
+        with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+            with patch("mempalace.hooks_cli._post_daemon_mine", return_value=True) as mock_post:
+                with patch("mempalace.hooks_cli.subprocess.Popen") as mock_popen:
+                    _ingest_transcript(str(transcript))
+    mock_popen.assert_not_called()
+    mock_post.assert_called_once()
+    args, kwargs = mock_post.call_args
+    assert args[0] == str(convo_dir)
+    assert kwargs["wing"] == "wing_myapp"
+    assert kwargs["mode"] == "convos"
+
+
+def test_ingest_transcript_skips_when_too_small(tmp_path):
+    """Transcripts < 100 bytes are still ignored (sanity guard preserved)."""
+    convo_dir = tmp_path / ".claude" / "projects" / "-home-u-Projects-myapp"
+    convo_dir.mkdir(parents=True)
+    transcript = convo_dir / "session.jsonl"
+    transcript.write_text("tiny")
+    env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+    with patch.dict("os.environ", env, clear=True):
+        with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+            with patch("mempalace.hooks_cli._post_daemon_mine") as mock_post:
+                _ingest_transcript(str(transcript))
+    mock_post.assert_not_called()
 
 
 def test_maybe_auto_ingest_ignores_transcript_arg_path(tmp_path):
@@ -742,7 +865,7 @@ def test_precompact_with_mempal_dir(tmp_path):
     """Precompact runs subprocess.run (sync) when MEMPAL_DIR is set."""
     mempal_dir = tmp_path / "project"
     mempal_dir.mkdir()
-    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}):
+    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}, clear=True):
         with patch("mempalace.hooks_cli.subprocess.run") as mock_run:
             result = _capture_hook_output(
                 hook_precompact,
@@ -757,7 +880,7 @@ def test_precompact_with_mempal_dir_oserror(tmp_path):
     """Precompact handles OSError from subprocess gracefully."""
     mempal_dir = tmp_path / "project"
     mempal_dir.mkdir()
-    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}):
+    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}, clear=True):
         with patch("mempalace.hooks_cli.subprocess.run", side_effect=OSError("fail")):
             result = _capture_hook_output(
                 hook_precompact,
@@ -771,7 +894,7 @@ def test_precompact_with_timeout(tmp_path):
     """Precompact handles TimeoutExpired gracefully -- still allows."""
     mempal_dir = tmp_path / "project"
     mempal_dir.mkdir()
-    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}):
+    with patch.dict("os.environ", {"MEMPAL_DIR": str(mempal_dir)}, clear=True):
         with patch(
             "mempalace.hooks_cli.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="mine", timeout=60),
@@ -795,6 +918,7 @@ def test_precompact_mines_transcript_dir(tmp_path, monkeypatch):
     # _ingest_transcript skips files smaller than 100 bytes, so pad it.
     transcript.write_text("x" * 200)
     monkeypatch.delenv("MEMPAL_DIR", raising=False)
+    monkeypatch.delenv("PALACE_DAEMON_URL", raising=False)
     with patch("mempalace.hooks_cli.subprocess.Popen") as mock_popen:
         with patch("mempalace.hooks_cli.subprocess.run") as mock_run:
             result = _capture_hook_output(
@@ -806,10 +930,12 @@ def test_precompact_mines_transcript_dir(tmp_path, monkeypatch):
     mock_run.assert_not_called()
     mock_popen.assert_called_once()
     cmd = mock_popen.call_args[0][0]
-    # Mines the transcript's parent dir as convos, into wing "sessions".
+    # Mines the transcript's parent dir as convos. Wing is derived per-transcript;
+    # for a path outside the standard Claude Code projects layout, _wing_from_transcript_path
+    # falls back to "wing_sessions".
     assert str(tmp_path) in cmd
     assert cmd[cmd.index("--mode") + 1] == "convos"
-    assert cmd[cmd.index("--wing") + 1] == "sessions"
+    assert cmd[cmd.index("--wing") + 1] == "wing_sessions"
 
 
 # --- run_hook ---

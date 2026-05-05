@@ -278,6 +278,41 @@ def _daemon_strict() -> bool:
     )
 
 
+def _post_daemon_mine(directory: str, wing: str, mode: str = "convos") -> bool:
+    """POST a /mine request to palace-daemon. Returns True on accepted job, False on error.
+
+    The hook sends client-side absolute paths (e.g. ``/home/<user>/.claude/projects/...``);
+    the daemon translates them to its own filesystem layout via its
+    ``PALACE_DAEMON_PATH_MAP`` env var. Failures are logged and swallowed —
+    a missed mine is not worth crashing a hook over.
+    """
+    daemon_url = os.environ.get("PALACE_DAEMON_URL", "").strip().rstrip("/")
+    if not daemon_url:
+        return False
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"{daemon_url}/mine",
+            data=json.dumps({"dir": directory, "wing": wing, "mode": mode}).encode("utf-8"),
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        api_key = os.environ.get("PALACE_API_KEY", "").strip()
+        if api_key:
+            req.add_header("x-api-key", api_key)
+        # Mining is fire-and-forget from the hook's perspective; the daemon
+        # serializes jobs under its own semaphore. A short timeout keeps the
+        # hook from blocking the harness.
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+        _log(f"Daemon mine accepted: dir={directory} wing={wing} mode={mode} resp={body[:200]}")
+        return True
+    except Exception as e:
+        _log(f"Daemon mine failed (dir={directory} wing={wing}): {e}")
+        return False
+
+
 def _maybe_auto_ingest():
     """Background-mine MEMPAL_DIR (project files) if set.
 
@@ -286,11 +321,12 @@ def _maybe_auto_ingest():
     asymmetric interpreter handling and PID-file overwrite when both
     targets fire from a single hook call (#1231 review).
     """
-    if _daemon_strict():
-        _log("Skipping auto-ingest: PALACE_DAEMON_URL set, daemon owns writes")
-        return
     targets = _get_mine_targets()
     if not targets:
+        return
+    if _daemon_strict():
+        for mine_dir, mode in targets:
+            _post_daemon_mine(mine_dir, wing="general", mode=mode)
         return
     if _mine_already_running():
         _log("Skipping auto-ingest: mine already running")
@@ -309,11 +345,12 @@ def _mine_sync():
     in ``hook_precompact`` — keeping them out of this function avoids
     timeout stacking against the harness 30s ceiling (#1231 review).
     """
-    if _daemon_strict():
-        _log("Skipping sync mine: PALACE_DAEMON_URL set, daemon owns writes")
-        return
     targets = _get_mine_targets()
     if not targets:
+        return
+    if _daemon_strict():
+        for mine_dir, mode in targets:
+            _post_daemon_mine(mine_dir, wing="general", mode=mode)
         return
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     log_path = STATE_DIR / "hook.log"
@@ -543,12 +580,20 @@ def _save_diary_direct(
 
 
 def _ingest_transcript(transcript_path: str):
-    """Mine a Claude Code session transcript into the palace as a conversation."""
-    if _daemon_strict():
-        _log("Skipping transcript ingest: PALACE_DAEMON_URL set, daemon owns writes")
-        return
+    """Mine a Claude Code session transcript into the palace as a conversation.
+
+    When ``PALACE_DAEMON_URL`` is set, route the mine through the daemon's
+    ``/mine`` endpoint (so the daemon stays the single writer). Otherwise
+    fall back to spawning ``mempalace mine`` locally.
+    """
     path = Path(transcript_path).expanduser()
     if not path.is_file() or path.stat().st_size < 100:
+        return
+
+    project_wing = _wing_from_transcript_path(transcript_path)
+
+    if _daemon_strict():
+        _post_daemon_mine(str(path.parent), wing=project_wing, mode="convos")
         return
 
     from .config import MempalaceConfig
@@ -572,7 +617,7 @@ def _ingest_transcript(transcript_path: str):
                     "--mode",
                     "convos",
                     "--wing",
-                    "sessions",
+                    project_wing,
                 ],
                 stdout=log_f,
                 stderr=log_f,
