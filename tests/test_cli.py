@@ -54,7 +54,13 @@ def test_cmd_status_custom_palace(mock_config_cls):
 
 def _make_purge_args(**overrides):
     """Build a Namespace with all purge args set."""
-    defaults = {"palace": None, "wing": None, "room": None, "yes": True}
+    defaults = {
+        "palace": None,
+        "wing": None,
+        "room": None,
+        "source_file": None,
+        "yes": True,
+    }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
 
@@ -77,10 +83,10 @@ def test_cmd_purge_requires_filter(mock_config_cls, capsys, tmp_path):
     palace.mkdir()
     (palace / "chroma.sqlite3").write_text("")
     mock_config_cls.return_value.palace_path = str(palace)
-    args = _make_purge_args(palace=str(palace))  # no wing, no room
+    args = _make_purge_args(palace=str(palace))  # no wing, no room, no source-file
     cmd_purge(args)
     out = capsys.readouterr().out
-    assert "Error: specify --wing and/or --room" in out
+    assert "Error: specify at least one of --wing, --room, --source-file" in out
 
 
 @patch("mempalace.cli.MempalaceConfig")
@@ -158,6 +164,155 @@ def test_cmd_purge_deletes_via_where_clause(tmp_path):
     surviving = col2.get(include=["metadatas"])
     surviving_ids = surviving.get("ids") if isinstance(surviving, dict) else surviving.ids
     assert set(surviving_ids) == {"k1", "k2"}
+
+
+@patch("mempalace.cli.MempalaceConfig")
+def test_cmd_purge_source_file_only(mock_config_cls, tmp_path):
+    """Purge accepts --source-file as the sole filter."""
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    (palace / "chroma.sqlite3").write_text("")
+    mock_config_cls.return_value.palace_path = str(palace)
+    args = _make_purge_args(source_file="/abs/path/to/note.md", palace=str(palace))
+
+    mock_col = MagicMock()
+    mock_col.get.return_value = {"ids": []}
+    mock_backend = MagicMock()
+    mock_backend.return_value.get_collection.return_value = mock_col
+    with patch("mempalace.backends.chroma.ChromaBackend", mock_backend):
+        cmd_purge(args)
+    first_call = mock_col.get.call_args_list[0]
+    assert first_call.kwargs["where"] == {"source_file": "/abs/path/to/note.md"}
+
+
+@patch("mempalace.cli.MempalaceConfig")
+def test_cmd_purge_source_file_with_wing_uses_and_filter(mock_config_cls, tmp_path):
+    """Combining --wing and --source-file builds a $and filter."""
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    (palace / "chroma.sqlite3").write_text("")
+    mock_config_cls.return_value.palace_path = str(palace)
+    args = _make_purge_args(wing="myproj", source_file="/abs/note.md", palace=str(palace))
+
+    mock_col = MagicMock()
+    mock_col.get.return_value = {"ids": []}
+    mock_backend = MagicMock()
+    mock_backend.return_value.get_collection.return_value = mock_col
+    with patch("mempalace.backends.chroma.ChromaBackend", mock_backend):
+        cmd_purge(args)
+    first_call = mock_col.get.call_args_list[0]
+    assert first_call.kwargs["where"] == {
+        "$and": [{"wing": "myproj"}, {"source_file": "/abs/note.md"}]
+    }
+
+
+def test_cmd_purge_source_file_end_to_end(tmp_path):
+    """Real palace: purge by source_file removes matching drawers, leaves siblings."""
+    from mempalace.backends.chroma import ChromaBackend
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    backend = ChromaBackend()
+    col = backend.get_collection(str(palace), "mempalace_drawers", create=True)
+    col.add(
+        ids=["a1", "a2", "b1"],
+        documents=["alpha 1", "alpha 2", "beta 1"],
+        metadatas=[
+            {"wing": "w", "room": "r", "source_file": "/notes/alpha.md"},
+            {"wing": "w", "room": "r", "source_file": "/notes/alpha.md"},
+            {"wing": "w", "room": "r", "source_file": "/notes/beta.md"},
+        ],
+    )
+    assert col.count() == 3
+
+    args = _make_purge_args(source_file="/notes/alpha.md", palace=str(palace))
+    with patch("mempalace.cli.MempalaceConfig") as mock_config_cls:
+        mock_config_cls.return_value.palace_path = str(palace)
+        cmd_purge(args)
+
+    col2 = backend.get_collection(str(palace), "mempalace_drawers", create=False)
+    assert col2.count() == 1
+    survivor = col2.get(include=["metadatas"])
+    survivor_ids = survivor.get("ids") if isinstance(survivor, dict) else survivor.ids
+    assert survivor_ids == ["b1"]
+
+
+# ── cmd_mined ──────────────────────────────────────────────────────────
+
+
+def _make_mined_args(**overrides):
+    defaults = {"palace": None, "wing": None, "limit": 50}
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+@patch("mempalace.cli.MempalaceConfig")
+def test_cmd_mined_no_palace(mock_config_cls, capsys, tmp_path):
+    missing = tmp_path / "missing"
+    mock_config_cls.return_value.palace_path = str(missing)
+    from mempalace.cli import cmd_mined
+
+    cmd_mined(_make_mined_args(palace=str(missing)))
+    assert "No palace found" in capsys.readouterr().out
+
+
+def test_cmd_mined_groups_by_wing_and_source(tmp_path, capsys):
+    """End-to-end: cmd_mined reads a real palace and groups by wing × source_file."""
+    from mempalace.backends.chroma import ChromaBackend
+    from mempalace.cli import cmd_mined
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    backend = ChromaBackend()
+    col = backend.get_collection(str(palace), "mempalace_drawers", create=True)
+    col.add(
+        ids=["a1", "a2", "b1", "x1"],
+        documents=["a1", "a2", "b1", "x1"],
+        metadatas=[
+            {"wing": "w1", "source_file": "/n/alpha.md"},
+            {"wing": "w1", "source_file": "/n/alpha.md"},
+            {"wing": "w1", "source_file": "/n/beta.md"},
+            # No source_file key — diary-style drawer; cmd_mined skips these.
+            {"wing": "w2"},
+        ],
+    )
+
+    with patch("mempalace.cli.MempalaceConfig") as mock_config_cls:
+        mock_config_cls.return_value.palace_path = str(palace)
+        cmd_mined(_make_mined_args(palace=str(palace)))
+
+    out = capsys.readouterr().out
+    assert "WING: w1" in out
+    assert "/n/alpha.md" in out
+    assert "/n/beta.md" in out
+    # w2 has only a source_file-less drawer; cmd_mined should not list it.
+    assert "WING: w2" not in out
+
+
+def test_cmd_mined_filter_by_wing(tmp_path, capsys):
+    from mempalace.backends.chroma import ChromaBackend
+    from mempalace.cli import cmd_mined
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    backend = ChromaBackend()
+    col = backend.get_collection(str(palace), "mempalace_drawers", create=True)
+    col.add(
+        ids=["a", "b"],
+        documents=["a", "b"],
+        metadatas=[
+            {"wing": "keep", "source_file": "/k.md"},
+            {"wing": "skip", "source_file": "/s.md"},
+        ],
+    )
+
+    with patch("mempalace.cli.MempalaceConfig") as mock_config_cls:
+        mock_config_cls.return_value.palace_path = str(palace)
+        cmd_mined(_make_mined_args(palace=str(palace), wing="keep"))
+
+    out = capsys.readouterr().out
+    assert "/k.md" in out
+    assert "/s.md" not in out
 
 
 # ── cmd_search ─────────────────────────────────────────────────────────
