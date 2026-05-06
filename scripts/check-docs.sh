@@ -5,9 +5,14 @@
 #   1. Test count in README matches `pytest --collect-only -q` reality.
 #   2. Every fork commit hash referenced in CLAUDE.md / README.md /
 #      FORK_CHANGELOG.md actually resolves via `git cat-file -e`.
-#   3. Every upstream PR mentioned (#NNNN) has a state matching what the
+#   3. FORK_CHANGELOG.md is in sync with docs/fork-changes.yaml
+#      (re-runs render-docs.py --check internally).
+#   4. Every upstream PR mentioned (#NNNN) has a state matching what the
 #      doc claims (OPEN / MERGED / CLOSED). Uses `gh pr view`; skipped
 #      gracefully if `gh` isn't authenticated.
+#   5. Every `commit:` hash in docs/fork-changes.yaml is referenced
+#      somewhere in CLAUDE.md (catches drift between the structured DB
+#      and the hand-maintained row inventory).
 #
 # Exit codes:
 #   0 — clean
@@ -39,7 +44,7 @@ fail()  { printf '  \033[31m✗\033[0m %s\n' "$1" >&2; ((failures++)); }
 failures=0
 
 # ── 1. test count ────────────────────────────────────────────────────────
-step "1/4  test count in README"
+step "1/5  test count in README"
 readme_count=$(grep -oE '^[0-9]+ tests pass on `main`' README.md | grep -oE '^[0-9]+' || echo "")
 if [ -z "$readme_count" ]; then
     warn "README has no '<N> tests pass on \`main\`' line — skipping"
@@ -70,7 +75,7 @@ else
 fi
 
 # ── 2. commit hash references ────────────────────────────────────────────
-step "2/4  commit hashes referenced in docs resolve"
+step "2/5  commit hashes referenced in docs resolve"
 docs=(README.md CLAUDE.md FORK_CHANGELOG.md)
 # Strip cross-repo URLs first so we only check hashes that should resolve
 # in *this* fork. Pattern: anything inside (https://github.com/<other>/<repo>/commit/HASH)
@@ -98,7 +103,7 @@ if (( unresolved == 0 )) && (( ${#hashes[@]} > 0 )); then
 fi
 
 # ── 3. FORK_CHANGELOG.md is up-to-date with the canonical YAML ───────────
-step "3/4  FORK_CHANGELOG.md regenerates clean"
+step "3/5  FORK_CHANGELOG.md regenerates clean"
 render_bin="$REPO_ROOT/scripts/render-docs.py"
 if [ -x "$render_bin" ]; then
     py="$REPO_ROOT/venv/bin/python"
@@ -115,7 +120,7 @@ else
 fi
 
 # ── 4. upstream PR states ────────────────────────────────────────────────
-step "4/4  upstream PR states match doc claims"
+step "4/5  upstream PR states match doc claims"
 if ! command -v gh >/dev/null 2>&1; then
     warn "gh not on PATH — skipping PR state check"
 elif ! gh auth status >/dev/null 2>&1; then
@@ -191,6 +196,76 @@ else
     done
     if (( drift == 0 )) && (( ${#pr_numbers[@]} > 0 )); then
         ok "all ${#pr_numbers[@]} PR references match upstream state"
+    fi
+fi
+
+# ── 5. fork-only YAML commits referenced in CLAUDE.md ────────────────────
+# Every entry in docs/fork-changes.yaml has a `commit:` field. CLAUDE.md
+# is the row inventory for what's still ahead of upstream. The two
+# represent the same set of changes through different lenses, but the
+# anchors differ:
+#
+#   - YAML entries with a `pr:` field are represented in CLAUDE.md by
+#     the *PR table entry* for that PR (e.g. "#1087 | open …"), not by
+#     the commit hash — so the hash check would be redundant noise.
+#
+#   - YAML entries with `pr_state: MERGED` are upstreamed; CLAUDE.md
+#     replaces the row's commit hash with "merged via #NNNN" once the
+#     PR ships, by design.
+#
+# So this check focuses on the only category that should always have a
+# matching CLAUDE.md row: entries that are fork-only with no PR yet
+# (no `pr:` field, no `pr_state`). If those don't appear in CLAUDE.md,
+# the row inventory genuinely missed an update.
+step "5/5  fork-only YAML commits referenced in CLAUDE.md"
+yaml_path="$REPO_ROOT/docs/fork-changes.yaml"
+if [ ! -f "$yaml_path" ]; then
+    warn "docs/fork-changes.yaml not present — skipping"
+elif [ ! -f "$REPO_ROOT/CLAUDE.md" ]; then
+    warn "CLAUDE.md not present — skipping"
+else
+    # Walk the YAML in awk — for each entry block, capture commit, pr,
+    # and pr_state. Emit only commits where both pr and pr_state are
+    # absent (truly fork-only, not yet upstreamed and not staged for
+    # upstream). Entry boundaries: lines starting with `  - id:`.
+    mapfile -t yaml_commits < <(
+        awk '
+            function flush() {
+                if (commit && !pr && pr_state == "") print commit
+                commit = ""; pr = ""; pr_state = ""
+            }
+            /^  - id:/ { flush() }
+            /^[[:space:]]+commit:[[:space:]]/ {
+                gsub(/^[[:space:]]+commit:[[:space:]]+"?/, "")
+                gsub(/"?[[:space:]]*$/, "")
+                commit = $0
+            }
+            /^[[:space:]]+pr:[[:space:]]/ {
+                gsub(/^[[:space:]]+pr:[[:space:]]+"?/, "")
+                gsub(/"?[[:space:]]*$/, "")
+                pr = $0
+            }
+            /^[[:space:]]+pr_state:[[:space:]]/ {
+                gsub(/^[[:space:]]+pr_state:[[:space:]]+"?/, "")
+                gsub(/"?[[:space:]]*$/, "")
+                pr_state = $0
+            }
+            END { flush() }
+        ' "$yaml_path" | sort -u
+    )
+    missing=0
+    for h in "${yaml_commits[@]}"; do
+        if ! grep -qF "$h" "$REPO_ROOT/CLAUDE.md"; then
+            fail "fork-only YAML commit \`$h\` not referenced in CLAUDE.md row inventory"
+            ((missing++))
+        fi
+    done
+    if (( missing == 0 )) && (( ${#yaml_commits[@]} > 0 )); then
+        ok "all ${#yaml_commits[@]} fork-only YAML commits referenced in CLAUDE.md"
+    elif (( ${#yaml_commits[@]} == 0 )); then
+        # Every YAML entry currently has either a pr: or pr_state:.
+        # That's possible during quiet periods; not a drift signal.
+        ok "no fork-only YAML commits to check (every entry is either upstreamed or has an open PR)"
     fi
 fi
 
