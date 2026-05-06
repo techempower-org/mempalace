@@ -276,6 +276,23 @@ PROBES: List[Tuple[str, str, str]] = [
      "_try_slack_json + provenance footer"),
     ("Build the where filter for wing/room scoping in chromadb queries", "searcher.py",
      "build_where_filter — small but probe a known target"),
+    # ── Markdown-targeted probes (only meaningful on a corpus that
+    #    includes the repo's docs, not the package-only mine) ────────────
+    ("Why did we move checkpoints into a separate recovery collection?",
+     "2026-04-25-checkpoint-collection-split.md",
+     "Phase A-E split design doc; only in spec, not code"),
+    ("Verbatim-only Phase 2 architecture and migration plan",
+     "2026-05-05-verbatim-only-design.md",
+     "verbatim-only spec — drops checkpoint summaries, retires recovery collection"),
+    ("Pre-release grep checklist for mempalace-mcp entry point alignment",
+     "RELEASING.md",
+     "fork-side release doc filed as upstream #1142"),
+    ("Fork-ahead row inventory and upstream PR tracking table",
+     "CLAUDE.md",
+     "row inventory at fork's CLAUDE.md, not in any .py"),
+    ("Hook silent_save vs block-mode behavior — why one beats the other",
+     "CLAUDE.md",
+     "Hook Save Architecture section in CLAUDE.md"),
 ]
 
 
