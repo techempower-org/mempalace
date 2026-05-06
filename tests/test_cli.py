@@ -920,6 +920,28 @@ def test_main_split_dispatches():
         mock_cmd.assert_called_once()
 
 
+def test_main_mined_dispatches():
+    """Regression: typo or dispatch-table miss for `mempalace mined` would
+    silently produce KeyError. Dispatch tests for sibling commands exist;
+    mined needs the same coverage (Copilot finding on jphein/mempalace#4)."""
+    with (
+        patch("sys.argv", ["mempalace", "mined"]),
+        patch("mempalace.cli.cmd_mined") as mock_cmd,
+    ):
+        main()
+        mock_cmd.assert_called_once()
+
+
+def test_main_mined_rejects_negative_limit(capsys):
+    """argparse should reject negative --limit at parse time, not let
+    nonsensical values through to cmd_mined (Copilot finding on #4)."""
+    with patch("sys.argv", ["mempalace", "mined", "--limit", "-1"]):
+        with pytest.raises(SystemExit):
+            main()
+    err = capsys.readouterr().err
+    assert "limit" in err.lower()
+
+
 def test_mcp_command_prints_setup_guidance(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["mempalace", "mcp"])
 

@@ -18,6 +18,8 @@ Commands:
     mempalace wake-up                     Show L0 + L1 wake-up context
     mempalace wake-up --wing my_app       Wake-up for a specific project
     mempalace status                      Show what's been filed
+    mempalace mined                       List mined source files grouped by wing
+    mempalace purge --source-file <path>  Remove drawers mined from a specific file
 
 Examples:
     mempalace init ~/projects/my_app
@@ -779,13 +781,27 @@ def cmd_mined(args):
 
     # Wing-by-source aggregation. Mirrors miner.status's pagination so
     # palaces with hundreds of thousands of drawers don't trip SQLite's
-    # max-variable limit on a single col.get(limit=total).
-    total = col.count()
+    # max-variable limit on a single col.get(limit=total). When --wing
+    # is given, push the filter into the query so we scan only that
+    # wing rather than the full collection (Copilot finding on #4).
+    where = {"wing": args.wing} if args.wing else None
+    if where is not None:
+        try:
+            scope = col.get(where=where, include=[])
+            scope_ids = scope.get("ids") if isinstance(scope, dict) else getattr(scope, "ids", [])
+            total = len(scope_ids or [])
+        except Exception:
+            total = col.count()
+    else:
+        total = col.count()
     wing_sources: dict = defaultdict(lambda: defaultdict(int))
     batch_size = 5000
     offset = 0
     while offset < total:
-        r = col.get(limit=batch_size, offset=offset, include=["metadatas"])
+        kwargs = {"limit": batch_size, "offset": offset, "include": ["metadatas"]}
+        if where is not None:
+            kwargs["where"] = where
+        r = col.get(**kwargs)
         batch = r.get("metadatas") if isinstance(r, dict) else getattr(r, "metadatas", [])
         if not batch:
             break
@@ -795,8 +811,6 @@ def cmd_mined(args):
             if not src:
                 continue
             wing = m.get("wing", "?")
-            if args.wing and wing != args.wing:
-                continue
             wing_sources[wing][src] += 1
         offset += len(batch)
 
@@ -1494,9 +1508,22 @@ def main():
         help="List mined source files grouped by wing (companion to status, which groups by room)",
     )
     p_mined.add_argument("--wing", help="Show only this wing")
+
+    def _nonneg_int(value: str) -> int:
+        # Reject negative --limit values; argparse's bare type=int would
+        # silently accept e.g. -1 and produce nonsensical "... -2 more"
+        # output (Copilot finding on jphein/mempalace#4).
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            raise argparse.ArgumentTypeError(f"expected non-negative integer, got {value!r}")
+        if n < 0:
+            raise argparse.ArgumentTypeError(f"--limit must be >= 0 (got {n})")
+        return n
+
     p_mined.add_argument(
         "--limit",
-        type=int,
+        type=_nonneg_int,
         default=50,
         help="Show at most this many sources per wing (default 50; 0 means show all)",
     )
