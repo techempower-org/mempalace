@@ -347,6 +347,34 @@ def test_wing_from_transcript_path_nested_deep():
     assert _wing_from_transcript_path(path) == "frontend"
 
 
+def test_wing_from_transcript_path_dashed_project():
+    """Project names containing dashes (realm-watch) survive intact via
+    normalize_wing_name — dashes become underscores. Closes Copilot
+    finding on jphein/mempalace#9: previously the last-dash-token rule
+    collapsed ``realm-watch`` to ``watch``.
+    """
+    path = "/home/jp/.claude/projects/-home-jp-Projects-realm-watch/session.jsonl"
+    assert _wing_from_transcript_path(path) == "realm_watch"
+
+
+def test_wing_from_transcript_path_dashed_project_uppercase():
+    """Combined: dashes preserved AND lowercased."""
+    path = "/home/jp/.claude/projects/-home-jp-Projects-Realm-Watch/session.jsonl"
+    assert _wing_from_transcript_path(path) == "realm_watch"
+
+
+def test_wing_from_transcript_path_matches_operator_mine():
+    """The wing this returns matches what `mempalace mine ~/Projects/X`
+    would produce when --wing is omitted (convo_miner.normalize_wing_name
+    over the dir basename). This is the convergence the bare-name shape
+    is supposed to deliver."""
+    from mempalace.config import normalize_wing_name
+
+    path = "/home/jp/.claude/projects/-home-jp-Projects-realm-watch/session.jsonl"
+    operator_wing = normalize_wing_name("realm-watch")
+    assert _wing_from_transcript_path(path) == operator_wing
+
+
 # --- _log ---
 
 
