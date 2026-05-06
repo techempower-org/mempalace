@@ -442,159 +442,6 @@ def _extract_recent_messages(transcript_path: str, count: int = _RECENT_MSG_COUN
     return messages[-count:]
 
 
-_THEME_STOPWORDS = frozenset(
-    "the a an and or but in on at to for of is it i me my you your we our "
-    "this that with from by was were be been are not no yes can do did dont "
-    "will would should could have has had lets let just also like so if then "
-    "ok okay sure yeah hey hi here there what when where how why which some "
-    "all any each every about into out up down over after before between "
-    "get got make made need want use used using check look see run try "
-    "know think right now still already really very much more most too "
-    "file files code one two new first last next thing things way well".split()
-)
-
-
-def _extract_themes(messages: list[str], max_themes: int = 3) -> list[str]:
-    """Pull 2-3 distinctive topic words from recent messages.
-
-    Note: stopword list is English-only; non-English corpora will produce noisy themes.
-    """
-    from collections import Counter
-
-    words: Counter[str] = Counter()
-    for msg in messages:
-        for word in msg.lower().split():
-            # Strip punctuation, keep words 4+ chars
-            clean = word.strip(".,;:!?\"'`()[]{}#<>/\\-_=+@$%^&*~")
-            if len(clean) >= 4 and clean not in _THEME_STOPWORDS and clean.isalpha():
-                words[clean] += 1
-    return [w for w, _ in words.most_common(max_themes)]
-
-
-def _save_diary_direct(
-    transcript_path: str,
-    session_id: str,
-    wing: str = "",
-    toast: bool = False,
-) -> dict:
-    """Write a diary checkpoint by calling the tool function directly (no MCP roundtrip).
-
-    If `wing` is set, the entry lands in that wing (typically the project wing
-    derived from the transcript path). Otherwise falls back to `tool_diary_write`'s
-    default of `wing_session-hook`.
-
-    Returns {"count": N, "themes": [...]} on success, {"count": 0} on failure.
-    """
-    messages = _extract_recent_messages(transcript_path)
-    if not messages:
-        _log("No recent messages to save")
-        return {"count": 0}
-
-    themes = _extract_themes(messages)
-
-    # Build a compressed diary entry from recent conversation
-    now = datetime.now()
-    topics = "|".join(m[:80] for m in messages[-10:])
-    entry = (
-        f"CHECKPOINT:{now.strftime('%Y-%m-%d')}|session:{session_id}"
-        f"|msgs:{len(messages)}|recent:{topics}"
-    )
-
-    # Opt-in: route through palace-daemon when PALACE_DAEMON_URL is set.
-    # Lets the daemon queue during /repair mode=rebuild and drain afterward,
-    # with its own themed systemMessage. On any error, fall through to the
-    # direct tool call below — hook never loses a save because the daemon
-    # is down.
-    daemon_url = os.environ.get("PALACE_DAEMON_URL", "").strip().rstrip("/")
-    if daemon_url:
-        try:
-            import urllib.request
-
-            req = urllib.request.Request(
-                f"{daemon_url}/silent-save",
-                data=json.dumps(
-                    {
-                        "session_id": session_id,
-                        "wing": wing,
-                        "entry": entry,
-                        "topic": "checkpoint",
-                        "agent_name": "session-hook",
-                        "themes": themes,
-                        "message_count": len(messages),
-                    }
-                ).encode("utf-8"),
-                headers={"content-type": "application/json"},
-                method="POST",
-            )
-            api_key = os.environ.get("PALACE_API_KEY", "").strip()
-            if api_key:
-                req.add_header("x-api-key", api_key)
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                daemon_result = json.loads(resp.read().decode("utf-8"))
-            _log(
-                f"Daemon silent-save: queued={daemon_result.get('queued')} "
-                f"count={daemon_result.get('count')}"
-            )
-            try:
-                ack_file = STATE_DIR / "last_checkpoint"
-                ack_file.write_text(
-                    json.dumps({"msgs": len(messages), "ts": now.isoformat()}),
-                    encoding="utf-8",
-                )
-            except OSError:
-                pass
-            if toast and not daemon_result.get("queued"):
-                _desktop_toast(f"Checkpoint saved — {len(messages)} messages archived")
-            return {
-                "count": len(messages),
-                "themes": themes,
-                "systemMessage": daemon_result.get("systemMessage"),
-                "queued": daemon_result.get("queued", False),
-            }
-        except Exception as e:
-            _log(f"Daemon silent-save failed ({e})")
-            # Strict mode: when PALACE_DAEMON_URL is set, NEVER fall through to direct write.
-            # Daemon is single source of truth; concurrent local writes corrupt SQLite under
-            # Syncthing replication. Drop the save and surface the error instead.
-            if os.environ.get("PALACE_DAEMON_STRICT", "1") != "0":
-                return {
-                    "count": 0,
-                    "themes": themes,
-                    "systemMessage": f"⚠ Save dropped — daemon at {daemon_url} unreachable: {e}",
-                    "queued": False,
-                }
-            _log("PALACE_DAEMON_STRICT=0 — falling through to direct write")
-
-    try:
-        from .mcp_server import tool_diary_write
-
-        result = tool_diary_write(
-            agent_name="session-hook",
-            entry=entry,
-            topic="checkpoint",
-            wing=wing,
-        )
-        if result.get("success"):
-            _log(f"Diary checkpoint saved: {result.get('entry_id', '?')}")
-            # Write state for ack tool to read
-            try:
-                ack_file = STATE_DIR / "last_checkpoint"
-                ack_file.write_text(
-                    json.dumps({"msgs": len(messages), "ts": now.isoformat()}),
-                    encoding="utf-8",
-                )
-            except OSError:
-                pass
-            if toast:
-                _desktop_toast(f"Checkpoint saved \u2014 {len(messages)} messages archived")
-            return {"count": len(messages), "themes": themes}
-        else:
-            _log(f"Diary checkpoint failed: {result.get('error', 'unknown')}")
-    except Exception as e:
-        _log(f"Diary checkpoint error: {e}")
-    return {"count": 0}
-
-
 def _ingest_transcript(transcript_path: str):
     """Mine a Claude Code session transcript into the palace as a conversation.
 
@@ -764,32 +611,25 @@ def hook_stop(data: dict, harness: str):
         project_wing = _wing_from_transcript_path(transcript_path)
 
         if silent:
-            # Save directly via Python API — systemMessage renders in terminal
-            result = {"count": 0}
+            # Verbatim-only mode: transcript ingest is the only save path.
+            # No more 1-KB checkpoint summaries — verbatim transcript
+            # chunks in mempalace_drawers contain everything a summary would.
+            # The save-marker gate ("only advance on confirmed save") does
+            # not apply to fire-and-forget mining; advance unconditionally.
+            # Failure detection moves to daemon-side observability
+            # (hook.log + systemd journal). See
+            # docs/superpowers/specs/2026-05-05-verbatim-only-design.md.
             if transcript_path:
-                result = _save_diary_direct(
-                    transcript_path, session_id, wing=project_wing, toast=toast
-                )
                 _ingest_transcript(transcript_path)
             _maybe_auto_ingest()
-            # Only advance save marker after successful save
-            count = result.get("count", 0)
-            if count > 0:
-                try:
-                    last_save_file.write_text(str(exchange_count), encoding="utf-8")
-                except OSError:
-                    pass
-                # Prefer the daemon's themed systemMessage when present (it
-                # knows whether the save was queued during a repair); fall
-                # back to the legacy direct-write phrasing otherwise.
-                sys_msg = result.get("systemMessage")
-                if not sys_msg:
-                    themes = result.get("themes", [])
-                    tag = (" \u2014 " + ", ".join(themes)) if themes else ""
-                    sys_msg = f"\u2726 {count} memories woven into the palace{tag}"
-                _output({"systemMessage": sys_msg})
-            else:
-                _output({})
+            try:
+                last_save_file.write_text(str(exchange_count), encoding="utf-8")
+            except OSError:
+                pass
+            sys_msg = f"\u2726 Transcript ingest triggered (wing={project_wing})"
+            if toast:
+                _desktop_toast(sys_msg)
+            _output({"systemMessage": sys_msg})
         else:
             # Legacy: block and ask Claude to save via MCP tools.
             # Marker advances before confirmed save — best-effort; if Claude
@@ -822,36 +662,21 @@ def hook_session_start(data: dict, harness: str):
 
 
 def hook_precompact(data: dict, harness: str):
-    """Precompact hook: write a session-recovery checkpoint, mine the
-    transcript synchronously, then allow compaction.
+    """Precompact hook: mine the transcript synchronously, then allow compaction.
 
-    Session-recovery write parallels ``hook_stop``'s ``_save_diary_direct``
-    so a context-compaction event leaves a "where we were" marker in the
-    dedicated ``mempalace_session_recovery`` collection — queryable later
-    via ``mempalace_session_recovery_read`` by session_id. This isn't a
-    summary of context; it's a timestamped event of "context boundary
-    crossed at message N" so an operator can find the last marker before
-    compaction lost in-context state.
+    The recovery-marker write was removed in this PR (it used to land
+    a "where we were" diary entry in the dedicated
+    mempalace_session_recovery collection). The verbatim transcript
+    chunks captured by _ingest_transcript already cover the recovery
+    use case — searching for any phrase from the last few messages
+    locates the session. The collection itself and its read tool are
+    untouched in this PR; a follow-up retires them once nothing writes.
     """
     parsed = _parse_harness_input(data, harness)
     session_id = parsed["session_id"]
     transcript_path = parsed["transcript_path"]
 
     _log(f"PRE-COMPACT triggered for session {session_id}")
-
-    # Write a recovery marker before mining + compacting. Failure here is
-    # non-fatal; the mine + compaction must still proceed.
-    if transcript_path:
-        try:
-            project_wing = _wing_from_transcript_path(transcript_path)
-            _save_diary_direct(
-                transcript_path,
-                session_id,
-                wing=project_wing,
-                toast=False,
-            )
-        except Exception as e:
-            _log(f"PreCompact recovery-write failed (non-fatal): {e}")
 
     # Capture tool output via our normalize path before compaction loses it
     if transcript_path:
