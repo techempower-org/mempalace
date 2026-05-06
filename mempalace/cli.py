@@ -18,6 +18,8 @@ Commands:
     mempalace wake-up                     Show L0 + L1 wake-up context
     mempalace wake-up --wing my_app       Wake-up for a specific project
     mempalace status                      Show what's been filed
+    mempalace mined                       List mined source files grouped by wing
+    mempalace purge --source-file <path>  Remove drawers mined from a specific file
 
 Examples:
     mempalace init ~/projects/my_app
@@ -677,15 +679,19 @@ def cmd_purge(args):
         print(f"\n  No palace found at {palace_path}")
         return
 
-    if args.wing and args.room:
-        where = {"$and": [{"wing": args.wing}, {"room": args.room}]}
-    elif args.wing:
-        where = {"wing": args.wing}
-    elif args.room:
-        where = {"room": args.room}
-    else:
-        print("  Error: specify --wing and/or --room")
+    source_file = getattr(args, "source_file", None)
+    clauses = []
+    if args.wing:
+        clauses.append({"wing": args.wing})
+    if args.room:
+        clauses.append({"room": args.room})
+    if source_file:
+        clauses.append({"source_file": source_file})
+
+    if not clauses:
+        print("  Error: specify at least one of --wing, --room, --source-file")
         return
+    where = clauses[0] if len(clauses) == 1 else {"$and": clauses}
 
     backend = ChromaBackend()
     try:
@@ -711,6 +717,8 @@ def cmd_purge(args):
         label_parts.append(f"wing={args.wing}")
     if args.room:
         label_parts.append(f"room={args.room}")
+    if source_file:
+        label_parts.append(f"source-file={source_file}")
     label = " ".join(label_parts)
 
     if match_count == 0:
@@ -739,6 +747,91 @@ def cmd_status(args):
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     status(palace_path=palace_path)
+
+
+def cmd_mined(args):
+    """List mined source files grouped by wing.
+
+    Companion to ``status`` (which groups by wing × room) — answers "which
+    files have I mined into this wing?" so an operator can pick targets
+    for ``mempalace purge --source-file <path>``.
+
+    Skips drawers without a ``source_file`` metadata key (typically
+    diary entries, kg drawers, manually-added entries).
+    """
+    from collections import defaultdict
+
+    from .backends.chroma import ChromaBackend
+    from .migrate import contains_palace_database
+
+    palace_path = os.path.abspath(
+        os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    )
+
+    if not os.path.isdir(palace_path) or not contains_palace_database(palace_path):
+        print(f"\n  No palace found at {palace_path}")
+        return
+
+    backend = ChromaBackend()
+    try:
+        col = backend.get_collection(palace_path, "mempalace_drawers")
+    except Exception as e:
+        print(f"\n  Error reading palace: {e}")
+        return
+
+    # Wing-by-source aggregation. Mirrors miner.status's pagination so
+    # palaces with hundreds of thousands of drawers don't trip SQLite's
+    # max-variable limit on a single col.get(limit=total). When --wing
+    # is given, push the filter into the query so we scan only that
+    # wing rather than the full collection (Copilot finding on #4).
+    where = {"wing": args.wing} if args.wing else None
+    if where is not None:
+        try:
+            scope = col.get(where=where, include=[])
+            scope_ids = scope.get("ids") if isinstance(scope, dict) else getattr(scope, "ids", [])
+            total = len(scope_ids or [])
+        except Exception:
+            total = col.count()
+    else:
+        total = col.count()
+    wing_sources: dict = defaultdict(lambda: defaultdict(int))
+    batch_size = 5000
+    offset = 0
+    while offset < total:
+        kwargs = {"limit": batch_size, "offset": offset, "include": ["metadatas"]}
+        if where is not None:
+            kwargs["where"] = where
+        r = col.get(**kwargs)
+        batch = r.get("metadatas") if isinstance(r, dict) else getattr(r, "metadatas", [])
+        if not batch:
+            break
+        for m in batch:
+            m = m or {}
+            src = m.get("source_file")
+            if not src:
+                continue
+            wing = m.get("wing", "?")
+            wing_sources[wing][src] += 1
+        offset += len(batch)
+
+    if not wing_sources:
+        scope = f" in wing={args.wing}" if args.wing else ""
+        print(f"\n  No mined source files found{scope}.\n")
+        return
+
+    print(f"\n{'=' * 55}")
+    print("  MemPalace Mined — sources by wing")
+    print(f"{'=' * 55}\n")
+    for wing in sorted(wing_sources):
+        sources = sorted(wing_sources[wing].items(), key=lambda x: x[1], reverse=True)
+        print(f"  WING: {wing}  ({len(sources)} sources, {sum(c for _, c in sources)} drawers)")
+        shown = sources if args.limit == 0 else sources[: args.limit]
+        for src, count in shown:
+            print(f"    {count:5}  {src}")
+        if args.limit and len(sources) > args.limit:
+            print(f"    ... {len(sources) - args.limit} more (use --limit 0 to show all)")
+        print()
+    print(f"{'=' * 55}\n")
 
 
 def cmd_repair_status(args):
@@ -1398,13 +1491,42 @@ def main():
 
     p_purge = sub.add_parser(
         "purge",
-        help="Delete drawers by wing and/or room (filtered delete via chromadb)",
+        help="Delete drawers by wing, room, and/or source-file (filtered delete via chromadb)",
     )
     p_purge.add_argument("--wing", help="Wing to purge")
     p_purge.add_argument("--room", help="Room to purge (without --wing, purges across ALL wings)")
+    p_purge.add_argument(
+        "--source-file",
+        help="Source-file path to purge (matches metadata.source_file exactly)",
+    )
     p_purge.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
 
     sub.add_parser("status", help="Show what's been filed")
+
+    p_mined = sub.add_parser(
+        "mined",
+        help="List mined source files grouped by wing (companion to status, which groups by room)",
+    )
+    p_mined.add_argument("--wing", help="Show only this wing")
+
+    def _nonneg_int(value: str) -> int:
+        # Reject negative --limit values; argparse's bare type=int would
+        # silently accept e.g. -1 and produce nonsensical "... -2 more"
+        # output (Copilot finding on jphein/mempalace#4).
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            raise argparse.ArgumentTypeError(f"expected non-negative integer, got {value!r}")
+        if n < 0:
+            raise argparse.ArgumentTypeError(f"--limit must be >= 0 (got {n})")
+        return n
+
+    p_mined.add_argument(
+        "--limit",
+        type=_nonneg_int,
+        default=50,
+        help="Show at most this many sources per wing (default 50; 0 means show all)",
+    )
 
     args = parser.parse_args()
 
@@ -1444,6 +1566,7 @@ def main():
         "migrate": cmd_migrate,
         "purge": cmd_purge,
         "status": cmd_status,
+        "mined": cmd_mined,
     }
     dispatch[args.command](args)
 
