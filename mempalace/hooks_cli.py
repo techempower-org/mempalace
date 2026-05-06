@@ -664,12 +664,13 @@ def hook_session_start(data: dict, harness: str):
 def hook_precompact(data: dict, harness: str):
     """Precompact hook: mine the transcript synchronously, then allow compaction.
 
-    The recovery-marker write was removed (it used to land a
-    "where we were" diary entry in the now-deleted
+    The recovery-marker write was removed in this PR (it used to land
+    a "where we were" diary entry in the dedicated
     mempalace_session_recovery collection). The verbatim transcript
     chunks captured by _ingest_transcript already cover the recovery
     use case — searching for any phrase from the last few messages
-    locates the session.
+    locates the session. The collection itself and its read tool are
+    untouched in this PR; a follow-up retires them once nothing writes.
     """
     parsed = _parse_harness_input(data, harness)
     session_id = parsed["session_id"]
