@@ -24,6 +24,243 @@
 
 entries:
 
+  - id: dashed-project-wing-fix
+    date: 2026-05-05
+    bucket: Fixed
+    commit: d76134d
+    area: Reliability
+    summary: "Preserve dashed project names in transcript-derived wings"
+    body: |
+      Two findings from Copilot review on jphein/mempalace#9 that
+      surfaced a real bug: the previous primary regex's
+      ``encoded.rsplit('-', 1)[-1]`` rule collapsed
+      ``-home-jp-Projects-realm-watch`` → ``watch`` instead of
+      preserving ``realm-watch``. Reorder the resolution: try the
+      explicit ``-Projects-<name>`` segment FIRST (preserves dashes),
+      fall back to the last-dash-token only when the path is in a
+      non-Projects layout (``~/dev/<parent>/<project>``,
+      ``~/Users/<user>/<folder>/<project>``).
+
+      Also routes the result through
+      ``mempalace.config.normalize_wing_name`` (lowercases, replaces
+      spaces/hyphens with underscores) so hook-derived wings match
+      operator-mined wing names exactly. Same project mined two ways
+      now produces one wing.
+
+      Net behavior: ``-Projects-realm-watch`` → ``realm_watch``
+      (matches what ``mempalace mine ~/Projects/realm-watch`` produces
+      via ``normalize_wing_name(convo_path.name)``).
+    tests: "+4 — dashed-project, dashed-project-uppercase, operator-mine-convergence assertion"
+    pr: 10
+    files:
+      - mempalace/hooks_cli.py
+      - tests/test_hooks_cli.py
+
+  - id: wing-prefix-drop
+    date: 2026-05-05
+    bucket: Changed
+    commit: 86d4700
+    area: Search
+    summary: "Drop wing_ prefix from transcript-derived wings to converge with operator mines"
+    body: |
+      The fork-only ``_wing_from_transcript_path`` returned
+      ``wing_<project>`` for hook-derived wings, but operator-mined
+      content from ``mempalace mine ~/Projects/X`` lands in a bare-name
+      wing. Result: every project that had both manual-mined content
+      AND hook-mined transcripts had its drawers split between
+      ``wing_X`` and ``X`` — silently invisible to a search filtered
+      by either name.
+
+      Drop the prefix. Fallback ``wing_sessions`` → ``sessions``
+      (which already exists with 2,132 drawers in the canonical
+      151K palace, so future fallback content converges with older
+      fallback content too).
+
+      One-shot data-side rename also applied to the live palace via
+      direct SQL UPDATE on chromadb's ``embedding_metadata`` table:
+      9 wings totaling 36,189 drawers renamed in a single transaction.
+      Hyphen normalization (``wing_realm-sigil`` → ``realm_sigil``,
+      ``kiyo-xhci-fix`` → ``kiyo_xhci_fix``,
+      ``clock-realm-watch`` → ``clock_realm_watch``) bundled in via
+      a follow-up SQL pass to converge with the new
+      ``normalize_wing_name`` output.
+    tests: "−2 / +0 (assertions updated to bare-name shape; 9 string literals adjusted)"
+    pr: 9
+    files:
+      - mempalace/hooks_cli.py
+      - tests/test_hooks_cli.py
+
+  - id: retire-recovery-collection
+    date: 2026-05-05
+    bucket: Changed
+    commit: 0b945e1
+    area: Search
+    summary: "Retire mempalace_session_recovery collection + read tool"
+    body: |
+      Follow-up to drop-checkpoint-write-path. With nothing writing
+      to the recovery collection anymore (hooks moved to verbatim-only
+      on the parent branch), the read paths and migration code that
+      fed it become dead. Delete them.
+
+      Removed in mempalace/:
+      ``_SESSION_RECOVERY_COLLECTION`` / ``get_session_recovery_collection``
+      / ``_CHECKPOINT_TOPICS`` (palace.py); ``_get_session_recovery_collection``
+      / ``_recovery_collection_cache`` / topic-routing branch in
+      ``tool_diary_write`` / ``tool_session_recovery_read`` handler
+      and TOOLS dict registration (mcp_server.py);
+      ``migrate_checkpoints_to_recovery`` (migrate.py); ``cmd_repair``
+      ``--mode reorganize`` (cli.py).
+
+      Removed in tests/: full ``test_session_recovery.py`` (12
+      tests); ``TestMigrateCheckpointsToRecovery`` class
+      (test_migrate.py, 6 tests); ``TestCheckpointRouting`` and
+      ``TestSessionRecoveryRead`` classes (test_mcp_server.py).
+
+      Removed in docs/: ``mempalace_session_recovery_read`` section
+      from ``website/reference/mcp-tools.md``.
+
+      Production data on disk was untouched by this code change.
+      A separate one-shot operation deleted the collection
+      (``client.delete_collection('mempalace_session_recovery')``)
+      after dumping its 1,032 archived entries to
+      ``~jp/backups/mempalace_session_recovery-2026-05-05.json``
+      on disks. Also referenced from the
+      ``2026-05-05-verbatim-only-design.md`` spec.
+    tests: "−18 (12 from test_session_recovery.py + 6 from test_migrate.py)"
+    pr: 8
+    files:
+      - mempalace/palace.py
+      - mempalace/mcp_server.py
+      - mempalace/migrate.py
+      - mempalace/cli.py
+      - website/reference/mcp-tools.md
+      - tests/test_session_recovery.py
+      - tests/test_migrate.py
+      - tests/test_mcp_server.py
+
+  - id: mining-management-cli
+    date: 2026-05-05
+    bucket: Added
+    commit: 2e6ced9
+    area: CLI
+    summary: "mempalace mined + purge --source-file (mining management surface)"
+    body: |
+      Closes the "removing manually mined data" half of JP's
+      mining-management ask. Adding is already covered by the existing
+      ``mempalace mine <dir>``; this PR adds the symmetric remove +
+      list surface.
+
+      ``mempalace purge --source-file <path>`` extends the existing
+      purge command with a third filter alongside ``--wing`` and
+      ``--room``. Composes with the others (single filter or
+      ``$and``). Uses ``collection.delete(where=...)`` — the same
+      filtered-delete path shipped by the original purge.
+
+      ``mempalace mined`` is the companion to ``mempalace status``
+      that groups by wing × source_file rather than wing × room.
+      Answers "which files have I mined into this wing?" so an
+      operator can pick targets for ``--source-file`` purge. Honors
+      ``--wing`` and ``--limit`` (default 50; ``--limit 0`` shows
+      all). Pushes the wing filter into the chromadb ``where``
+      clause so a wing-scoped view doesn't scan the full collection
+      (Copilot review on jphein/mempalace#4 caught the unfiltered
+      sweep). Argparse rejects negative ``--limit`` at parse time
+      via a ``_nonneg_int`` validator (also Copilot finding).
+    tests: "+8 — purge source-file (3) + cmd_mined (3, including dispatch + negative-limit reject) + 2 existing updated"
+    pr: 7
+    files:
+      - mempalace/cli.py
+      - tests/test_cli.py
+
+  - id: drop-checkpoint-write-path
+    date: 2026-05-05
+    bucket: Changed
+    commit: 69768fc
+    area: Reliability
+    summary: "Drop hook-side checkpoint diary writes — verbatim-only architecture"
+    body: |
+      The Stop hook used to do two things on each fire: (a) write a
+      1KB checkpoint summary diary entry into the dedicated
+      ``mempalace_session_recovery`` collection AND (b) auto-mine the
+      verbatim transcript into ``mempalace_drawers``.
+
+      (a) is redundant once (b) is searchable. Worse, the recovery
+      collection had no semantic-search MCP surface — only filter-based
+      reads via ``mempalace_session_recovery_read(session_id, agent,
+      since/until, wing)``. So checkpoints in it were structurally
+      invisible to ``mempalace_search``. Net effect from a user's
+      seat: agents (and JP) couldn't find recent session content via
+      search even though everything was on disk.
+
+      Drop (a). Verbatim transcripts in ``mempalace_drawers`` carry
+      every word a checkpoint summary would have surfaced — searching
+      IS the recovery query.
+
+      ``hook_stop`` silent path: removed ``_save_diary_direct`` call,
+      save marker advances unconditionally on each fire, ``systemMessage``
+      shape changes from ``"✦ N memories woven into the palace —
+      themes"`` to ``"✦ Transcript ingest triggered (wing=...)"``.
+      Failure detection moves to daemon-side observability (hook.log
+      + systemd journal).
+
+      ``hook_precompact``: removed the recovery-marker write. Mine +
+      compaction proceed unchanged.
+
+      Also deleted the now-unused ``_save_diary_direct`` (~120 LOC)
+      and its dependencies ``_extract_themes`` + ``_THEME_STOPWORDS``
+      (~30 LOC). No remaining callers.
+
+      Ships the architecture spec at
+      ``docs/superpowers/specs/2026-05-05-verbatim-only-design.md``.
+    tests: "−4 ratchet + 4 updated (4 hook tests + 1 OSError test mock _ingest_transcript instead of _save_diary_direct, expect new systemMessage shape; 3 new tests for traversal-rejected, wrong-extension-rejected, wing-derivation-correct)"
+    pr: 6
+    files:
+      - mempalace/hooks_cli.py
+      - tests/test_hooks_cli.py
+      - docs/superpowers/specs/2026-05-05-verbatim-only-design.md
+
+  - id: transcript-ingest-via-daemon
+    date: 2026-05-05
+    bucket: Fixed
+    commit: 09d2ca6
+    area: Reliability
+    summary: "Restore transcript ingest via daemon /mine when PALACE_DAEMON_URL is set"
+    body: |
+      Daemon-strict mode (introduced 2026-04-24 in commits ``8c90c0f``
+      + ``0e97b19`` to fix the HNSW drift incident) skipped all three
+      local mining paths when ``PALACE_DAEMON_URL`` was set, on the
+      assumption a daemon-side writer would do the work instead. The
+      diary-checkpoint half got that writer via ``/silent-save``, but
+      the transcript-ingest half did not. So for ~11 days every Claude
+      Code Stop hook left a checkpoint summary in the recovery
+      collection and zero verbatim transcript drawers in
+      ``mempalace_drawers``. ``mempalace_search`` lost visibility into
+      recent sessions even though MCP, daemon, and HNSW were all
+      healthy.
+
+      Replace the three skip-and-bail branches
+      (``_maybe_auto_ingest``, ``_mine_sync``, ``_ingest_transcript``)
+      with POSTs to the daemon's existing ``/mine`` endpoint via a new
+      ``_post_daemon_mine()`` helper. Daemon-side path translation
+      (so a remote daemon can find client-side paths at its own mount
+      points) handled via a companion palace-daemon PR introducing
+      ``PALACE_DAEMON_PATH_MAP``.
+
+      Behavior change: transcript ingest now routes to the project
+      wing derived via ``_wing_from_transcript_path()``. Replaces
+      hardcoded ``"sessions"``; produces e.g. ``wing_memorypalace`` /
+      ``wing_realmwatch`` per transcript. (Subsequently dropped the
+      ``wing_`` prefix in commit ``86d4700``.)
+
+      Companion: jphein/palace-daemon#1 ``feat(/mine): translate
+      client-side paths via PALACE_DAEMON_PATH_MAP``, merged
+      2026-05-05.
+    tests: "+6 — _post_daemon_mine (URL/body/api-key/error paths) + daemon-routed branches in all three mining functions"
+    pr: 2
+    files:
+      - mempalace/hooks_cli.py
+      - tests/test_hooks_cli.py
+
   - id: chunking-defaults-no-materialize
     date: 2026-05-03
     bucket: Fixed
