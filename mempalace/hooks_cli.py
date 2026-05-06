@@ -522,30 +522,38 @@ def _wing_from_transcript_path(transcript_path: str) -> str:
         ~/.claude/projects/-home-<user>-dev-<parent>-<project>/session.jsonl
         ~/.claude/projects/-Users-<user>-<folder>-<project>/session.jsonl
 
-    Returns the project directory's basename, lowercased, with spaces
-    collapsed to underscores. Falls back to ``"sessions"`` for paths
-    that don't match the standard Claude Code projects layout.
+    Returns the project's basename run through
+    :func:`mempalace.config.normalize_wing_name` (lowercases, replaces
+    spaces and hyphens with underscores) so hook-derived wings match
+    operator-mined wing names exactly. Falls back to ``"sessions"`` for
+    paths that don't match the standard Claude Code projects layout.
 
-    The earlier shape returned ``wing_<project>``, which silently split
-    content between hook-derived ``wing_<project>`` wings and
-    operator-mined bare-name wings. The bare project name converges
-    them.
+    Resolution order:
+
+    1. ``-Projects-<name>`` segment when present — preserves project
+       names containing dashes (``realm-watch`` resolves to
+       ``realm_watch`` instead of collapsing to ``watch``). Closes
+       Copilot finding on jphein/mempalace#9.
+    2. Last dash-separated token of ``/.claude/projects/-...`` — covers
+       non-Projects layouts (``-Users-<user>-<folder>-<project>``).
+    3. ``"sessions"`` fallback.
     """
-    # Normalize path separators for cross-platform (Windows backslashes)
+    from .config import normalize_wing_name
+
     normalized = transcript_path.replace("\\", "/")
-    # Primary: pull the encoded project folder out of ``.claude/projects/``
-    # and take its last dash-separated token.
+    # Primary: explicit ``-Projects-<name>`` segment. Preferred because
+    # it preserves project names that themselves contain dashes.
+    match = re.search(r"-Projects-([^/]+?)(?:/|$)", normalized)
+    if match:
+        return normalize_wing_name(match.group(1))
+    # Secondary: last dash-separated token of ``/.claude/projects/-...``.
+    # Used for projects under non-Projects parents (e.g. ~/dev, ~/code).
     match = re.search(r"/\.claude/projects/-([^/]+)", normalized)
     if match:
         encoded = match.group(1)
         project = encoded.rsplit("-", 1)[-1]
         if project:
-            return project.lower().replace(" ", "_")
-    # Legacy fallback: explicit ``-Projects-<name>`` segment, useful for
-    # transcripts not under the standard Claude Code projects dir.
-    match = re.search(r"-Projects-([^/]+?)(?:/|$)", normalized)
-    if match:
-        return match.group(1).lower().replace(" ", "_")
+            return normalize_wing_name(project)
     return "sessions"
 
 
