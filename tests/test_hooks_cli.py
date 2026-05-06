@@ -222,27 +222,28 @@ def test_stop_hook_passthrough_below_interval(tmp_path):
 
 
 def test_stop_hook_saves_silently_at_interval(tmp_path):
+    """Silent path triggers _ingest_transcript and reports the wing in systemMessage."""
     transcript = tmp_path / "t.jsonl"
     _write_transcript(
         transcript,
         [{"message": {"role": "user", "content": f"msg {i}"}} for i in range(SAVE_INTERVAL)],
     )
-    save_result = {"count": 15, "themes": ["hooks", "notifications"]}
-    with patch("mempalace.hooks_cli._save_diary_direct", return_value=save_result) as mock_save:
+    with patch("mempalace.hooks_cli._ingest_transcript") as mock_ingest:
         result = _capture_hook_output(
             hook_stop,
             {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)},
             state_dir=tmp_path,
         )
-    # Saves silently — systemMessage notification with themes, no block
-    assert result["systemMessage"].startswith("\u2726 15 memories woven into the palace")
-    assert "hooks" in result["systemMessage"]
+    # Verbatim-only: systemMessage tells the user the ingest fired; no count or themes.
+    assert result["systemMessage"].startswith("\u2726 Transcript ingest triggered")
     # tmp_path has no "-Projects-" segment, so _wing_from_transcript_path falls back to "wing_sessions"
-    mock_save.assert_called_once_with(str(transcript), "test", wing="wing_sessions", toast=False)
+    assert "wing=wing_sessions" in result["systemMessage"]
+    mock_ingest.assert_called_once_with(str(transcript))
 
 
 def test_stop_hook_derives_wing_from_transcript_path(tmp_path):
-    """When transcript path looks like a Claude Code path, wing is derived from it."""
+    """When the transcript path looks like a Claude Code path, the wing is derived
+    from it and surfaced in the systemMessage."""
     project_dir = tmp_path / ".claude" / "projects" / "-home-jp-Projects-myproject"
     project_dir.mkdir(parents=True)
     transcript = project_dir / "session.jsonl"
@@ -250,17 +251,18 @@ def test_stop_hook_derives_wing_from_transcript_path(tmp_path):
         transcript,
         [{"message": {"role": "user", "content": f"msg {i}"}} for i in range(SAVE_INTERVAL)],
     )
-    save_result = {"count": 15, "themes": []}
-    with patch("mempalace.hooks_cli._save_diary_direct", return_value=save_result) as mock_save:
-        _capture_hook_output(
+    with patch("mempalace.hooks_cli._ingest_transcript") as mock_ingest:
+        result = _capture_hook_output(
             hook_stop,
             {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)},
             state_dir=tmp_path,
         )
-    mock_save.assert_called_once_with(str(transcript), "test", wing="wing_myproject", toast=False)
+    assert "wing=wing_myproject" in result["systemMessage"]
+    mock_ingest.assert_called_once_with(str(transcript))
 
 
 def test_stop_hook_tracks_save_point(tmp_path):
+    """Save marker advances on each fire so the next fire short-circuits at the same count."""
     transcript = tmp_path / "t.jsonl"
     _write_transcript(
         transcript,
@@ -268,17 +270,17 @@ def test_stop_hook_tracks_save_point(tmp_path):
     )
     data = {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)}
 
-    # First call saves silently with systemMessage notification
-    save_result = {"count": 15, "themes": ["hooks"]}
-    with patch("mempalace.hooks_cli._save_diary_direct", return_value=save_result):
+    # First call fires the silent ingest path
+    with patch("mempalace.hooks_cli._ingest_transcript") as mock_ingest_1:
         result = _capture_hook_output(hook_stop, data, state_dir=tmp_path)
     assert "systemMessage" in result
+    mock_ingest_1.assert_called_once()
 
-    # Second call with same count passes through (already saved)
-    with patch("mempalace.hooks_cli._save_diary_direct") as mock_save:
+    # Second call with same exchange count short-circuits before reaching the silent path
+    with patch("mempalace.hooks_cli._ingest_transcript") as mock_ingest_2:
         result = _capture_hook_output(hook_stop, data, state_dir=tmp_path)
     assert result == {}
-    mock_save.assert_not_called()
+    mock_ingest_2.assert_not_called()
 
 
 # --- hook_session_start ---
@@ -857,7 +859,7 @@ def test_parse_harness_input_valid():
 
 
 def test_stop_hook_oserror_on_last_save_read(tmp_path):
-    """When last_save_file has invalid content, falls back to 0."""
+    """When last_save_file has invalid content, falls back to 0 (treats as fresh session)."""
     transcript = tmp_path / "t.jsonl"
     _write_transcript(
         transcript,
@@ -865,15 +867,15 @@ def test_stop_hook_oserror_on_last_save_read(tmp_path):
     )
     # Write invalid content to last save file
     (tmp_path / "test_last_save").write_text("not_a_number")
-    save_result = {"count": 15, "themes": ["testing"]}
-    with patch("mempalace.hooks_cli._save_diary_direct", return_value=save_result):
+    with patch("mempalace.hooks_cli._ingest_transcript"):
         result = _capture_hook_output(
             hook_stop,
             {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)},
             state_dir=tmp_path,
         )
+    # systemMessage shape changed with verbatim-only mode; assert it fired with the new wording.
     assert "systemMessage" in result
-    assert "15 memories" in result["systemMessage"]
+    assert "Transcript ingest triggered" in result["systemMessage"]
 
 
 def test_stop_hook_oserror_on_write(tmp_path):
@@ -887,9 +889,8 @@ def test_stop_hook_oserror_on_write(tmp_path):
     def bad_write_text(*args, **kwargs):
         raise OSError("disk full")
 
-    save_result = {"count": 15, "themes": []}
     with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
-        with patch("mempalace.hooks_cli._save_diary_direct", return_value=save_result):
+        with patch("mempalace.hooks_cli._ingest_transcript"):
             with patch.object(Path, "write_text", bad_write_text):
                 result = _capture_hook_output(
                     hook_stop,
@@ -1107,17 +1108,15 @@ def test_stop_hook_rejects_injected_stop_hook_active(tmp_path):
     """stop_hook_active with shell injection string should not cause pass-through.
 
     Verifies the injected value is not treated as truthy — the save path runs
-    instead of being short-circuited. Mocks _save_diary_direct so we can assert
-    it was invoked regardless of silent vs legacy save mode.
+    instead of being short-circuited. Mocks _ingest_transcript so we can assert
+    the ingest fired regardless of silent vs legacy save mode.
     """
     transcript = tmp_path / "t.jsonl"
     _write_transcript(
         transcript,
         [{"message": {"role": "user", "content": f"msg {i}"}} for i in range(SAVE_INTERVAL)],
     )
-    with patch(
-        "mempalace.hooks_cli._save_diary_direct", return_value={"count": 1, "themes": []}
-    ) as mock_save:
+    with patch("mempalace.hooks_cli._ingest_transcript") as mock_ingest:
         _capture_hook_output(
             hook_stop,
             {
@@ -1128,5 +1127,5 @@ def test_stop_hook_rejects_injected_stop_hook_active(tmp_path):
             state_dir=tmp_path,
         )
     # The injected value is not "true"/"1"/"yes", so the hook should NOT pass through.
-    # Save must have been attempted.
-    assert mock_save.called
+    # Ingest must have been attempted.
+    assert mock_ingest.called
