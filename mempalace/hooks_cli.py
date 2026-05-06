@@ -278,6 +278,57 @@ def _daemon_strict() -> bool:
     )
 
 
+def _post_daemon_mine(directory: str, wing: str, mode: str = "convos") -> bool:
+    """POST a /mine request to palace-daemon. Returns True on accepted job, False on error.
+
+    The hook sends client-side absolute paths (e.g. ``/home/<user>/.claude/projects/...``);
+    the daemon translates them to its own filesystem layout via its
+    ``PALACE_DAEMON_PATH_MAP`` env var. Failures are logged and swallowed —
+    a missed mine is not worth crashing a hook over. Note: the daemon's
+    /mine endpoint currently blocks until the mine subprocess finishes,
+    so the timeout is sized for typical workloads rather than network
+    round-trip; on a real mine that exceeds it, the hook gets a stale
+    timeout log but the daemon-side work still completes.
+    """
+    daemon_url = os.environ.get("PALACE_DAEMON_URL", "").strip().rstrip("/")
+    if not daemon_url:
+        return False
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"{daemon_url}/mine",
+            data=json.dumps({"dir": directory, "wing": wing, "mode": mode}).encode("utf-8"),
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        api_key = os.environ.get("PALACE_API_KEY", "").strip()
+        if api_key:
+            req.add_header("x-api-key", api_key)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+        _log(f"Daemon mine accepted: dir={directory} wing={wing} mode={mode} resp={body[:200]}")
+        return True
+    except Exception as e:
+        _log(f"Daemon mine failed (dir={directory} wing={wing}): {e}")
+        return False
+
+
+def _wing_from_mine_dir(mine_dir: str) -> str:
+    """Derive a wing name from a mine target directory, matching local-spawn semantics.
+
+    The local ``mempalace mine <dir> --mode projects`` invocation does not
+    pass ``--wing``, so ``convo_miner`` / ``miner`` derive the wing from
+    the directory's basename via ``normalize_wing_name``. Mirror that
+    here so daemon-routed and local-spawn paths produce the same wing
+    for the same input — Copilot review on jphein/mempalace#2 caught
+    a hardcoded ``"general"`` here that diverged from local behavior.
+    """
+    from .config import normalize_wing_name
+
+    return normalize_wing_name(Path(mine_dir).name)
+
+
 def _maybe_auto_ingest():
     """Background-mine MEMPAL_DIR (project files) if set.
 
@@ -286,11 +337,12 @@ def _maybe_auto_ingest():
     asymmetric interpreter handling and PID-file overwrite when both
     targets fire from a single hook call (#1231 review).
     """
-    if _daemon_strict():
-        _log("Skipping auto-ingest: PALACE_DAEMON_URL set, daemon owns writes")
-        return
     targets = _get_mine_targets()
     if not targets:
+        return
+    if _daemon_strict():
+        for mine_dir, mode in targets:
+            _post_daemon_mine(mine_dir, wing=_wing_from_mine_dir(mine_dir), mode=mode)
         return
     if _mine_already_running():
         _log("Skipping auto-ingest: mine already running")
@@ -309,11 +361,12 @@ def _mine_sync():
     in ``hook_precompact`` — keeping them out of this function avoids
     timeout stacking against the harness 30s ceiling (#1231 review).
     """
-    if _daemon_strict():
-        _log("Skipping sync mine: PALACE_DAEMON_URL set, daemon owns writes")
-        return
     targets = _get_mine_targets()
     if not targets:
+        return
+    if _daemon_strict():
+        for mine_dir, mode in targets:
+            _post_daemon_mine(mine_dir, wing=_wing_from_mine_dir(mine_dir), mode=mode)
         return
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     log_path = STATE_DIR / "hook.log"
@@ -543,12 +596,28 @@ def _save_diary_direct(
 
 
 def _ingest_transcript(transcript_path: str):
-    """Mine a Claude Code session transcript into the palace as a conversation."""
-    if _daemon_strict():
-        _log("Skipping transcript ingest: PALACE_DAEMON_URL set, daemon owns writes")
+    """Mine a Claude Code session transcript into the palace as a conversation.
+
+    When ``PALACE_DAEMON_URL`` is set, route the mine through the daemon's
+    ``/mine`` endpoint (so the daemon stays the single writer). Otherwise
+    fall back to spawning ``mempalace mine`` locally.
+
+    ``transcript_path`` arrives from harness-supplied JSON, so reuse the
+    same traversal/extension guards ``_count_human_messages`` already
+    applies via ``_validate_transcript_path``.
+    """
+    path = _validate_transcript_path(transcript_path)
+    if path is None:
+        if transcript_path:
+            _log(f"WARNING: transcript ingest rejected by validator: {transcript_path!r}")
         return
-    path = Path(transcript_path).expanduser()
     if not path.is_file() or path.stat().st_size < 100:
+        return
+
+    project_wing = _wing_from_transcript_path(transcript_path)
+
+    if _daemon_strict():
+        _post_daemon_mine(str(path.parent), wing=project_wing, mode="convos")
         return
 
     from .config import MempalaceConfig
@@ -572,7 +641,7 @@ def _ingest_transcript(transcript_path: str):
                     "--mode",
                     "convos",
                     "--wing",
-                    "sessions",
+                    project_wing,
                 ],
                 stdout=log_f,
                 stderr=log_f,
