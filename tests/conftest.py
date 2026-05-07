@@ -26,6 +26,18 @@ os.environ["USERPROFILE"] = _session_tmp
 os.environ["HOMEDRIVE"] = os.path.splitdrive(_session_tmp)[0] or "C:"
 os.environ["HOMEPATH"] = os.path.splitdrive(_session_tmp)[1] or _session_tmp
 
+# ── Unset daemon-routing env vars for the test session ────────────────
+# Tests build local-palace fixtures and exercise mcp_server's local
+# handlers directly. With ``PALACE_DAEMON_URL`` set in the developer's
+# shell env (e.g. http://disks.jphe.in:8085 in JP's case), the new
+# routing gate in :func:`mempalace.mcp_server.handle_request` would
+# forward those test calls to the live daemon and fail. Tests that
+# specifically exercise the daemon path (test_mcp_server_daemon.py)
+# set the env explicitly via ``patch.dict``.
+for _daemon_var in ("PALACE_DAEMON_URL", "PALACE_DAEMON_STRICT", "PALACE_API_KEY"):
+    _original_env[_daemon_var] = os.environ.get(_daemon_var)
+    os.environ.pop(_daemon_var, None)
+
 # Now it is safe to import mempalace modules that trigger initialisation.
 import chromadb  # noqa: E402
 import pytest  # noqa: E402

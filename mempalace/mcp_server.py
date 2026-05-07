@@ -166,6 +166,76 @@ def _refresh_vector_disabled_flag() -> None:
         _vector_disabled_reason = ""
 
 
+# ==================== DAEMON ROUTING ====================
+# When ``PALACE_DAEMON_URL`` is set, palace-daemon is the single writer
+# for the canonical palace and we route every JSON-RPC envelope to its
+# ``/mcp`` proxy instead of opening a local chromadb client. Mirrors the
+# gate in :mod:`mempalace.hooks_cli` (the mining side). The 2026-04-24
+# HNSW-drift incident traced to dual writers (hook subprocesses +
+# Syncthing replication) writing the same palace from two hosts; the
+# fix is "daemon is the single writer", and that fix is incomplete as
+# long as ``mcp_server`` can still open chromadb directly. Folding the
+# routing in here makes the stand-alone bridge at
+# ``palace-daemon/clients/mempalace-mcp.py`` optional — anyone running
+# ``python -m mempalace.mcp_server`` with the env var set gets the same
+# behavior natively.
+
+_DAEMON_FORWARD_TIMEOUT_DEFAULT = 120  # seconds
+
+
+def _daemon_strict() -> bool:
+    """True when ``PALACE_DAEMON_URL`` is set and strict mode is enabled.
+
+    Set ``PALACE_DAEMON_STRICT=0`` to opt out and force the local-palace
+    path even when the daemon URL is configured (useful when running
+    the test suite or doing offline development).
+    """
+    return (
+        os.environ.get("PALACE_DAEMON_URL", "").strip() != ""
+        and os.environ.get("PALACE_DAEMON_STRICT", "1") != "0"
+    )
+
+
+def _forward_to_daemon(request: dict) -> dict:
+    """POST a JSON-RPC envelope to palace-daemon's ``/mcp`` proxy.
+
+    Returns the parsed response. On any failure (network, non-JSON body),
+    returns a JSON-RPC error envelope — strict mode never silently falls
+    back to local, since that would re-introduce the split-brain that
+    daemon-strict was created to prevent.
+    """
+    daemon_url = os.environ.get("PALACE_DAEMON_URL", "").strip().rstrip("/")
+    req_id = request.get("id")
+    try:
+        import urllib.request
+
+        headers = {"content-type": "application/json"}
+        api_key = os.environ.get("PALACE_API_KEY", "").strip()
+        if api_key:
+            headers["x-api-key"] = api_key
+        req = urllib.request.Request(
+            f"{daemon_url}/mcp",
+            data=json.dumps(request).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        raw_timeout = os.environ.get("PALACE_MCP_TIMEOUT", str(_DAEMON_FORWARD_TIMEOUT_DEFAULT))
+        try:
+            timeout = int(raw_timeout)
+        except ValueError:
+            timeout = _DAEMON_FORWARD_TIMEOUT_DEFAULT
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read()
+        return json.loads(body.decode("utf-8", errors="replace"))
+    except Exception as e:
+        logger.warning("palace-daemon /mcp forward failed: %s", e)
+        return {
+            "jsonrpc": "2.0",
+            "id": req_id,
+            "error": {"code": -32000, "message": f"Daemon unreachable: {e}"},
+        }
+
+
 # ==================== WRITE-AHEAD LOG ====================
 # Every write operation is logged to a JSONL file before execution.
 # This provides an audit trail for detecting memory poisoning and
@@ -1907,6 +1977,17 @@ def handle_request(request):
     params = request.get("params") or {}
     req_id = request.get("id")
 
+    # Daemon-strict: forward the whole envelope to palace-daemon's /mcp
+    # proxy. Single chokepoint here is functionally equivalent to per-
+    # handler gates (initialize, tools/list, tools/call all flow
+    # through) and avoids 30+ duplicated branches inside the TOOLS
+    # dispatch below. Notifications skip both the daemon and local —
+    # JSON-RPC spec says they never get a response.
+    if _daemon_strict():
+        if method.startswith("notifications/") or req_id is None:
+            return None
+        return _forward_to_daemon(request)
+
     if method == "initialize":
         client_version = params.get("protocolVersion", SUPPORTED_PROTOCOL_VERSIONS[-1])
         negotiated = (
@@ -2024,10 +2105,18 @@ def _restore_stdout():
 def main():
     _restore_stdout()
     logger.info("MemPalace MCP Server starting...")
-    # Pre-flight: probe HNSW capacity before any tool call so the warning
-    # is visible at startup rather than on first use (#1222). Pure
-    # filesystem read; never opens a chromadb client.
-    _refresh_vector_disabled_flag()
+    if _daemon_strict():
+        logger.info(
+            "PALACE_DAEMON_URL=%s — routing all MCP traffic via daemon /mcp; "
+            "skipping local-palace startup probes.",
+            os.environ.get("PALACE_DAEMON_URL", "").strip(),
+        )
+    else:
+        # Pre-flight: probe HNSW capacity before any tool call so the warning
+        # is visible at startup rather than on first use (#1222). Pure
+        # filesystem read; never opens a chromadb client. Skipped in
+        # daemon-strict mode — the daemon owns its palace's capacity.
+        _refresh_vector_disabled_flag()
     while True:
         try:
             line = sys.stdin.readline()
