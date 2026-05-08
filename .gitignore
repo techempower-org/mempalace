@@ -40,3 +40,5 @@ venv/
 
 # Private / shared artifacts that should never land in the public fork
 dashboards-bensig-*/
+
+.envrc

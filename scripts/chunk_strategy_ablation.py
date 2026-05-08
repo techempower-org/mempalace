@@ -28,6 +28,7 @@ mine logic, embedding pipeline, and search path are otherwise identical
 across the three runs. The output is intended to be pasted into an
 upstream RFC issue or a fork-side ADR.
 """
+
 from __future__ import annotations
 
 import ast
@@ -165,9 +166,11 @@ def _chunk_python_ast(
 
     lines = content.splitlines(keepends=True)
     cuts = sorted(
-        {n.lineno - 1 for n in tree.body if isinstance(
-            n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-        )}
+        {
+            n.lineno - 1
+            for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        }
     )
     if not cuts:
         return _chunk_paragraph_aware(
@@ -218,12 +221,16 @@ def _make_strategy(name: str, chunk_size: int) -> Callable:
 
     def _B(content, source_file):
         if source_file.lower().endswith((".md", ".markdown", ".rst")):
-            return _chunk_markdown_heading_aware(content, source_file, chunk_size, overlap, min_size)
+            return _chunk_markdown_heading_aware(
+                content, source_file, chunk_size, overlap, min_size
+            )
         return _chunk_paragraph_aware(content, source_file, chunk_size, overlap, min_size)
 
     def _C(content, source_file):
         if source_file.lower().endswith((".md", ".markdown", ".rst")):
-            return _chunk_markdown_heading_aware(content, source_file, chunk_size, overlap, min_size)
+            return _chunk_markdown_heading_aware(
+                content, source_file, chunk_size, overlap, min_size
+            )
         if source_file.lower().endswith(".py"):
             return _chunk_python_ast(content, source_file, chunk_size, overlap, min_size)
         return _chunk_paragraph_aware(content, source_file, chunk_size, overlap, min_size)
@@ -246,53 +253,104 @@ def build_strategies(chunk_size: int) -> List[Tuple[str, Callable]]:
 
 
 PROBES: List[Tuple[str, str, str]] = [
-    ("How does the stop hook save diary entries?", "hooks_cli.py",
-     "primary save path lives in hooks_cli; mcp_server's tool_diary_write is the API surface"),
-    ("ChromaDB HNSW segment quarantine for stale indexes", "backends/chroma.py",
-     "quarantine_stale_hnsw lives in the chroma backend"),
-    ("BM25 tokenization with None-document safety", "searcher.py",
-     "_tokenize and _bm25_scores are searcher-internal"),
-    ("How is a wing name normalized — hyphens vs underscores?", "config.py",
-     "normalize_wing_name lives at module top of config.py"),
-    ("Validate chunk_size to prevent the infinite loop hazard", "miner.py",
-     "chunk_text guard or its analog"),
-    ("Pre-PreCompact transcript auto-mining via daemon /mine endpoint", "hooks_cli.py",
-     "_post_daemon_mine lives in hooks_cli; daemon side is palace-daemon repo"),
-    ("Topic-routing branch routing checkpoint diary writes to a separate collection", "palace.py",
-     "_CHECKPOINT_TOPICS / get_session_recovery_collection (note: removed in fork; baseline corpus has it)"),
-    ("Knowledge-graph entity validation that allows commas and parentheses", "config.py",
-     "sanitize_kg_value"),
-    ("Closet-boost rank constants used to re-order vector hits", "searcher.py",
-     "CLOSET_RANK_BOOSTS and the rank loop"),
-    ("Hybrid rank combining BM25 with cosine similarity", "searcher.py",
-     "_hybrid_rank"),
-    ("Wing assignment from Claude Code transcript path regex", "convo_miner.py",
-     "_wing_from_transcript_path"),
-    ("Detect HNSW capacity divergence and quarantine the segment", "backends/chroma.py",
-     "quarantine_stale_hnsw + cold-start gate"),
-    ("Spellcheck user prose before writing to drawers", "spellcheck.py",
-     "spellcheck_user_text is the entry point"),
-    ("Slack JSON export normalization with positional speaker roles", "normalize.py",
-     "_try_slack_json + provenance footer"),
-    ("Build the where filter for wing/room scoping in chromadb queries", "searcher.py",
-     "build_where_filter — small but probe a known target"),
+    (
+        "How does the stop hook save diary entries?",
+        "hooks_cli.py",
+        "primary save path lives in hooks_cli; mcp_server's tool_diary_write is the API surface",
+    ),
+    (
+        "ChromaDB HNSW segment quarantine for stale indexes",
+        "backends/chroma.py",
+        "quarantine_stale_hnsw lives in the chroma backend",
+    ),
+    (
+        "BM25 tokenization with None-document safety",
+        "searcher.py",
+        "_tokenize and _bm25_scores are searcher-internal",
+    ),
+    (
+        "How is a wing name normalized — hyphens vs underscores?",
+        "config.py",
+        "normalize_wing_name lives at module top of config.py",
+    ),
+    (
+        "Validate chunk_size to prevent the infinite loop hazard",
+        "miner.py",
+        "chunk_text guard or its analog",
+    ),
+    (
+        "Pre-PreCompact transcript auto-mining via daemon /mine endpoint",
+        "hooks_cli.py",
+        "_post_daemon_mine lives in hooks_cli; daemon side is palace-daemon repo",
+    ),
+    (
+        "Topic-routing branch routing checkpoint diary writes to a separate collection",
+        "palace.py",
+        "_CHECKPOINT_TOPICS / get_session_recovery_collection (note: removed in fork; baseline corpus has it)",
+    ),
+    (
+        "Knowledge-graph entity validation that allows commas and parentheses",
+        "config.py",
+        "sanitize_kg_value",
+    ),
+    (
+        "Closet-boost rank constants used to re-order vector hits",
+        "searcher.py",
+        "CLOSET_RANK_BOOSTS and the rank loop",
+    ),
+    ("Hybrid rank combining BM25 with cosine similarity", "searcher.py", "_hybrid_rank"),
+    (
+        "Wing assignment from Claude Code transcript path regex",
+        "convo_miner.py",
+        "_wing_from_transcript_path",
+    ),
+    (
+        "Detect HNSW capacity divergence and quarantine the segment",
+        "backends/chroma.py",
+        "quarantine_stale_hnsw + cold-start gate",
+    ),
+    (
+        "Spellcheck user prose before writing to drawers",
+        "spellcheck.py",
+        "spellcheck_user_text is the entry point",
+    ),
+    (
+        "Slack JSON export normalization with positional speaker roles",
+        "normalize.py",
+        "_try_slack_json + provenance footer",
+    ),
+    (
+        "Build the where filter for wing/room scoping in chromadb queries",
+        "searcher.py",
+        "build_where_filter — small but probe a known target",
+    ),
     # ── Markdown-targeted probes (only meaningful on a corpus that
     #    includes the repo's docs, not the package-only mine) ────────────
-    ("Why did we move checkpoints into a separate recovery collection?",
-     "2026-04-25-checkpoint-collection-split.md",
-     "Phase A-E split design doc; only in spec, not code"),
-    ("Verbatim-only Phase 2 architecture and migration plan",
-     "2026-05-05-verbatim-only-design.md",
-     "verbatim-only spec — drops checkpoint summaries, retires recovery collection"),
-    ("Pre-release grep checklist for mempalace-mcp entry point alignment",
-     "RELEASING.md",
-     "fork-side release doc filed as upstream #1142"),
-    ("Fork-ahead row inventory and upstream PR tracking table",
-     "CLAUDE.md",
-     "row inventory at fork's CLAUDE.md, not in any .py"),
-    ("Hook silent_save vs block-mode behavior — why one beats the other",
-     "CLAUDE.md",
-     "Hook Save Architecture section in CLAUDE.md"),
+    (
+        "Why did we move checkpoints into a separate recovery collection?",
+        "2026-04-25-checkpoint-collection-split.md",
+        "Phase A-E split design doc; only in spec, not code",
+    ),
+    (
+        "Verbatim-only Phase 2 architecture and migration plan",
+        "2026-05-05-verbatim-only-design.md",
+        "verbatim-only spec — drops checkpoint summaries, retires recovery collection",
+    ),
+    (
+        "Pre-release grep checklist for mempalace-mcp entry point alignment",
+        "RELEASING.md",
+        "fork-side release doc filed as upstream #1142",
+    ),
+    (
+        "Fork-ahead row inventory and upstream PR tracking table",
+        "CLAUDE.md",
+        "row inventory at fork's CLAUDE.md, not in any .py",
+    ),
+    (
+        "Hook silent_save vs block-mode behavior — why one beats the other",
+        "CLAUDE.md",
+        "Hook Save Architecture section in CLAUDE.md",
+    ),
 ]
 
 
@@ -314,6 +372,7 @@ def _build_palace(corpus_dir: Path, palace_dir: Path, strategy_fn: Callable) -> 
         # MempalaceConfig — set MEMPALACE_PALACE_PATH so it points at our
         # temp palace.
         import os
+
         os.environ["MEMPALACE_PALACE_PATH"] = str(palace_dir)
         # Force a fresh MempalaceConfig read.
         cfg = MempalaceConfig()
@@ -325,6 +384,7 @@ def _build_palace(corpus_dir: Path, palace_dir: Path, strategy_fn: Callable) -> 
             files=files,
         )
         from mempalace.palace import get_collection
+
         col = get_collection(str(palace_dir))
         return col.count()
     finally:
@@ -334,8 +394,10 @@ def _build_palace(corpus_dir: Path, palace_dir: Path, strategy_fn: Callable) -> 
 def _query_palace(palace_dir: Path, query: str, n_results: int = 10) -> list:
     """Return list of (rank, source_file_basename, similarity) tuples."""
     import os
+
     os.environ["MEMPALACE_PALACE_PATH"] = str(palace_dir)
     from mempalace.searcher import search_memories
+
     result = search_memories(query, str(palace_dir), n_results=n_results)
     out = []
     for rank, hit in enumerate(result.get("results") or [], start=1):
@@ -366,9 +428,7 @@ def _recall_at_k(hits: list, expected: str, k: int) -> int:
 
 
 def main(argv: List[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Three-way A/B/C chunking strategy ablation."
-    )
+    parser = argparse.ArgumentParser(description="Three-way A/B/C chunking strategy ablation.")
     parser.add_argument(
         "--corpus",
         default=str(_REPO_ROOT / "mempalace"),
@@ -452,13 +512,15 @@ def main(argv: List[str] | None = None) -> int:
             rrs.append(rr)
             recall_at_5 += r5
             recall_at_10 += r10
-            per_probe.append({
-                "query": query,
-                "expected": expected,
-                "rank": rank,
-                "rr": round(rr, 4),
-                "top3": [b for _r, b, _ in hits[:3]],
-            })
+            per_probe.append(
+                {
+                    "query": query,
+                    "expected": expected,
+                    "rank": rank,
+                    "rr": round(rr, 4),
+                    "top3": [b for _r, b, _ in hits[:3]],
+                }
+            )
         mrr = sum(rrs) / len(rrs)
         r5_pct = 100 * recall_at_5 / len(PROBES)
         r10_pct = 100 * recall_at_10 / len(PROBES)
@@ -501,7 +563,9 @@ def main(argv: List[str] | None = None) -> int:
         for name, _ in strategies:
             r = summary["strategies"][name]["probes"][i]["rank"]
             ranks.append(str(r) if r is not None else "-")
-        print(f"  [{','.join(f'{x:>3}' for x in ranks)}]  expects={Path(expected).name:<22} q={q[:55]}")
+        print(
+            f"  [{','.join(f'{x:>3}' for x in ranks)}]  expects={Path(expected).name:<22} q={q[:55]}"
+        )
 
     if args.out:
         Path(args.out).write_text(json.dumps(summary, indent=2))

@@ -242,9 +242,7 @@ class TestCmdSearchDaemon:
         with patch.dict("os.environ", {}, clear=True):
             with patch("mempalace.cli.MempalaceConfig") as mock_cfg:
                 mock_cfg.return_value.palace_path = "/local/palace"
-                args = argparse.Namespace(
-                    query="x", wing=None, room=None, results=5, palace=None
-                )
+                args = argparse.Namespace(query="x", wing=None, room=None, results=5, palace=None)
                 with patch("mempalace.searcher.search") as mock_search:
                     cli.cmd_search(args)
                     mock_search.assert_called_once()
@@ -291,7 +289,10 @@ class TestCmdMineDaemon:
 
         assert ex.value.code == 0
         assert captured["body"]["mode"] == "projects"
-        assert captured["body"]["dir"].endswith("/home/u/proj")
+        # Normalize separators so the assertion holds on Windows, where
+        # Path.expanduser().resolve() returns a backslash-prefixed path
+        # like "D:\\home\\u\\proj".
+        assert captured["body"]["dir"].replace("\\", "/").endswith("/home/u/proj")
 
     def test_routes_convos_mode_to_daemon(self):
         from mempalace import cli

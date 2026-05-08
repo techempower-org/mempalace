@@ -275,7 +275,7 @@ def _expand_with_neighbors(drawers_col, matched_doc: str, matched_meta: dict, ra
         all_meta = drawers_col.get(where={"source_file": src}, include=["metadatas"])
         total_drawers = len(all_meta.ids) if all_meta.ids else None
     except Exception:
-        pass
+        logger.debug("total_drawers lookup failed for %s", src, exc_info=True)
 
     return {
         "text": combined_text,
@@ -417,7 +417,8 @@ def _count_in_scope(drawers_col, where: dict) -> Optional[int]:
     """
     try:
         if not where:
-            return drawers_col.count()
+            raw = drawers_col.count()
+            return int(raw) if isinstance(raw, (int, float)) else None
         PAGE = 5000
         offset = 0
         total = 0
@@ -553,6 +554,7 @@ def _bm25_only_via_sqlite(
     n_results: int = 5,
     max_candidates: int = 500,
     _include_internal: bool = False,
+    collection_name: str = None,
 ) -> dict:
     """BM25-only search reading drawers directly from chroma.sqlite3.
 
@@ -576,6 +578,35 @@ def _bm25_only_via_sqlite(
             "error": "No palace found",
             "hint": "Run: mempalace init <dir> && mempalace mine <dir>",
         }
+    if collection_name is None:
+        from .config import get_configured_collection_name
+
+        collection_name = get_configured_collection_name()
+
+    def _metadata_filter_sql(row_id_expr: str) -> tuple[str, list[str]]:
+        clauses = []
+        params = []
+        for key, value in (("wing", wing), ("room", room)):
+            if not value:
+                continue
+            clauses.append(
+                f"""
+                AND EXISTS (
+                    SELECT 1
+                    FROM embedding_metadata mf
+                    WHERE mf.id = {row_id_expr}
+                      AND mf.key = ?
+                      AND COALESCE(
+                        mf.string_value,
+                        CAST(mf.int_value AS TEXT),
+                        CAST(mf.float_value AS TEXT),
+                        CAST(mf.bool_value AS TEXT)
+                      ) = ?
+                )
+                """
+            )
+            params.extend([key, value])
+        return "".join(clauses), params
 
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -587,45 +618,57 @@ def _bm25_only_via_sqlite(
         # shorter than 3 chars (trigram tokenizer can't match them).
         tokens = [t for t in _tokenize(query) if len(t) >= 3]
         candidate_ids: list[int] = []
+        use_recency_fallback = not tokens
         if tokens:
             fts_query = " OR ".join(tokens)
+            filter_sql, filter_params = _metadata_filter_sql("embedding_fulltext_search.rowid")
             try:
                 rows = conn.execute(
-                    """
-                    SELECT rowid
+                    f"""
+                    SELECT embedding_fulltext_search.rowid
                     FROM embedding_fulltext_search
+                    JOIN embeddings e ON e.id = embedding_fulltext_search.rowid
+                    JOIN segments s ON e.segment_id = s.id
+                    JOIN collections c ON s.collection = c.id
                     WHERE embedding_fulltext_search MATCH ?
+                      AND c.name = ?
+                    {filter_sql}
                     LIMIT ?
                     """,
-                    (fts_query, max_candidates),
+                    (fts_query, collection_name, *filter_params, max_candidates),
                 ).fetchall()
                 candidate_ids = [r[0] for r in rows]
             except sqlite3.Error:
                 # FTS5 tokenizer mismatch or syntax error — fall through
                 # to the recency-window selector below.
                 logger.debug("FTS5 MATCH failed; using recency fallback", exc_info=True)
+                use_recency_fallback = True
 
-        if not candidate_ids:
-            # No FTS hits (or no usable tokens) — pull the most recent
-            # rows for the drawers segment so we can BM25-rank something
-            # rather than return empty-handed. Wrapped in try/except
-            # because the schema may differ on legacy palaces (older
-            # chromadb without ``created_at``, missing ``segments``
-            # rows after partial restore, etc.); on schema mismatch we
-            # fall back to ordering by primary-key id and finally to an
-            # empty result rather than letting search raise.
+        if not candidate_ids and use_recency_fallback:
+            # No usable FTS tokens, or FTS itself failed — pull the most
+            # recent rows for the drawers segment so we can BM25-rank
+            # something rather than return empty-handed. A clean FTS miss
+            # must stay empty, especially after wing/room filtering, because
+            # recency fallback would return unrelated scoped drawers.
+            # Wrapped in try/except because the schema may differ on legacy
+            # palaces (older chromadb without ``created_at``, missing
+            # ``segments`` rows after partial restore, etc.); on schema
+            # mismatch we fall back to ordering by primary-key id and finally
+            # to an empty result rather than letting search raise.
             try:
+                filter_sql, filter_params = _metadata_filter_sql("e.id")
                 rows = conn.execute(
-                    """
+                    f"""
                     SELECT e.id
                     FROM embeddings e
                     JOIN segments s ON e.segment_id = s.id
                     JOIN collections c ON s.collection = c.id
-                    WHERE c.name = 'mempalace_drawers'
+                    WHERE c.name = ?
+                    {filter_sql}
                     ORDER BY e.created_at DESC
                     LIMIT ?
                     """,
-                    (max_candidates,),
+                    (collection_name, *filter_params, max_candidates),
                 ).fetchall()
                 candidate_ids = [r[0] for r in rows]
             except sqlite3.Error:
@@ -634,17 +677,19 @@ def _bm25_only_via_sqlite(
                     exc_info=True,
                 )
                 try:
+                    filter_sql, filter_params = _metadata_filter_sql("e.id")
                     rows = conn.execute(
-                        """
+                        f"""
                         SELECT e.id
                         FROM embeddings e
                         JOIN segments s ON e.segment_id = s.id
                         JOIN collections c ON s.collection = c.id
-                        WHERE c.name = 'mempalace_drawers'
+                        WHERE c.name = ?
+                        {filter_sql}
                         ORDER BY e.id DESC
                         LIMIT ?
                         """,
-                        (max_candidates,),
+                        (collection_name, *filter_params, max_candidates),
                     ).fetchall()
                     candidate_ids = [r[0] for r in rows]
                 except sqlite3.Error:
@@ -860,6 +905,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     max_distance: float = 0.0,
     vector_disabled: bool = False,
     candidate_strategy: str = "vector",
+    collection_name: str = None,
 ) -> dict:
     """Programmatic search — returns a dict instead of printing.
 
@@ -914,10 +960,11 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
             wing=wing,
             room=room,
             n_results=n_results,
+            collection_name=collection_name,
         )
 
     try:
-        drawers_col = get_collection(palace_path, create=False)
+        drawers_col = get_collection(palace_path, collection_name=collection_name, create=False)
     except Exception as e:
         logger.error("No palace found at %s: %s", palace_path, e)
         return {
@@ -988,7 +1035,8 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
             if source and source not in closet_boost_by_source:
                 closet_boost_by_source[source] = (rank, cdist, cdoc[:200])
     except Exception:
-        pass  # no closets yet — hybrid degrades to pure drawer search
+        # No closets yet — hybrid degrades to pure drawer search.
+        logger.debug("Closet collection unavailable; using drawer-only search", exc_info=True)
 
     scored: list = []
     drawer_ids = _first_or_empty(drawer_results, "ids")
@@ -1000,6 +1048,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     if drawer_docs and not drawer_ids:
         drawer_ids = [None] * len(drawer_docs)
     for drawer_id, doc, meta, dist in zip(drawer_ids, drawer_docs, drawer_metas, drawer_dists):
+        doc = doc or ""
         # Filter on raw distance before rounding to avoid precision loss.
         if max_distance > 0.0 and dist > max_distance:
             continue
@@ -1016,7 +1065,12 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
                 matched_via = "drawer+closet"
                 closet_preview = c_preview
 
-        effective_dist = dist - boost
+        # Clamp to the valid cosine-distance range [0, 2]. When a strong
+        # closet boost (up to 0.40) exceeds the raw distance, the subtraction
+        # can go negative — which (a) yields ``similarity > 1.0`` downstream
+        # and (b) makes the sort key land *below* ordinary positive distances,
+        # inverting the ranking so the best hybrid matches sort last.
+        effective_dist = max(0.0, min(2.0, dist - boost))
         entry = {
             "drawer_id": drawer_id,
             "text": doc,
@@ -1063,6 +1117,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
                 include=["documents", "metadatas"],
             )
         except Exception:
+            logger.debug("Neighbor fetch failed for %s", full_source, exc_info=True)
             continue
         docs = source_drawers.documents
         metas_ = source_drawers.metadatas
