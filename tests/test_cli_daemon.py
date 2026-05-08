@@ -242,9 +242,7 @@ class TestCmdSearchDaemon:
         with patch.dict("os.environ", {}, clear=True):
             with patch("mempalace.cli.MempalaceConfig") as mock_cfg:
                 mock_cfg.return_value.palace_path = "/local/palace"
-                args = argparse.Namespace(
-                    query="x", wing=None, room=None, results=5, palace=None
-                )
+                args = argparse.Namespace(query="x", wing=None, room=None, results=5, palace=None)
                 with patch("mempalace.searcher.search") as mock_search:
                     cli.cmd_search(args)
                     mock_search.assert_called_once()
