@@ -16,8 +16,6 @@ gates and avoids 30+ duplicated branches.
 import json
 from unittest.mock import patch
 
-import pytest
-
 
 # ── _daemon_strict gate ─────────────────────────────────────────────────
 
