@@ -289,7 +289,10 @@ class TestCmdMineDaemon:
 
         assert ex.value.code == 0
         assert captured["body"]["mode"] == "projects"
-        assert captured["body"]["dir"].endswith("/home/u/proj")
+        # Normalize separators so the assertion holds on Windows, where
+        # Path.expanduser().resolve() returns a backslash-prefixed path
+        # like "D:\\home\\u\\proj".
+        assert captured["body"]["dir"].replace("\\", "/").endswith("/home/u/proj")
 
     def test_routes_convos_mode_to_daemon(self):
         from mempalace import cli

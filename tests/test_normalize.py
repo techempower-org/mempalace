@@ -1551,7 +1551,10 @@ class TestVerbatimMode:
     def test_config_reads_from_hooks_block(self, tmp_path, monkeypatch):
         from mempalace.config import MempalaceConfig
 
+        # Path.home() consults HOME on POSIX and USERPROFILE on Windows;
+        # set both so the redirect works on both platforms.
         monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
         cfg_dir = tmp_path / ".mempalace"
         cfg_dir.mkdir()
         (cfg_dir / "config.json").write_text(json.dumps({"hooks": {"verbatim_mode": True}}))
