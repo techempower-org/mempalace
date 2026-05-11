@@ -13,7 +13,8 @@ import sys
 import threading
 from typing import Optional
 
-from .backends.chroma import ChromaBackend
+from .backends import PalaceRef, get_backend, resolve_backend_for_palace
+from .config import DEFAULT_COLLECTION_NAME, MempalaceConfig
 
 logger = logging.getLogger("mempalace_mcp")
 
@@ -43,8 +44,6 @@ SKIP_DIRS = {
     "target",
 }
 
-_DEFAULT_BACKEND = ChromaBackend()
-
 # Schema version for drawer normalization. Bump when the normalization
 # pipeline changes in a way that existing drawers should be rebuilt to pick up
 # (e.g., new noise-stripping rules). `file_already_mined` treats drawers with
@@ -55,21 +54,56 @@ _DEFAULT_BACKEND = ChromaBackend()
 #               drawers stored system tags / hook chrome verbatim.
 NORMALIZE_VERSION = 2
 
+# Fork-only compat shim. Upstream #665 removed the module-level
+# `_DEFAULT_BACKEND = ChromaBackend()` symbol because `get_collection`
+# now routes through `resolve_backend_for_palace`. But fork-side callers
+# in `mcp_server.py` still treat the default backend as a module attribute
+# (cache invalidation via `._clients.pop()` / `._freshness.pop()` and
+# `.close_palace()`), and `tests/test_backends.py` + `tests/test_mcp_server.py`
+# monkeypatch it. Aliasing to `get_backend("chroma")` preserves all five
+# call sites without leaking through to the postgres path — postgres
+# collections don't use the same `_clients`/`_freshness` cache, so
+# routing those calls at the chroma backend is structurally correct.
+# Follow-up: migrate callers to the new abstraction in a separate PR;
+# this shim is transitional, not a permanent fixture.
+_DEFAULT_BACKEND = get_backend("chroma")
+
 
 def get_collection(
     palace_path: str,
     collection_name: Optional[str] = None,
     create: bool = True,
 ):
-    """Get the palace collection through the backend layer."""
-    if collection_name is None:
-        from .config import get_configured_collection_name
+    """Get the palace collection through the backend layer.
 
-        collection_name = get_configured_collection_name()
-    return _DEFAULT_BACKEND.get_collection(
-        palace_path,
+    `collection_name=None` (the fork-side convention) and
+    `collection_name=DEFAULT_COLLECTION_NAME` (#665's convention) both mean
+    "use the configured default collection." Either resolves through
+    `MempalaceConfig().collection_name` (env `MEMPALACE_COLLECTION_NAME`
+    overrides the config file). Fork-side callers in `searcher.py`,
+    `convo_miner.py`, `sweeper.py`, etc. pass None explicitly; #665 was
+    written assuming all callers omitted the keyword and got the default,
+    which broke the None path. Accepting both forms is the minimal shim
+    until fork-side callers migrate to the new convention.
+    """
+    config = MempalaceConfig()
+    if collection_name is None or collection_name == DEFAULT_COLLECTION_NAME:
+        collection_name = config.collection_name
+
+    backend_name = resolve_backend_for_palace(
+        config_value=config.backend_override,
+        palace_path=palace_path,
+        default="chroma",
+    )
+    options = None
+    if backend_name == "postgres":
+        options = {"dsn": config.postgres_dsn} if config.postgres_dsn else None
+
+    return get_backend(backend_name).get_collection(
+        palace=PalaceRef(id=palace_path, local_path=palace_path),
         collection_name=collection_name,
         create=create,
+        options=options,
     )
 
 

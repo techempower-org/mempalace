@@ -53,3 +53,41 @@ jobs:
       - run: pip install "ruff>=0.4.0,<0.5"
       - run: ruff check .
       - run: ruff format --check .
+
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: mempalace_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+      - run: pip install -e ".[dev,postgres]"
+      - name: Create pgvector extension
+        env:
+          PGURL: postgresql://postgres:postgres@localhost:5432/mempalace_test
+        run: |
+          python - <<'PY'
+          import os, psycopg2
+          conn = psycopg2.connect(os.environ["PGURL"])
+          conn.autocommit = True
+          conn.cursor().execute("CREATE EXTENSION IF NOT EXISTS vector")
+          print("vector extension ready")
+          PY
+      - name: Run postgres backend tests
+        env:
+          TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/mempalace_test
+        run: python -m pytest tests/test_backends_postgres.py -v
