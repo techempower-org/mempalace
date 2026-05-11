@@ -873,10 +873,30 @@ class ChromaCollection(BaseCollection):
     # Writes
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _sanitize_metadatas_for_chromadb(metadatas):
+        """chromadb 1.5.x rejects None and empty-dict entries in the metadatas
+        list (ValueError: Expected metadata to be a non-empty dict, got 0
+        metadata attributes in add). Coerce any such entry to a sentinel so
+        the write succeeds. Operators can later locate coerced drawers via
+        ``where={"_repaired_empty_meta": True}``.
+
+        This is the chokepoint catch-all: even if a caller's own sanitizer
+        misses a case (or skips for performance), reaching the chromadb
+        client always goes through here first.
+        """
+        if metadatas is None:
+            return None
+        return [
+            m if (isinstance(m, dict) and len(m) > 0) else {"_repaired_empty_meta": True}
+            for m in metadatas
+        ]
+
     def add(self, *, documents, ids, metadatas=None, embeddings=None):
         kwargs: dict[str, Any] = {"documents": documents, "ids": ids}
-        if metadatas is not None:
-            kwargs["metadatas"] = metadatas
+        sanitized = self._sanitize_metadatas_for_chromadb(metadatas)
+        if sanitized is not None:
+            kwargs["metadatas"] = sanitized
         if embeddings is not None:
             kwargs["embeddings"] = embeddings
         with self._write_lock():
@@ -884,8 +904,9 @@ class ChromaCollection(BaseCollection):
 
     def upsert(self, *, documents, ids, metadatas=None, embeddings=None):
         kwargs: dict[str, Any] = {"documents": documents, "ids": ids}
-        if metadatas is not None:
-            kwargs["metadatas"] = metadatas
+        sanitized = self._sanitize_metadatas_for_chromadb(metadatas)
+        if sanitized is not None:
+            kwargs["metadatas"] = sanitized
         if embeddings is not None:
             kwargs["embeddings"] = embeddings
         with self._write_lock():
