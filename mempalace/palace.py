@@ -71,12 +71,23 @@ _DEFAULT_BACKEND = get_backend("chroma")
 
 def get_collection(
     palace_path: str,
-    collection_name: str = DEFAULT_COLLECTION_NAME,
+    collection_name: Optional[str] = None,
     create: bool = True,
 ):
-    """Get the palace collection through the backend layer."""
+    """Get the palace collection through the backend layer.
+
+    `collection_name=None` (the fork-side convention) and
+    `collection_name=DEFAULT_COLLECTION_NAME` (#665's convention) both mean
+    "use the configured default collection." Either resolves through
+    `MempalaceConfig().collection_name` (env `MEMPALACE_COLLECTION_NAME`
+    overrides the config file). Fork-side callers in `searcher.py`,
+    `convo_miner.py`, `sweeper.py`, etc. pass None explicitly; #665 was
+    written assuming all callers omitted the keyword and got the default,
+    which broke the None path. Accepting both forms is the minimal shim
+    until fork-side callers migrate to the new convention.
+    """
     config = MempalaceConfig()
-    if collection_name == DEFAULT_COLLECTION_NAME:
+    if collection_name is None or collection_name == DEFAULT_COLLECTION_NAME:
         collection_name = config.collection_name
 
     backend_name = resolve_backend_for_palace(
