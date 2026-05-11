@@ -625,3 +625,38 @@ def bulk_check_mined(collection) -> dict[str, float]:
     except Exception:
         logger.warning("bulk_check_mined: partial fetch, %d files loaded", len(mined))
     return mined
+
+
+def prefetch_mined_set(collection) -> set[str]:
+    """Pre-fetch the set of source_files already mined at the current NORMALIZE_VERSION.
+
+    Mirrors file_already_mined()'s version-gate semantics (check_mtime=False
+    branch) but in one bulk pass instead of one ChromaDB query per file.
+    Returns a set of source_file paths whose stored drawers are at or above
+    NORMALIZE_VERSION; callers do `if path in result_set: skip`.
+
+    The convo miner walks thousands of transcript files; per-file
+    `collection.get(where={"source_file": X})` costs ~2s on a 150k-drawer
+    palace, making a 2000-file sweep take >1h of pure skip-checking. This
+    helper drops that to a single paginated scan plus O(1) lookups.
+    """
+    mined: set[str] = set()
+    try:
+        total = collection.count()
+        offset = 0
+        while offset < total:
+            batch = collection.get(limit=1000, offset=offset, include=["metadatas"])
+            for meta in batch["metadatas"]:
+                src = meta.get("source_file")
+                if not src:
+                    continue
+                # Same default as file_already_mined: missing version == 1
+                version = meta.get("normalize_version", 1)
+                if version >= NORMALIZE_VERSION:
+                    mined.add(src)
+            if not batch["ids"]:
+                break
+            offset += len(batch["ids"])
+    except Exception:
+        logger.warning("prefetch_mined_set: partial fetch, %d files loaded", len(mined))
+    return mined

@@ -23,6 +23,7 @@ from .palace import (
     file_already_mined,
     get_collection,
     mine_lock,
+    prefetch_mined_set,
 )
 
 logger = logging.getLogger("mempalace_mcp")
@@ -457,6 +458,13 @@ def mine_convos(
 
     collection = get_collection(palace_path) if not dry_run else None
 
+    # Bulk pre-fetch already-mined set in one paginated pass instead of
+    # `len(files)` separate WHERE-source_file queries. On a 150k-drawer
+    # palace each per-file query costs ~2s, so a 2000-file sweep used to
+    # spend >1h just deciding to skip. prefetch_mined_set() does the same
+    # decisions in a single scan; loop body becomes an O(1) set check.
+    mined_set: set[str] = prefetch_mined_set(collection) if not dry_run else set()
+
     total_drawers = 0
     files_skipped = 0
     room_counts = defaultdict(int)
@@ -464,8 +472,8 @@ def mine_convos(
     for i, filepath in enumerate(files, 1):
         source_file = str(filepath)
 
-        # Skip if already filed
-        if not dry_run and file_already_mined(collection, source_file):
+        # Skip if already filed at current NORMALIZE_VERSION
+        if not dry_run and source_file in mined_set:
             files_skipped += 1
             continue
 
