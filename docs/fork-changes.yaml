@@ -24,6 +24,207 @@
 
 entries:
 
+  - id: readme-four-layer-pivot
+    date: 2026-05-11
+    bucket: Changed
+    commit: 55b36ca
+    area: Docs
+    summary: "README pivots to the four-layer model + Auto Dream as vindication of the verbatim-vs-derivative axis"
+    body: |
+      Substantial README rewrite (+137/-100) reflecting three things
+      that landed between the previous refresh (`a67be3f`, the
+      2026-05-10 develop sync) and now:
+
+      - **Four-layer model promoted to the lede.** Storage / encoder /
+        retrieval / consumption as independently improvable surfaces;
+        the empirical claim that model size doesn't fix invocation
+        discipline (RLM-Qwen-7B and RLM-Llama-70B both ceiling at
+        46.67% recall while Familiar's deterministic pipeline hits
+        78.33% on the same jp-realm-v0.1 corpus). Calibration paragraph
+        hedges the absolute numbers; methodology disclosure lives in
+        `docs/research/`. The earlier "recovery-collection migration"
+        lede moves down to "What this fork has learned."
+
+      - **Auto Dream framed as vindication.** Anthropic shipped Auto
+        Dream in two research-preview surfaces in late April: a
+        consolidator inside Claude Code (manual `/dream` or auto-trigger
+        at 24h + 5 sessions; mutates `~/.claude/projects/<project>/memory/`
+        in place) and a Managed Agents Dreams API (REST, beta header
+        `dreaming-2026-04-21`, models `claude-opus-4-7` and
+        `claude-sonnet-4-6`, up to 100 sessions, non-destructive output
+        store). The Dreams API design ratifies the verbatim-input /
+        derivative-output axis. Replaces the prior "neither has
+        consolidation" framing (which was wrong post-2026-04-21) with
+        an affirmative claim: the verbatim layer doesn't need
+        consolidation; it needs durability.
+
+      - **Substrate section moves from "exploring" to "in flight."**
+        Names the live `mempalace-db` test container on the homelab
+        LAN, the cherry-pick on `feat/pgvector-age-impl`, and the
+        documented Plan-B trigger date (2026-06-08).
+
+      New section: "Convergence with peer systems" triangulates across
+      Familiar (deterministic pipeline), CampaignGenerator (hierarchical
+      AAAK pruning), Kent (APO trained policy), adaptmem (encoder
+      fine-tune). Four agreements: verbatim storage as base layer, no
+      LLM in the index path, wings as scope routing, consumption gap
+      is real. Divergence is where intelligence above retrieval lives.
+
+      Tactical corrections in the same diff: test count `~1500 → ~1850`,
+      sync date `2026-04-27 → 2026-05-10`, fork-ahead count `~16 → ~14`,
+      drawer count `151K → ~160K`, setup commands now lead with
+      `uv sync --extra dev` (matching the project CLAUDE.md), PR table
+      regenerated against `gh pr list` showing 10 open jphein PRs.
+
+      Six new files in `docs/research/` committed alongside the README
+      as the citation surface: adaptmem-orthogonal-layers,
+      compass_artifact_wf-28bac4e8, compass_artifact_wf-ad108fcc,
+      convergent-findings-kostadis-comparison, three-mempalace-consumers,
+      three-patterns-for-agent-memory.
+    files:
+      - README.md
+      - docs/research/adaptmem-orthogonal-layers.md
+      - docs/research/compass_artifact_wf-28bac4e8-71d9-4175-837a-d4ad563aec8d_text_markdown.md
+      - docs/research/compass_artifact_wf-ad108fcc-3960-4eab-ad5d-234bf365b2f4_text_markdown.md
+      - docs/research/convergent-findings-kostadis-comparison.md
+      - docs/research/three-mempalace-consumers.md
+      - docs/research/three-patterns-for-agent-memory.md
+
+  - id: ci-postgres-backend-job
+    date: 2026-05-11
+    bucket: Added
+    commit: da0bdbb
+    area: Testing
+    summary: "CI: gate postgres-backend tests against a pgvector service container"
+    body: |
+      Adds a `test-postgres` job to `.github/workflows/ci.yml` that
+      runs in parallel with the existing `test-linux` / `test-windows`
+      / `test-macos` / `lint` matrix. Service container is the public
+      `pgvector/pgvector:pg16` image with health checks; a pre-test
+      Python step installs the `vector` extension via psycopg2 (no
+      `psql` install on the runner needed).
+
+      Test scope is `tests/test_backends_postgres.py` only — three
+      `pytest.skipif`-gated tests for backend registration, drawer
+      round-trip, and L2 vector distance ordering. The full pytest
+      suite is already exercised by `test-linux` without the postgres
+      extra; running it again with `TEST_POSTGRES_DSN` set would
+      double the suite time on every PR for the marginal coverage of
+      three additional tests. The targeted job gives the regression
+      signal we want — postgres backend works end-to-end against a
+      real database — without that cost.
+
+      AGE is deliberately not in the CI image. The `apache/age` +
+      pgvector combined image we deploy on the homelab `mempalace-db`
+      isn't needed in CI yet — no test in the repo exercises
+      AGE-specific behavior. When knowledge-graph layer tests land,
+      the CI image swap (push our derived image to ghcr, or build
+      inline) is a separate concern.
+
+      Job timing on first run: 52 seconds total including service
+      container startup, pip install of `.[dev,postgres]`, extension
+      create, and the 3 smoke tests.
+    files:
+      - .github/workflows/ci.yml
+
+  - id: pgvector-substrate
+    date: 2026-05-11
+    bucket: Added
+    commit: 5e90c72
+    area: Reliability
+    summary: "PostgreSQL backend via #665 cherry-pick + fork-side adaptations + smoke tests"
+    body: |
+      Cherry-pick of skuznetsov's upstream PR
+      [#665](https://github.com/MemPalace/mempalace/pull/665) — adds a
+      PostgreSQL backend built on the merged #995 / RFC 001
+      `BaseBackend` contract. Supports `pg_sorted_heap` when the
+      extension is installed; falls back to `pgvector` (the path this
+      fork actually runs). INSERT … SELECT FROM unnest() + ON CONFLICT
+      for batch writes; lazy vector index creation after a row-count
+      threshold; first-class `wing` / `room` columns with btree
+      indexes; metadata as `jsonb` with `$eq` / `$ne` / `$in` / `$nin`
+      / `$and` / `$or` filter translation. Optional install via
+      `pip install -e ".[postgres]"` — only adds `psycopg2-binary`,
+      no new ML dependency stack.
+
+      Composition stance is WAIT-for-#665 to merge upstream rather
+      than fork-port. Full rationale at
+      `docs/internal/pgvector-665-decision.md` (commit `fbd8dbd`):
+      conflict surface is moderate (~51 LOC across `palace.py` +
+      `tests/test_backends.py` + trivial README/uv.lock); #665 is
+      comprehensive and architecturally aligned; the `pg_sorted_heap`
+      codepath is gated by extension availability so our deployment
+      runs the pgvector fallback cleanly. Documented Plan-B trigger:
+      switch to fork-port path if no #665 maintainer activity past
+      2026-06-08.
+
+      Four fork-side adaptations rode along with the cherry-pick:
+
+      - **`palace.py` compat shim** (`5e90c72`). `_DEFAULT_BACKEND`
+        re-aliased to `get_backend("chroma")` so existing
+        `mcp_server.py` cache-clearing on `._clients` / `._freshness`
+        and the `palace.close_palace` call site keep working without
+        callers migrating to the new abstraction. Migration of those
+        five call sites is a follow-up commit; the shim is
+        transitional, not permanent.
+
+      - **`palace.get_collection()` accepts None for collection_name**
+        (`5c7f234`). Upstream #665 tightened the contract from
+        `Optional[str] = None` to `str = DEFAULT_COLLECTION_NAME` and
+        resolved the default only when the literal sentinel was
+        passed. Fork-side callers
+        (`searcher.search_memories`, `convo_miner`, `sweeper`,
+        `diary_ingest`, etc.) pass `collection_name=None` per the
+        pre-#665 fork convention; the tight contract propagated None
+        to chromadb and produced 30 test_searcher failures. Accepting
+        both forms (None and `DEFAULT_COLLECTION_NAME`) restores the
+        green floor without disturbing #665's structure.
+
+      - **`test_palace_get_collection_uses_configured_collection_name`
+        signature update** (`941342b`). `fake_get_collection` now
+        accepts `palace=PalaceRef` and `options=` kwargs;
+        monkeypatches via `MEMPALACE_COLLECTION_NAME` env var rather
+        than the legacy `get_configured_collection_name` function
+        (which is now a thin back-compat wrapper around
+        `MempalaceConfig().collection_name`).
+
+      - **Smoke tests** (`04c6294`). Three `pytest.skipif`-gated
+        integration tests in `tests/test_backends_postgres.py` —
+        backend registration as singleton, drawer add/get round-trip,
+        L2 distance ordering. Documented in
+        `docs/internal/pgvector-665-decision.md` as the contract
+        proxy for "the backend is end-to-end working." Activated by
+        setting `TEST_POSTGRES_DSN`; skipped by default so machines
+        without postgres still see a green floor.
+
+      Substrate stood up on the homelab: `mempalace-db` container at
+      `disks.jphe.in:5433` (LAN-bound, internal-only) running PG16 +
+      pgvector 0.8.2 + AGE 1.6.0 via `apache/age:release_PG16_1.6.0` +
+      apt-installed `postgresql-16-pgvector`. Password in Vaultwarden
+      as `mempalace-db-postgres`. Init via `init.sql` mounted at
+      `/docker-entrypoint-initdb.d/`. Build context at
+      `/opt/mediaserver/mempalace-db/`.
+    tests: |
+      1851 passed, 1 skipped, 106 deselected (with `TEST_POSTGRES_DSN`
+      set). +23 vs the pre-cherry-pick 1828 baseline — 20 from #665's
+      new postgres backend tests, 3 from the new smoke file. Zero
+      regressions in non-postgres paths.
+    pr: 665
+    pr_state: OPEN
+    files:
+      - mempalace/backends/postgres.py
+      - mempalace/backends/__init__.py
+      - mempalace/backends/registry.py
+      - mempalace/palace.py
+      - mempalace/config.py
+      - pyproject.toml
+      - tests/test_backends.py
+      - tests/test_backends_postgres.py
+      - tests/test_config_extra.py
+      - docs/internal/pgvector-665-decision.md
+      - docs/postgres_backend.md
+      - scripts/install_pg_backend.sh
+
   - id: cli-daemon-routing
     date: 2026-05-07
     bucket: Added
