@@ -251,6 +251,42 @@ regressions in non-postgres paths.
 ### Fixed
 
 
+- **Defense-in-depth metadata sanitizer at the chromadb-client chokepoint** ([`f499814`](https://github.com/jphein/mempalace/commit/f499814))
+  Companion to the repair.py sanitizers in #1458 / `949cb20`
+  (which fixed `_extract_drawers` and `_rebuild_one_collection`).
+  A 151,478-drawer rebuild against the canonical palace still
+  failed at ~120K drawers with the same `ValueError: Expected
+  metadata to be a non-empty dict, got 0 metadata attributes in
+  add` from chromadb's `validate_metadata` — the traceback ran
+  through `mempalace/backends/chroma.py:add → chromadb
+  Collection.add → validate_insert_record_set →
+  validate_metadatas → validate_metadata`.
+
+  Even with sanitization at both repair-layer extract points,
+  something between the repair-layer sanitizer and chromadb's
+  actual write call reshapes the metadatas list — likely
+  chromadb's upsert internally splitting into add+update paths,
+  or a deeper preprocessing step. Sanitizing at the
+  chromadb-client chokepoint catches whatever the upstream path
+  misses.
+
+  New helper `ChromaCollection._sanitize_metadatas_for_chromadb`
+  coerces any None or empty-dict entry to
+  `{"_repaired_empty_meta": True}` (same sentinel as the repair.py
+  paths; searchable via `where={"_repaired_empty_meta": True}`).
+  Both `add()` and `upsert()` route through it. Cost is one list
+  comprehension per write call — negligible.
+
+  Direct-to-main commit (not via PR) because the in-progress
+  151K-drawer rebuild on disks needed the fix live to make
+  forward progress; standard PR-review cadence would have stalled
+  the rebuild for hours. Defense-in-depth at the chokepoint is
+  independently mergeable upstream once the rebuild completes
+  and we have time to file it.
+
+  *Files:* `mempalace/backends/chroma.py`
+
+
 - **Coerce empty + None metadata to sentinel in both rebuild paths** ([`949cb20`](https://github.com/jphein/mempalace/commit/949cb20))
   ChromaDB 1.5.x rejects both None and empty-dict entries in the
   `metadatas` list (raises `ValueError: Expected metadata to be a
