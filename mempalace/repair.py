@@ -139,7 +139,17 @@ def _extract_drawers(col, total: int, batch_size: int):
             break
         all_ids.extend(batch["ids"])
         all_docs.extend(batch["documents"])
-        all_metas.extend(batch["metadatas"])
+        # chromadb 1.5.x's upsert validates that every metadatas[i] is a
+        # non-empty dict (chromadb/api/types.py:validate_metadata). Drawers
+        # extracted from sqlite ground truth can come back with None or {}
+        # for sparse historical writes — coerce those to a sentinel so the
+        # rebuild upsert can complete instead of raising ValueError ~80%
+        # through a multi-hour run. See #1458 for full context.
+        sanitized_metas = [
+            m if (isinstance(m, dict) and len(m) > 0) else {"_repaired_empty_meta": True}
+            for m in batch["metadatas"]
+        ]
+        all_metas.extend(sanitized_metas)
         offset += len(batch["ids"])
     return all_ids, all_docs, all_metas
 
@@ -806,11 +816,14 @@ def _rebuild_one_collection(
         for emb_id, doc, meta in extract_via_sqlite(source_palace, collection_name):
             ids.append(emb_id)
             docs.append(doc or "")
-            # chromadb 1.5.x rejects None entries in the metadatas list
-            # but accepts empty dicts. Mempalace drawers always carry at
-            # least wing/room, so this branch is defensive — corruption
-            # in embedding_metadata could yield an emb_id with no rows.
-            metas.append(meta if meta else {})
+            # chromadb 1.5.x rejects both None and empty-dict entries in
+            # the metadatas list (ValueError: Expected metadata to be a
+            # non-empty dict). Mempalace drawers always carry at least
+            # wing/room, so this branch is defensive — corruption in
+            # embedding_metadata could yield an emb_id with no rows.
+            # Coerce to a sentinel that satisfies validation and is
+            # discoverable later via `where={"_repaired_empty_meta": True}`.
+            metas.append(meta if (meta and len(meta) > 0) else {"_repaired_empty_meta": True})
             if len(ids) >= batch_size:
                 _flush()
         _flush()
