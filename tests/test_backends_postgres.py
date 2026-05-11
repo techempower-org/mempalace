@@ -9,10 +9,12 @@ machines that don't have a Postgres at hand.
 The substrate the fork uses for these tests is the docker container
 documented in `scratch/postgres-preflight-2026-05-10.md` —
 `apache/age:release_PG16_1.6.0` with `postgresql-16-pgvector` apt-installed
-on top. AGE itself isn't exercised here; that's Phase 2's job.
+on top. The AGE graph extension is loaded but not exercised by these
+tests; knowledge-graph coverage lives in its own test module.
 
-Plan reference: Phase 1 Task 1.A.1 Step 3 of
-`docs/superpowers/plans/2026-05-10-pgvector-age-migration-impl.md`.
+Pairs with the postgres backend code in `mempalace/backends/postgres.py`
+(upstream PR #665) and the BaseCollection contract in
+`mempalace/backends/base.py`.
 """
 
 import os
