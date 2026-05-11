@@ -24,6 +24,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **KnowledgeGraphAGE skeleton — Apache AGE graph bootstrap over psycopg2** ([`a3ee623`](https://github.com/jphein/mempalace/commit/a3ee623))
+  First commit toward the Apache AGE-backed knowledge graph layer
+  that the migration plan calls for. Skeleton class
+  `KnowledgeGraphAGE` in `mempalace/knowledge_graph_age.py` opens a
+  Postgres connection, loads the AGE extension, sets
+  `search_path = ag_catalog, "$user", public` for the session, and
+  creates a graph named `mempalace_kg` in `ag_catalog.ag_graph` if
+  absent. Idempotent bootstrap; safe to instantiate repeatedly.
+
+  Composes with the pgvector substrate already on main: same
+  `apache/age:release_PG16_1.6.0` + `postgresql-16-pgvector`
+  derived image; same `mempalace-db` container on disks; same
+  psycopg2-binary dependency from the `[postgres]` extra. No new
+  driver surface — keeps the dep tree clean.
+
+  Selectable via `MEMPALACE_KG_BACKEND=age` once the
+  config-routing layer lands in a follow-up commit; until then,
+  `mempalace.knowledge_graph.KnowledgeGraph` (SQLite) stays the
+  default and only path. The AGE class mirrors the SQLite KG's
+  public interface (constructor + close + context manager) so
+  callers can eventually swap backends without code changes.
+
+  Three pytest.skipif-gated tests in
+  `tests/test_knowledge_graph_age.py`:
+  - `test_age_kg_instantiates` — class constructs cleanly,
+    closes without exception.
+  - `test_age_graph_created` — `mempalace_kg` is registered in
+    `ag_catalog.ag_graph` with a non-null `graphid` after init.
+  - `test_age_context_manager` — `with KnowledgeGraphAGE(...) as
+    kg:` pattern closes the connection on exit (verifies
+    `_conn.closed` is True after).
+
+  Implementation notes:
+  - `autocommit=False` matches the SQLite KG's transaction
+    semantics so the eventual unified write API can swap
+    underneath without semantic surprise. The bootstrap commits
+    its own changes; subsequent write operations will control
+    their own transactions.
+  - Both `LOAD 'age'` and the `SET search_path` are
+    session-scoped — any future method taking a fresh cursor on
+    this connection must re-run them before issuing Cypher.
+
+  Future commits in this layer: `add_triple()` via Cypher
+  MERGE/CREATE, query operations, temporal filtering (`as_of`
+  queries), and the `MempalaceConfig.kg_backend` routing flag.
+
+  *Tests:* 1854 passed, 1 skipped, 106 deselected (with `TEST_POSTGRES_DSN`
+set against the homelab mempalace-db at disks.jphe.in:5433).
++3 vs the post-sync 1851 baseline; zero regressions.
+
+  *Files:* `mempalace/knowledge_graph_age.py`, `tests/test_knowledge_graph_age.py`
+
+
 - **CI: gate postgres-backend tests against a pgvector service container** ([`da0bdbb`](https://github.com/jphein/mempalace/commit/da0bdbb))
   Adds a `test-postgres` job to `.github/workflows/ci.yml` that
   runs in parallel with the existing `test-linux` / `test-windows`
