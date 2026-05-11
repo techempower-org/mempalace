@@ -248,6 +248,80 @@ regressions in non-postgres paths.
   *Files:* `README.md`, `docs/research/adaptmem-orthogonal-layers.md`, `docs/research/compass_artifact_wf-28bac4e8-71d9-4175-837a-d4ad563aec8d_text_markdown.md`, `docs/research/compass_artifact_wf-ad108fcc-3960-4eab-ad5d-234bf365b2f4_text_markdown.md`, `docs/research/convergent-findings-kostadis-comparison.md`, `docs/research/three-mempalace-consumers.md`, `docs/research/three-patterns-for-agent-memory.md`
 
 
+### Fixed
+
+
+- **Coerce empty + None metadata to sentinel in both rebuild paths** ([`949cb20`](https://github.com/jphein/mempalace/commit/949cb20))
+  ChromaDB 1.5.x rejects both None and empty-dict entries in the
+  `metadatas` list (raises `ValueError: Expected metadata to be a
+  non-empty dict`). Two functions in `mempalace/repair.py` construct
+  the metadatas list that feeds chromadb's upsert during a rebuild:
+
+  - `_extract_drawers` (around line 139) — extracts drawers from
+    sqlite ground truth for rebuild; passes them straight through.
+  - `_rebuild_one_collection` (around line 816) — collects the
+    extracted drawers and calls `col.upsert(...)`.
+
+  Both were vulnerable to the same ValueError, which would abort
+  a multi-hour palace rebuild ~80% of the way through if a
+  historical drawer had a sparse metadata row. Mempalace drawers
+  always carry at least wing/room, so this is defensive against
+  corruption in `embedding_metadata` or pre-rooms-and-wings data.
+
+  Fix coerces both None and empty-dict entries to a sentinel
+  `{"_repaired_empty_meta": True}` that satisfies chromadb's
+  validator AND is discoverable later via
+  `where={"_repaired_empty_meta": True}` so an operator can find
+  and investigate the rows the rebuild papered over.
+
+  The `_extract_drawers` slice is covered by upstream PR #1459;
+  the `_rebuild_one_collection` slice is fork-only — the bug
+  surfaces only when a rebuild reaches the upsert path after
+  extraction, which is the specific operational shape this fork's
+  151K+ drawer palace has been exercising. JP's parallel-session
+  work originally landed both fixes as commit `848774c` on the
+  `fix/repair-empty-metadata` branch (filed upstream as #1459 for
+  the first slice); cherry-picked onto fork main as `949cb20` so
+  both fixes are live on `jphein/mempalace` immediately.
+
+  *Upstream:* [PR #1459](https://github.com/MemPalace/mempalace/pull/1459) (OPEN)
+  *Files:* `mempalace/repair.py`
+
+
+- **Route Stop/PreCompact hooks through palace-daemon/clients/hook.py** ([`42ded2e`](https://github.com/jphein/mempalace/commit/42ded2e))
+  Replaces the bash wrapper invocation pattern in
+  `.claude-plugin/hooks/hooks.json` with a single Python entrypoint
+  via the daemon's hook client. Both Stop and PreCompact now invoke
+  `python3 /home/jp/Projects/palace-daemon/clients/hook.py` with
+  explicit `--hook stop --harness claude-code` /
+  `--hook precompact --harness claude-code` arguments and a 30s
+  timeout.
+
+  Description on the manifest names this the 'post-2026-05-11
+  split-brain fix' — the daemon's hook client now owns the routing
+  decision (daemon vs local) instead of forking it across two
+  bash scripts that previously made independent decisions about
+  where to send the work. Hooks weren't firing reliably under the
+  previous shape; the staged file (`hooks.json.layer2-staged`,
+  created 2026-05-11 06:01) just needed promotion.
+
+  The previously-active `mempal-stop-hook.sh` and
+  `mempal-precompact-hook.sh` stay in the tree — they're still
+  tested by `tests/test_claude_plugin_hook_wrappers.py` and may be
+  invoked by non-Claude-Code agents through different paths.
+  They're alternate invocation surfaces, not dead code.
+
+  Fork-only deployment config: the absolute path
+  `/home/jp/Projects/palace-daemon/clients/hook.py` is specific
+  to JP's homelab layout. Won't go to upstream as-is; the path
+  shape would need to become discovery-based first (similar to
+  how `MEMPALACE_PYTHON` + `$PLUGIN_ROOT/venv/bin/python3` +
+  system fallback works in CLAUDE.md row 19's venv-aware
+  resolution pattern).
+
+  *Files:* `.claude-plugin/hooks/hooks.json`
+
+
 ## [2026-05-07]
 
 
