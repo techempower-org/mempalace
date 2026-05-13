@@ -155,13 +155,20 @@ def phase_1_schema(postgres_dsn: str) -> None:
 
     Records ``migration_phase_schema=done`` in the checkpoint table so a
     re-run of the whole migration can skip this phase next time.
+
+    Uses two separate connections (autocommit for schema DDL, normal
+    transaction for the checkpoint write). Toggling autocommit on a
+    single connection mid-flight raises "set_session cannot be used
+    inside a transaction" — psycopg2 forbids the switch once a query
+    has run.
     """
     import psycopg2
 
-    with psycopg2.connect(postgres_dsn) as conn:
-        # autocommit needed for CREATE EXTENSION on some Postgres builds
-        conn.autocommit = True
-        with conn.cursor() as cur:
+    # Connection 1: autocommit for extension + DDL
+    schema_conn = psycopg2.connect(postgres_dsn)
+    try:
+        schema_conn.autocommit = True
+        with schema_conn.cursor() as cur:
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
             cur.execute("CREATE EXTENSION IF NOT EXISTS age")
             cur.execute(
@@ -173,7 +180,11 @@ def phase_1_schema(postgres_dsn: str) -> None:
                 )
                 """
             )
-        conn.autocommit = False
+    finally:
+        schema_conn.close()
+
+    # Connection 2: transactional for the checkpoint write
+    with psycopg2.connect(postgres_dsn) as conn:
         _set_checkpoint(conn, "migration_phase_schema", "done")
     print("[phase 1] schema created")
 
