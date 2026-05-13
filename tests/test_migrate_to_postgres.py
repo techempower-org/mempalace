@@ -26,9 +26,7 @@ def test_migrate_subcommand_help():
         capture_output=True,
         text=True,
     )
-    assert res.returncode == 0, (
-        f"--help exited {res.returncode}: {res.stderr or res.stdout}"
-    )
+    assert res.returncode == 0, f"--help exited {res.returncode}: {res.stderr or res.stdout}"
     assert "--from" in res.stdout
     assert "--to" in res.stdout
     assert "--batch-size" in res.stdout
@@ -105,8 +103,10 @@ def test_preflight_refuses_when_daemon_reachable(tmp_path):
         def __exit__(self, *args):
             pass
 
-    with patch.dict(os.environ, {"PALACE_DAEMON_URL": "http://disks:8085"}), \
-         patch("urllib.request.urlopen", return_value=FakeResponse()):
+    with (
+        patch.dict(os.environ, {"PALACE_DAEMON_URL": "http://disks:8085"}),
+        patch("urllib.request.urlopen", return_value=FakeResponse()),
+    ):
         with pytest.raises(SystemExit) as excinfo:
             phase_0_preflight(str(palace), "postgresql://localhost/mempalace_test")
     assert "palace-daemon" in str(excinfo.value)
@@ -182,9 +182,7 @@ def test_phase_1_creates_extensions_and_checkpoint_table(capsys):
     assert "phase 1" in out.lower()
 
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT extname FROM pg_extension WHERE extname IN ('vector', 'age')"
-        )
+        cur.execute("SELECT extname FROM pg_extension WHERE extname IN ('vector', 'age')")
         ext = {r[0] for r in cur.fetchall()}
         assert "vector" in ext, "pgvector should be installed after phase 1"
         # AGE may or may not install depending on infrastructure; required at
@@ -193,9 +191,7 @@ def test_phase_1_creates_extensions_and_checkpoint_table(capsys):
             "SELECT to_regclass(%s)",
             (CHECKPOINT_TABLE,),
         )
-        assert cur.fetchone()[0] is not None, (
-            f"{CHECKPOINT_TABLE} should exist after phase 1"
-        )
+        assert cur.fetchone()[0] is not None, f"{CHECKPOINT_TABLE} should exist after phase 1"
         # Checkpoint recorded
         with psycopg2.connect(POSTGRES_DSN) as conn2:
             assert _get_checkpoint(conn2, "migration_phase_schema") == "done"
@@ -220,9 +216,7 @@ def fixture_chroma_palace(tmp_path):
     palace = tmp_path / "palace"
     palace.mkdir()
     client = chromadb.PersistentClient(path=str(palace))
-    col = client.get_or_create_collection(
-        "mempalace_drawers", metadata={"hnsw:space": "cosine"}
-    )
+    col = client.get_or_create_collection("mempalace_drawers", metadata={"hnsw:space": "cosine"})
     col.add(
         ids=[f"d{i}" for i in range(10)],
         documents=[f"doc {i}" for i in range(10)],
@@ -262,6 +256,7 @@ def test_phase_2_idempotent(fixture_chroma_palace):
     # Reset the per-collection done marker so the second pass actually runs
     # the loop (vs short-circuiting via checkpoint).
     import psycopg2
+
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute(
             "DELETE FROM mempalace_backend_meta "
@@ -280,11 +275,14 @@ def test_phase_2_idempotent(fixture_chroma_palace):
 def test_phase_2_skips_collection_when_marked_done(fixture_chroma_palace, capsys):
     """If migration_drawer_done::<name> is already 'done', we skip the loop."""
     from mempalace.migrate_to_postgres import (
-        phase_1_schema, phase_2_drawers, _set_checkpoint,
+        phase_1_schema,
+        phase_2_drawers,
+        _set_checkpoint,
     )
 
     phase_1_schema(POSTGRES_DSN)
     import psycopg2
+
     with psycopg2.connect(POSTGRES_DSN) as conn:
         _set_checkpoint(conn, "migration_drawer_done::mempalace_drawers", "done")
     capsys.readouterr()  # discard prior output
@@ -365,6 +363,7 @@ def test_phase_5_no_sqlite_kg_marks_done(tmp_path, capsys):
     # Verify checkpoint was set
     import psycopg2
     from mempalace.migrate_to_postgres import _get_checkpoint
+
     with psycopg2.connect(POSTGRES_DSN) as conn:
         assert _get_checkpoint(conn, _KG_DONE_KEY) == "done"
 
@@ -373,7 +372,9 @@ def test_phase_5_no_sqlite_kg_marks_done(tmp_path, capsys):
 def test_phase_5_copies_triples(tmp_path, capsys):
     """phase_5_kg moves triples from sqlite to AGE."""
     from mempalace.migrate_to_postgres import (
-        phase_1_schema, phase_5_kg, _KG_DONE_KEY,
+        phase_1_schema,
+        phase_5_kg,
+        _KG_DONE_KEY,
     )
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
 
@@ -383,13 +384,20 @@ def test_phase_5_copies_triples(tmp_path, capsys):
         palace,
         [
             {
-                "id": "t1", "subject": "JP", "predicate": "works_on",
-                "object": "mempalace", "valid_from": "2026-04-21",
-                "source_drawer_id": "drawer_abc", "confidence": 0.9,
+                "id": "t1",
+                "subject": "JP",
+                "predicate": "works_on",
+                "object": "mempalace",
+                "valid_from": "2026-04-21",
+                "source_drawer_id": "drawer_abc",
+                "confidence": 0.9,
             },
             {
-                "id": "t2", "subject": "JP", "predicate": "uses",
-                "object": "Postgres", "confidence": 1.0,
+                "id": "t2",
+                "subject": "JP",
+                "predicate": "uses",
+                "object": "Postgres",
+                "confidence": 1.0,
             },
         ],
     )
@@ -398,10 +406,10 @@ def test_phase_5_copies_triples(tmp_path, capsys):
 
     # Reset state for a clean test
     import psycopg2
+
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM mempalace_backend_meta "
-            "WHERE key LIKE 'migration_kg_%' OR key = %s",
+            "DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_kg_%' OR key = %s",
             (_KG_DONE_KEY,),
         )
         conn.commit()
@@ -431,17 +439,24 @@ def test_phase_5_copies_triples(tmp_path, capsys):
 def test_phase_5_skips_when_done_checkpoint(tmp_path, capsys):
     """Phase exits immediately when migration_phase_kg=done."""
     from mempalace.migrate_to_postgres import (
-        phase_1_schema, phase_5_kg, _set_checkpoint, _KG_DONE_KEY,
+        phase_1_schema,
+        phase_5_kg,
+        _set_checkpoint,
+        _KG_DONE_KEY,
     )
 
     palace = tmp_path / "palace"
     palace.mkdir()
-    _build_sqlite_kg(palace, [
-        {"id": "t1", "subject": "A", "predicate": "r", "object": "B"},
-    ])
+    _build_sqlite_kg(
+        palace,
+        [
+            {"id": "t1", "subject": "A", "predicate": "r", "object": "B"},
+        ],
+    )
 
     phase_1_schema(POSTGRES_DSN)
     import psycopg2
+
     with psycopg2.connect(POSTGRES_DSN) as conn:
         _set_checkpoint(conn, _KG_DONE_KEY, "done")
 
@@ -458,13 +473,17 @@ def test_phase_5_skips_when_done_checkpoint(tmp_path, capsys):
 def test_phase_6_verify_reports_match(fixture_chroma_palace, tmp_path, capsys):
     """After full migration, phase_6_verify returns all_match=True."""
     from mempalace.migrate_to_postgres import (
-        phase_1_schema, phase_2_drawers, phase_5_kg, phase_6_verify,
+        phase_1_schema,
+        phase_2_drawers,
+        phase_5_kg,
+        phase_6_verify,
     )
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
 
     # Reset state for a clean test
     phase_1_schema(POSTGRES_DSN)
     import psycopg2
+
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_%'")
         conn.commit()
@@ -487,12 +506,15 @@ def test_phase_6_verify_reports_match(fixture_chroma_palace, tmp_path, capsys):
 def test_phase_6_verify_detects_drawer_mismatch(fixture_chroma_palace, capsys):
     """If a drawer is missing in postgres, drawers_match is False."""
     from mempalace.migrate_to_postgres import (
-        phase_1_schema, phase_2_drawers, phase_6_verify,
+        phase_1_schema,
+        phase_2_drawers,
+        phase_6_verify,
     )
     from mempalace.backends.postgres import PostgresBackend
 
     phase_1_schema(POSTGRES_DSN)
     import psycopg2
+
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_%'")
         conn.commit()
@@ -513,7 +535,9 @@ def test_phase_6_verify_detects_drawer_mismatch(fixture_chroma_palace, capsys):
 def test_phase_7_done_prints_cutover_and_records_timestamp(fixture_chroma_palace, capsys):
     """phase_7_done emits cutover instructions + sets migrated_from_chroma_at."""
     from mempalace.migrate_to_postgres import (
-        phase_1_schema, phase_7_done, _get_checkpoint,
+        phase_1_schema,
+        phase_7_done,
+        _get_checkpoint,
     )
 
     phase_1_schema(POSTGRES_DSN)
@@ -525,6 +549,7 @@ def test_phase_7_done_prints_cutover_and_records_timestamp(fixture_chroma_palace
     assert "systemctl" in out
 
     import psycopg2
+
     with psycopg2.connect(POSTGRES_DSN) as conn:
         ts = _get_checkpoint(conn, "migrated_from_chroma_at")
         assert ts is not None
@@ -548,6 +573,7 @@ def test_phase_7_redacts_dsn_in_output(capsys, tmp_path):
     # DSN. Use POSTGRES_DSN but assert redaction by passing it through the
     # _redact_dsn helper directly.
     from mempalace.migrate_to_postgres import _redact_dsn
+
     assert "supersecret" not in _redact_dsn(fake)
 
 
@@ -555,7 +581,9 @@ def test_phase_7_redacts_dsn_in_output(capsys, tmp_path):
 def test_phase_5_skips_bad_temporal_data(tmp_path, capsys):
     """Triples with inverted intervals get logged + skipped, not crash."""
     from mempalace.migrate_to_postgres import (
-        phase_1_schema, phase_5_kg, _KG_DONE_KEY,
+        phase_1_schema,
+        phase_5_kg,
+        _KG_DONE_KEY,
     )
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
 
@@ -565,17 +593,25 @@ def test_phase_5_skips_bad_temporal_data(tmp_path, capsys):
         palace,
         [
             {
-                "id": "good", "subject": "A", "predicate": "r", "object": "B",
+                "id": "good",
+                "subject": "A",
+                "predicate": "r",
+                "object": "B",
             },
             {
-                "id": "bad_temporal", "subject": "X", "predicate": "y", "object": "Z",
-                "valid_from": "2026-05-10", "valid_to": "2025-01-01",  # inverted
+                "id": "bad_temporal",
+                "subject": "X",
+                "predicate": "y",
+                "object": "Z",
+                "valid_from": "2026-05-10",
+                "valid_to": "2025-01-01",  # inverted
             },
         ],
     )
 
     phase_1_schema(POSTGRES_DSN)
     import psycopg2
+
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute(
             "DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_kg_%' OR key = %s",

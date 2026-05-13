@@ -109,19 +109,13 @@ def _check_postgres_extensions(postgres_dsn: str) -> None:
     try:
         import psycopg2
     except ImportError:
-        sys.exit(
-            "FATAL: psycopg2 not installed. Install with: "
-            "`pip install -e '.[postgres]'`"
-        )
+        sys.exit("FATAL: psycopg2 not installed. Install with: `pip install -e '.[postgres]'`")
 
     try:
         with psycopg2.connect(postgres_dsn) as conn, conn.cursor() as cur:
             # NOTE: pg_available_extensions uses `name`, not `extname` —
             # that's pg_extension's column. Different views, easy to mix up.
-            cur.execute(
-                "SELECT name FROM pg_available_extensions "
-                "WHERE name IN ('vector', 'age')"
-            )
+            cur.execute("SELECT name FROM pg_available_extensions WHERE name IN ('vector', 'age')")
             avail = {row[0] for row in cur.fetchall()}
     except psycopg2.OperationalError as e:
         sys.exit(f"FATAL: cannot connect to target Postgres — {e}")
@@ -272,10 +266,7 @@ def phase_2_drawers(
                 # backend expects list[list[float]]. None embeddings stay
                 # None (will fail at insert if non-null required).
                 if embs is not None:
-                    embs = [
-                        list(map(float, e)) if e is not None else None
-                        for e in embs
-                    ]
+                    embs = [list(map(float, e)) if e is not None else None for e in embs]
                 # Normalize metadatas: chromadb may give None for missing.
                 metas = [m if isinstance(m, dict) else {} for m in metas]
 
@@ -395,10 +386,7 @@ def phase_5_kg(chroma_path: str, postgres_dsn: str) -> None:
         start_offset = int(wm) if wm and wm.isdigit() else 0
 
     if start_offset >= total:
-        print(
-            f"[phase 5] watermark ({start_offset}) >= total ({total}); "
-            "marking phase done"
-        )
+        print(f"[phase 5] watermark ({start_offset}) >= total ({total}); marking phase done")
         with psycopg2.connect(postgres_dsn) as conn:
             _set_checkpoint(conn, _KG_DONE_KEY, "done")
         return
@@ -432,8 +420,10 @@ def phase_5_kg(chroma_path: str, postgres_dsn: str) -> None:
                 # Periodic watermark checkpoint every 100 triples
                 if (i + 1) % 100 == 0:
                     _set_checkpoint(ck_conn, _KG_WATERMARK_KEY, str(i + 1))
-                    print(f"[phase 5]   {i + 1}/{total} processed "
-                          f"({copied} copied, {skipped} skipped)")
+                    print(
+                        f"[phase 5]   {i + 1}/{total} processed "
+                        f"({copied} copied, {skipped} skipped)"
+                    )
 
             # Final watermark + done marker
             _set_checkpoint(ck_conn, _KG_WATERMARK_KEY, str(total))
@@ -441,10 +431,7 @@ def phase_5_kg(chroma_path: str, postgres_dsn: str) -> None:
     finally:
         age.close()
 
-    print(
-        f"[phase 5] kg complete — {copied} copied, {skipped} skipped "
-        f"(of {total} total)"
-    )
+    print(f"[phase 5] kg complete — {copied} copied, {skipped} skipped (of {total} total)")
 
 
 # ── Phase 6 — Verify migration parity ────────────────────────────────
@@ -500,6 +487,7 @@ def phase_6_verify(
     # ─── Drawer count parity (per-collection) ──────────────────────────
     client = chromadb.PersistentClient(path=chroma_path)
     from .backends.postgres import PostgresBackend
+
     backend = PostgresBackend(dsn=postgres_dsn)
 
     sample_pool: list = []  # list of (collection, id) tuples to sample from
@@ -530,9 +518,7 @@ def phase_6_verify(
             sample_ids = col.get(limit=min(50, c_total))["ids"]
             sample_pool.extend((name, i) for i in sample_ids)
 
-    result["drawers_match"] = (
-        result["chroma_drawer_count"] == result["postgres_drawer_count"]
-    )
+    result["drawers_match"] = result["chroma_drawer_count"] == result["postgres_drawer_count"]
 
     # ─── Triple count parity ──────────────────────────────────────────
     kg_sqlite_path = Path(chroma_path) / "knowledge_graph.sqlite3"
@@ -544,6 +530,7 @@ def phase_6_verify(
             result["chroma_triple_count"] = cur.fetchone()[0]
 
     from .knowledge_graph_age import KnowledgeGraphAGE
+
     age = KnowledgeGraphAGE(dsn=postgres_dsn)
     try:
         # Count all edges via a Cypher MATCH ... RETURN count
@@ -559,11 +546,10 @@ def phase_6_verify(
         age.close()
 
     # Lenient: postgres may have fewer than chroma if phase 5 skipped rows
-    result["triples_match"] = (
-        result["postgres_triple_count"] <= result["chroma_triple_count"]
-        and result["chroma_triple_count"] - result["postgres_triple_count"] <= max(
-            5, result["chroma_triple_count"] // 100
-        )
+    result["triples_match"] = result["postgres_triple_count"] <= result[
+        "chroma_triple_count"
+    ] and result["chroma_triple_count"] - result["postgres_triple_count"] <= max(
+        5, result["chroma_triple_count"] // 100
     )
     print(
         f"[phase 6]   triples: sqlite={result['chroma_triple_count']}, "
@@ -591,9 +577,7 @@ def phase_6_verify(
             result["sample_mismatches"].append((drawer_id, f"compare error: {e}"))
 
     result["all_match"] = (
-        result["drawers_match"]
-        and result["triples_match"]
-        and not result["sample_mismatches"]
+        result["drawers_match"] and result["triples_match"] and not result["sample_mismatches"]
     )
 
     # Checkpoint + summary
@@ -601,10 +585,12 @@ def phase_6_verify(
         _set_checkpoint(conn, "migration_phase_verify", "done")
 
     status = "OK" if result["all_match"] else "MISMATCH"
-    print(f"[phase 6] verify {status}: "
-          f"drawers={result['drawers_match']}, "
-          f"triples={result['triples_match']}, "
-          f"sample_mismatches={len(result['sample_mismatches'])}")
+    print(
+        f"[phase 6] verify {status}: "
+        f"drawers={result['drawers_match']}, "
+        f"triples={result['triples_match']}, "
+        f"sample_mismatches={len(result['sample_mismatches'])}"
+    )
     if result["sample_mismatches"]:
         for did, reason in result["sample_mismatches"][:5]:
             print(f"[phase 6]   sample mismatch: {did} — {reason}")
@@ -663,10 +649,7 @@ def phase_7_done(chroma_path: str, postgres_dsn: str) -> None:
     print("       curl 'http://localhost:8085/search?q=<known-content>'")
     print()
     print(" 5. After 24h of clean operation, archive the chromadb backup:")
-    backup_name = (
-        f"{chroma_path}.chromadb-backup-"
-        f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
-    )
+    backup_name = f"{chroma_path}.chromadb-backup-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
     print(f"       mv {chroma_path} {backup_name}")
     print()
 

@@ -2023,19 +2023,26 @@ def main():
         help="Migrate a ChromaDB palace to Postgres (pgvector + AGE)",
     )
     p_mig_pg.add_argument(
-        "--from", dest="from_palace", required=True,
+        "--from",
+        dest="from_palace",
+        required=True,
         help="Path to source ChromaDB palace directory",
     )
     p_mig_pg.add_argument(
-        "--to", dest="to_dsn", required=True,
+        "--to",
+        dest="to_dsn",
+        required=True,
         help="Postgres DSN of target (e.g. postgresql://user:pass@host/db)",
     )
     p_mig_pg.add_argument(
-        "--batch-size", type=int, default=1000,
+        "--batch-size",
+        type=int,
+        default=1000,
         help="Drawer batch size for phase 2 (default 1000)",
     )
     p_mig_pg.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Run preflight only; no writes to the target",
     )
 

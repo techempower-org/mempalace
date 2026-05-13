@@ -146,13 +146,19 @@ def test_age_as_of_filter():
         kg.clear()
         # Closed interval, ended last year
         kg.add_triple(
-            "JP", "works_on", "old_project",
-            valid_from="2024-01-01", valid_to="2025-12-31",
+            "JP",
+            "works_on",
+            "old_project",
+            valid_from="2024-01-01",
+            valid_to="2025-12-31",
         )
         # Open-ended interval, still active
         kg.add_triple(
-            "JP", "works_on", "mempalace",
-            valid_from="2026-04-21", valid_to=None,
+            "JP",
+            "works_on",
+            "mempalace",
+            valid_from="2026-04-21",
+            valid_to=None,
         )
 
         # As of 2026-05-01, only mempalace is active

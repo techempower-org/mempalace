@@ -134,6 +134,7 @@ def _get_kg() -> KnowledgeGraph:
     kg_backend = _config.kg_backend
     if kg_backend == "age":
         from .knowledge_graph_age import KnowledgeGraphAGE
+
         dsn = _config.postgres_dsn
         if not dsn:
             raise RuntimeError(

@@ -178,9 +178,7 @@ def _extract_drawers(col, total: int, batch_size: int):
         if batch_embeddings is not None and any(e is None for e in batch_embeddings):
             batch_embeddings = None
         all_embeddings.extend(
-            batch_embeddings
-            if batch_embeddings is not None
-            else [None] * len(batch["ids"])
+            batch_embeddings if batch_embeddings is not None else [None] * len(batch["ids"])
         )
         offset += len(batch["ids"])
     # If any embedding slot is None the whole list is unusable for direct

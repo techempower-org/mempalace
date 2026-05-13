@@ -139,9 +139,7 @@ class KnowledgeGraphAGE:
         if valid_to is not None:
             valid_to = sanitize_iso_temporal(valid_to, "valid_to")
         if valid_from and valid_to and valid_to < valid_from:
-            raise ValueError(
-                f"valid_to ({valid_to}) cannot precede valid_from ({valid_from})"
-            )
+            raise ValueError(f"valid_to ({valid_to}) cannot precede valid_from ({valid_from})")
 
         cypher = """
             MERGE (s:Entity {name: $subj})
@@ -217,8 +215,7 @@ class KnowledgeGraphAGE:
 
     # ── AGE plumbing ──────────────────────────────────────────────────
 
-    _RETURN_RE = re.compile(r"\bRETURN\b(.*?)(\bORDER\b|\bLIMIT\b|$)",
-                            re.IGNORECASE | re.DOTALL)
+    _RETURN_RE = re.compile(r"\bRETURN\b(.*?)(\bORDER\b|\bLIMIT\b|$)", re.IGNORECASE | re.DOTALL)
 
     def _extract_return_aliases(self, cypher: str) -> list:
         """Pull alias names out of a Cypher RETURN clause.
@@ -236,7 +233,7 @@ class KnowledgeGraphAGE:
             piece = piece.strip()
             if " AS " in piece.upper():
                 idx = piece.upper().rfind(" AS ")
-                name = piece[idx + 4:].strip().split()[0].lower()
+                name = piece[idx + 4 :].strip().split()[0].lower()
                 aliases.append(name)
         return aliases
 
@@ -249,10 +246,7 @@ class KnowledgeGraphAGE:
         are all ``agtype``; callers unwrap via ``_unwrap_agtype``.
         """
         aliases = self._extract_return_aliases(cypher) if fetch else []
-        cols_decl = (
-            ", ".join(f"{c} agtype" for c in aliases)
-            if aliases else "ok agtype"
-        )
+        cols_decl = ", ".join(f"{c} agtype" for c in aliases) if aliases else "ok agtype"
 
         rows: list = []
         with self._conn.cursor() as cur:
