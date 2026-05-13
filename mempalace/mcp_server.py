@@ -108,7 +108,7 @@ if _args.palace:
 
 _config = MempalaceConfig()
 
-_kg_by_path: dict[str, KnowledgeGraph] = {}
+_kg_by_path: dict = {}  # KG instance cache; KnowledgeGraph or KnowledgeGraphAGE
 _kg_cache_lock = threading.Lock()
 _palace_flag_given: bool = bool(_args.palace)
 
@@ -120,6 +120,38 @@ def _resolve_kg_path() -> str:
 
 
 def _get_kg() -> KnowledgeGraph:
+    """Return the cached KG instance, constructing one lazily.
+
+    Backend selection (Phase 2.4 of the pgvector-age migration plan):
+    ``MEMPALACE_KG_BACKEND=age`` or ``config.json {"kg_backend": "age"}``
+    routes construction to ``KnowledgeGraphAGE`` against
+    ``MempalaceConfig.postgres_dsn``. Default ``"sqlite"`` keeps the
+    classic file-based ``KnowledgeGraph``.
+
+    Cache key is the path string for the sqlite case and the DSN for the
+    AGE case — keeps each backing store one cached instance.
+    """
+    kg_backend = _config.kg_backend
+    if kg_backend == "age":
+        from .knowledge_graph_age import KnowledgeGraphAGE
+        dsn = _config.postgres_dsn
+        if not dsn:
+            raise RuntimeError(
+                "MEMPALACE_KG_BACKEND=age requires MEMPALACE_POSTGRES_DSN "
+                "(or postgres_dsn in config.json)"
+            )
+        cache_key = f"age::{dsn}"
+        kg = _kg_by_path.get(cache_key)
+        if kg is not None:
+            return kg
+        with _kg_cache_lock:
+            kg = _kg_by_path.get(cache_key)
+            if kg is None:
+                kg = KnowledgeGraphAGE(dsn=dsn)
+                _kg_by_path[cache_key] = kg
+        return kg
+
+    # Default sqlite path
     path = os.path.abspath(_resolve_kg_path())
     kg = _kg_by_path.get(path)
     if kg is not None:

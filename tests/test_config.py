@@ -345,3 +345,43 @@ def test_iso_temporal_error_names_field():
 
 def test_iso_temporal_normalizes_plus_zero_offset_to_z():
     assert sanitize_iso_temporal("2026-05-06T14:23:00+00:00") == "2026-05-06T14:23:00Z"
+
+
+# ── kg_backend (Phase 2.4) ────────────────────────────────────────────
+
+
+def test_kg_backend_defaults_to_sqlite(tmp_path, monkeypatch):
+    """When no env or config override, kg_backend reports 'sqlite'."""
+    monkeypatch.delenv("MEMPALACE_KG_BACKEND", raising=False)
+    cfg = MempalaceConfig(config_dir=str(tmp_path))
+    assert cfg.kg_backend == "sqlite"
+
+
+def test_kg_backend_env_override_wins(tmp_path, monkeypatch):
+    """MEMPALACE_KG_BACKEND env wins over config-file default."""
+    monkeypatch.setenv("MEMPALACE_KG_BACKEND", "age")
+    cfg = MempalaceConfig(config_dir=str(tmp_path))
+    assert cfg.kg_backend == "age"
+
+
+def test_kg_backend_lowercased_and_stripped(tmp_path, monkeypatch):
+    """Case + whitespace in env value normalized."""
+    monkeypatch.setenv("MEMPALACE_KG_BACKEND", "  AGE  ")
+    cfg = MempalaceConfig(config_dir=str(tmp_path))
+    assert cfg.kg_backend == "age"
+
+
+def test_kg_backend_empty_env_falls_back_to_default(tmp_path, monkeypatch):
+    """Empty env string falls through to config-file or default."""
+    monkeypatch.setenv("MEMPALACE_KG_BACKEND", "")
+    cfg = MempalaceConfig(config_dir=str(tmp_path))
+    assert cfg.kg_backend == "sqlite"
+
+
+def test_kg_backend_from_config_file(tmp_path, monkeypatch):
+    """kg_backend can be set via config.json when env is unset."""
+    monkeypatch.delenv("MEMPALACE_KG_BACKEND", raising=False)
+    with open(tmp_path / "config.json", "w") as f:
+        json.dump({"kg_backend": "age"}, f)
+    cfg = MempalaceConfig(config_dir=str(tmp_path))
+    assert cfg.kg_backend == "age"

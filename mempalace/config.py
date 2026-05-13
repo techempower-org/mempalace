@@ -323,6 +323,23 @@ class MempalaceConfig:
         return self._file_config.get("postgres_dsn") or self._file_config.get("pg_dsn")
 
     @property
+    def kg_backend(self) -> str:
+        """Knowledge-graph backend name. SQLite stays the default.
+
+        Apache AGE is opt-in via ``MEMPALACE_KG_BACKEND=age`` or
+        ``config.json {"kg_backend": "age"}``. When set to ``age`` the
+        AGE backend uses ``postgres_dsn`` for its connection (AGE runs
+        in the same Postgres database as the storage backend can).
+
+        Lowercased before returning; falls back to ``"sqlite"`` on empty.
+        """
+        env = os.environ.get("MEMPALACE_KG_BACKEND", "").strip().lower()
+        if env:
+            return env
+        raw = self._file_config.get("kg_backend", "sqlite")
+        return str(raw).strip().lower() or "sqlite"
+
+    @property
     def people_map(self):
         """Mapping of name variants to canonical names."""
         if self._people_map_file.exists():

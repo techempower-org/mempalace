@@ -28,7 +28,7 @@ The plan was written 2026-05-10. PR [#21 (`feat/pgvector-age-impl`)](https://git
 | 2 | 2.1 AGE schema + skeleton | ✅ Done | `mempalace/knowledge_graph_age.py`, `tests/test_knowledge_graph_age.py` |
 | 2 | 2.2 `add_triple()` Cypher | ✅ Done | now in `knowledge_graph_age.py` (clear + add_triple + query_triples). Skeleton file's docstring: "add/query operations and temporal filtering arrive in subsequent..." |
 | 2 | 2.3 Temporal filtering | ✅ Done | as_of param on query_triples |
-| 2 | 2.4 `kg_backend` config + routing | ❌ Not done | no `kg_backend` property in `config.py` |
+| 2 | 2.4 `kg_backend` config + routing | ✅ Done | property + mcp_server `_get_kg` routes to AGE when `MEMPALACE_KG_BACKEND=age` |
 | 3 | 3.1–3.6 Migration tool (chromadb → pg) | ❌ Not done | `cmd_migrate` exists but it's for ChromaDB version migrations, not substrate migration |
 | 4 | 4.1 Dry-run on canonical palace | ❌ Not done | — |
 | 4 | 4.2 Production cutover | ❌ Not done | — |
@@ -1135,14 +1135,14 @@ def query_triples(self, subject: Optional[str] = None, as_of: Optional[str] = No
 git commit -am "feat(kg/age): as_of temporal filter for query_triples"
 ```
 
-### Task 2.4: Add `MempalaceConfig.kg_backend` and route KG construction
+### Task 2.4: Add `MempalaceConfig.kg_backend` and route KG construction ✅ Done 2026-05-13
 
 **Files:**
 - Modify: `mempalace/config.py` (kg_backend property)
 - Modify: `mempalace/mcp_server.py` (KG factory)
 - Modify: `tests/test_config.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 def test_kg_backend_defaults_to_sqlite(tmp_path):
@@ -1156,7 +1156,7 @@ def test_kg_backend_age_via_env(tmp_path, monkeypatch):
     assert cfg.kg_backend == "age"
 ```
 
-- [ ] **Step 2: Add `kg_backend` property to `MempalaceConfig`**
+- [x] **Step 2: Add `kg_backend` property to `MempalaceConfig`**
 
 ```python
 @property
@@ -1167,7 +1167,7 @@ def kg_backend(self) -> str:
     return self._file_config.get("kg_backend", "sqlite")
 ```
 
-- [ ] **Step 3: Route KG construction in `mcp_server.py`**
+- [x] **Step 3: Route KG construction in `mcp_server.py`**
 
 Find the existing `_kg_by_path` factory (around line 124 in current `mcp_server.py`). Add an AGE branch:
 
@@ -1188,7 +1188,7 @@ def _get_kg(path: str):
     return kg
 ```
 
-- [ ] **Step 4: Run config tests + the AGE KG suite**
+- [x] **Step 4: Run config tests + the AGE KG suite**
 
 ```bash
 python -m pytest tests/test_config.py tests/test_knowledge_graph_age.py -v
@@ -1196,7 +1196,7 @@ python -m pytest tests/test_config.py tests/test_knowledge_graph_age.py -v
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -am "feat(config,mcp_server): MEMPALACE_KG_BACKEND=age routes to KnowledgeGraphAGE"
