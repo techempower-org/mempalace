@@ -321,7 +321,7 @@ Built *on top of* or *alongside* MemPalace by community contributors who use the
 
 ## Open upstream PRs
 
-Ten open from this fork as of 2026-05-11. Run `gh pr list --repo MemPalace/mempalace --author jphein --state open` for the live list.
+Ten open from this fork as of 2026-05-12. Run `gh pr list --repo MemPalace/mempalace --author jphein --state open` for the live list. Two merged today: [#1459](https://github.com/MemPalace/mempalace/pull/1459) (empty-metadata sentinel) and [#1474](https://github.com/MemPalace/mempalace/pull/1474) (convo_miner bulk pre-fetch).
 
 | PR | Status | Description |
 |---|---|---|
@@ -334,7 +334,7 @@ Ten open from this fork as of 2026-05-11. Run `gh pr list --repo MemPalace/mempa
 | [#1142](https://github.com/MemPalace/mempalace/pull/1142) | CI green, @bensig accepted 2026-04-23 | `docs/RELEASING.md` |
 | [#1378](https://github.com/MemPalace/mempalace/pull/1378) | CI green | Hoist `CLOSET_RANK_BOOSTS` to module level + record VecRecall ablation finding |
 | [#1382](https://github.com/MemPalace/mempalace/pull/1382) | CI green | Benchmarks UTF-8 encoding + ASCII print chrome on Windows |
-| [#1459](https://github.com/MemPalace/mempalace/pull/1459) | CI green | Coerce empty metadata to sentinel during repair rebuild |
+| [#1484](https://github.com/MemPalace/mempalace/pull/1484) | CI pending | OpenCode source adapter on RFC 002 contract — co-authored with @JakobSachs (originated from his #23 spadework) |
 
 ## What's next
 

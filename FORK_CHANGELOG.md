@@ -320,7 +320,7 @@ regressions in non-postgres paths.
   the first slice); cherry-picked onto fork main as `949cb20` so
   both fixes are live on `jphein/mempalace` immediately.
 
-  *Upstream:* [PR #1459](https://github.com/MemPalace/mempalace/pull/1459) (OPEN)
+  *Upstream:* [PR #1459](https://github.com/MemPalace/mempalace/pull/1459) (MERGED)
   *Files:* `mempalace/repair.py`
 
 
@@ -356,6 +356,34 @@ regressions in non-postgres paths.
   resolution pattern).
 
   *Files:* `.claude-plugin/hooks/hooks.json`
+
+
+### Performance
+
+
+- **Bulk pre-fetch already-mined set instead of N WHERE queries in mine_convos** ([`248854a`](https://github.com/jphein/mempalace/commit/248854a))
+  Replaces the N+1 `col.get(where={"source_file": <path>}, ...)`
+  per-conversation pattern in `mempalace/convo_miner.py:mine_convos`
+  with a single bulk pre-fetch — `col.get(where={"source_file":
+  {"$in": [<all paths>]}})` returns all already-mined paths in one
+  query, then the per-conversation check becomes a hash-set
+  membership test.
+
+  On a ~160K-drawer palace with thousands of Claude Code transcripts
+  under mine scope, the old shape spent the bulk of `mine` wall-time
+  in chromadb WHERE traversal even when 99% of the conversations
+  were already mined. The new shape collapses the upfront-check
+  cost from O(N) round-trips to O(1).
+
+  The `bulk_check_mined()` helper this PR exercises was Row 1 of
+  the original CLAUDE.md fork-ahead inventory — first noted as
+  fork-only on 2026-04-10, finally pushed upstream as the standalone
+  perf change once the helper had been battle-tested through ~6 weeks
+  of fork-side mining.
+
+  *Tests:* 28 convo_miner tests pass; full suite 1828/1828 (pre-merge baseline)
+  *Upstream:* [PR #1474](https://github.com/MemPalace/mempalace/pull/1474) (MERGED)
+  *Files:* `mempalace/convo_miner.py`
 
 
 ## [2026-05-07]
