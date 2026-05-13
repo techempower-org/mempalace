@@ -998,6 +998,24 @@ def cmd_migrate(args):
     )
 
 
+def cmd_migrate_to_postgres(args):
+    """Migrate a ChromaDB palace to Postgres (pgvector + AGE).
+
+    Different from `cmd_migrate` (which handles intra-ChromaDB version
+    upgrades). This one moves the entire substrate. See
+    `mempalace/migrate_to_postgres.py` for the 7-phase pipeline.
+    """
+    from .migrate_to_postgres import run_migration
+
+    chroma_path = os.path.expanduser(args.from_palace)
+    run_migration(
+        chroma_path=chroma_path,
+        postgres_dsn=args.to_dsn,
+        batch_size=args.batch_size,
+        dry_run=args.dry_run,
+    )
+
+
 def cmd_purge(args):
     """Delete drawers by wing and/or room.
 
@@ -1994,6 +2012,27 @@ def main():
         "--yes", action="store_true", help="Skip confirmation for destructive changes"
     )
 
+    p_mig_pg = sub.add_parser(
+        "migrate-to-postgres",
+        help="Migrate a ChromaDB palace to Postgres (pgvector + AGE)",
+    )
+    p_mig_pg.add_argument(
+        "--from", dest="from_palace", required=True,
+        help="Path to source ChromaDB palace directory",
+    )
+    p_mig_pg.add_argument(
+        "--to", dest="to_dsn", required=True,
+        help="Postgres DSN of target (e.g. postgresql://user:pass@host/db)",
+    )
+    p_mig_pg.add_argument(
+        "--batch-size", type=int, default=1000,
+        help="Drawer batch size for phase 2 (default 1000)",
+    )
+    p_mig_pg.add_argument(
+        "--dry-run", action="store_true",
+        help="Run preflight only; no writes to the target",
+    )
+
     p_purge = sub.add_parser(
         "purge",
         help="Delete drawers by wing, room, and/or source-file (filtered delete via chromadb)",
@@ -2070,6 +2109,7 @@ def main():
         "repair": cmd_repair,
         "repair-status": cmd_repair_status,
         "migrate": cmd_migrate,
+        "migrate-to-postgres": cmd_migrate_to_postgres,
         "purge": cmd_purge,
         "status": cmd_status,
         "mined": cmd_mined,

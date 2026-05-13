@@ -1210,14 +1210,14 @@ git commit -am "feat(config,mcp_server): MEMPALACE_KG_BACKEND=age routes to Know
 
 `mempalace migrate-to-postgres --from <chroma_path> --to <postgres_dsn>` — restartable, idempotent, checkpointed.
 
-### Task 3.1: Skeleton CLI subcommand + preflight
+### Task 3.1: Skeleton CLI subcommand + preflight ✅ Done 2026-05-13
 
 **Files:**
 - Create: `mempalace/migrate_to_postgres.py`
 - Modify: `mempalace/cli.py` (register subcommand)
 - Create: `tests/test_migrate_to_postgres.py`
 
-- [ ] **Step 1: Write failing test for the CLI entrypoint**
+- [x] **Step 1: Write failing test for the CLI entrypoint**
 
 ```python
 # tests/test_migrate_to_postgres.py
@@ -1241,9 +1241,9 @@ def test_migrate_subcommand_help():
     assert "--to" in res.stdout
 ```
 
-- [ ] **Step 2: Run, expect failure**
+- [x] **Step 2: Run, expect failure**
 
-- [ ] **Step 3: Add the subcommand to cli.py**
+- [x] **Step 3: Add the subcommand to cli.py**
 
 Append a new `cmd_migrate_to_postgres` function and register it in the argparse setup:
 
@@ -1273,7 +1273,7 @@ p_mig.add_argument("--dry-run", action="store_true",
 p_mig.set_defaults(func=cmd_migrate_to_postgres)
 ```
 
-- [ ] **Step 4: Add migration module skeleton**
+- [x] **Step 4: Add migration module skeleton**
 
 ```python
 # mempalace/migrate_to_postgres.py
@@ -1333,7 +1333,7 @@ def phase_0_preflight(chroma_path: str, postgres_dsn: str, dry_run: bool):
     print("[phase 0] preflight passed")
 ```
 
-- [ ] **Step 5: Run the CLI help test**
+- [x] **Step 5: Run the CLI help test**
 
 ```bash
 TEST_POSTGRES_DSN="..." python -m pytest tests/test_migrate_to_postgres.py::test_migrate_subcommand_help -v
@@ -1341,7 +1341,7 @@ TEST_POSTGRES_DSN="..." python -m pytest tests/test_migrate_to_postgres.py::test
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add mempalace/migrate_to_postgres.py mempalace/cli.py tests/test_migrate_to_postgres.py
