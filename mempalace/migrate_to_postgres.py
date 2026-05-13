@@ -217,6 +217,16 @@ def phase_2_drawers(
     import chromadb
     import psycopg2
     from .backends.postgres import PostgresBackend
+    from .backends.chroma import ChromaBackend
+
+    # ChromaDB 1.5.x SIGSEGVs when opening palaces with stale HNSW segments
+    # or invalid index_metadata files (see issues #1121, #1132, #1263,
+    # #1266; recovery work in chroma-core/chroma#6949). mempalace.backends
+    # .chroma._prepare_palace_for_open runs three preflight steps that
+    # quarantine the bad state before chromadb's open. Without it,
+    # chromadb.PersistentClient(path=...) on a long-lived palace will crash.
+    # Idempotent; the daemon calls this before every open too.
+    ChromaBackend._prepare_palace_for_open(chroma_path)
 
     client = chromadb.PersistentClient(path=chroma_path)
     backend = PostgresBackend(dsn=postgres_dsn)
