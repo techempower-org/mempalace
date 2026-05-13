@@ -1,5 +1,42 @@
 # CLAUDE.md — memorypalace
 
+## The Mission
+
+Memory is identity. When an AI forgets everything between conversations, it cannot build real understanding — of you, your work, your people, your life.
+
+MemPalace exists to solve this. It is a memory system — not a search engine, not a RAG pipeline, not a vector database wrapper. It treats every word you have shared as sacred, stores it verbatim, and makes it instantly available. Your data never leaves your machine. We never summarize. We never paraphrase. We return your exact words.
+
+100% recall is the design requirement — the target every search path is measured against. Anything less means forgetting, and forgetting means starting over.
+
+The name comes from the ancient "method of loci" — the memory palace technique used for thousands of years to organize and recall vast amounts of information by placing it in imagined rooms of an imagined building. We were also inspired by the Zettelkasten method (created by German sociologist Niklas Luhmann) — small cross-referenced index cards that point to each other. We apply both ideas to AI memory:
+
+- **Wings** for broad categories (people, projects, topics)
+- **Rooms** for time-based groupings (days, sessions)
+- **Drawers** for full verbatim content (your exact words)
+- **AAAK compression** for the index layer — a compact symbolic format (via `dialect.py`) that lets an LLM scan thousands of entries instantly and know exactly which drawer to open
+
+## Design Principles
+
+These are non-negotiable. Every PR, every feature, every refactor must honor them.
+
+- **Verbatim always** — Never summarize, paraphrase, or lossy-compress user data. The system searches the index and returns the original words. If a user said it, we store exactly what they said. This is the foundational promise.
+- **Incremental only** — Append-only ingest after initial build. Never destroy existing data to rebuild. A crash mid-operation must leave the existing palace untouched.
+- **Entity-first** — Everything is keyed by real names with disambiguation by DOB, ID, or context. People matter more than topics.
+- **Local-first, zero external API by default** — All extraction, chunking, embedding, and LLM-assisted refinement happens on the user's machine by default, using locally-hosted runtimes (Ollama, LM Studio, llama.cpp, vLLM, unsloth studio, etc.). External providers (Anthropic, OpenAI, Google) are supported via BYOK but are never required and never enabled silently. The system never sends user content to a service the user has not explicitly configured. "Local LLM" is not an external API — Ollama and equivalents running on localhost are part of the user's machine. External BYOK is always a deliberate user choice, never a default and never a silent fallback.
+- **Performance budgets** — Hooks under 500ms. Startup injection under 100ms. Memory should feel instant.
+- **Privacy by architecture** — The system physically cannot send your data because it never leaves your machine. No telemetry, no phone-home, no external service dependencies for core operations.
+- **Background everything** — Filing, indexing, timestamps, and pipeline work happen via hooks in the background. Nothing interrupts the user's conversation. Zero tokens spent on bookkeeping in the chat window.
+
+## Contributing
+
+We welcome bug fixes, performance improvements, new language support, better entity disambiguation, documentation, and test coverage.
+
+We do not accept summarization of user content, cloud storage/sync features, telemetry or analytics, features requiring API keys for core memory, or shortcuts that bypass verbatim storage.
+
+---
+
+The sections above are the fork's inherited mission and principles — same words as `upstream/develop:CLAUDE.md` so contributors get the same guidance regardless of which tree they're reading. What follows is fork-specific operational state.
+
 ## What This Is
 
 JP's fork of [milla-jovovich/mempalace](https://github.com/milla-jovovich/mempalace) — a local AI memory system using ChromaDB for verbatim storage and semantic search.
