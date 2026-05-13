@@ -27,7 +27,7 @@ The plan was written 2026-05-10. PR [#21 (`feat/pgvector-age-impl`)](https://git
 | 1 | 1.5 Postgres CI workflow | ✅ Done | `.github/workflows/ci.yml:73` (`test-postgres` job, pgvector/pgvector:pg16) |
 | 2 | 2.1 AGE schema + skeleton | ✅ Done | `mempalace/knowledge_graph_age.py`, `tests/test_knowledge_graph_age.py` |
 | 2 | 2.2 `add_triple()` Cypher | ✅ Done | now in `knowledge_graph_age.py` (clear + add_triple + query_triples). Skeleton file's docstring: "add/query operations and temporal filtering arrive in subsequent..." |
-| 2 | 2.3 Temporal filtering | ❌ Not done | as above |
+| 2 | 2.3 Temporal filtering | ✅ Done | as_of param on query_triples |
 | 2 | 2.4 `kg_backend` config + routing | ❌ Not done | no `kg_backend` property in `config.py` |
 | 3 | 3.1–3.6 Migration tool (chromadb → pg) | ❌ Not done | `cmd_migrate` exists but it's for ChromaDB version migrations, not substrate migration |
 | 4 | 4.1 Dry-run on canonical palace | ❌ Not done | — |
@@ -1079,13 +1079,13 @@ git add mempalace/knowledge_graph_age.py tests/test_knowledge_graph_age.py
 git commit -m "feat(kg/age): add_triple + query_triples with temporal validation"
 ```
 
-### Task 2.3: Implement temporal filtering (`as_of` queries)
+### Task 2.3: Implement temporal filtering (`as_of` queries) ✅ Done 2026-05-13
 
 **Files:**
 - Modify: `mempalace/knowledge_graph_age.py`
 - Modify: `tests/test_knowledge_graph_age.py`
 
-- [ ] **Step 1: Write failing test**
+- [x] **Step 1: Write failing test**
 
 ```python
 def test_age_as_of_filter():
@@ -1107,9 +1107,9 @@ def test_age_as_of_filter():
     kg.close()
 ```
 
-- [ ] **Step 2: Run, expect failure (parameter unknown, returns both)**
+- [x] **Step 2: Run, expect failure (parameter unknown, returns both)**
 
-- [ ] **Step 3: Extend `query_triples` to accept `as_of`**
+- [x] **Step 3: Extend `query_triples` to accept `as_of`**
 
 ```python
 def query_triples(self, subject: Optional[str] = None, as_of: Optional[str] = None, **filters):
@@ -1127,9 +1127,9 @@ def query_triples(self, subject: Optional[str] = None, as_of: Optional[str] = No
     # ... rest unchanged
 ```
 
-- [ ] **Step 4: Run, expect pass**
+- [x] **Step 4: Run, expect pass**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -am "feat(kg/age): as_of temporal filter for query_triples"

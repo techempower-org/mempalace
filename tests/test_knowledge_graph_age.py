@@ -135,3 +135,59 @@ def test_age_clear_drops_and_recreates_graph():
         assert kg.query_triples(subject="A") == []
     finally:
         kg.close()
+
+
+def test_age_as_of_filter():
+    """as_of filter returns only triples whose interval contains the date."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        # Closed interval, ended last year
+        kg.add_triple(
+            "JP", "works_on", "old_project",
+            valid_from="2024-01-01", valid_to="2025-12-31",
+        )
+        # Open-ended interval, still active
+        kg.add_triple(
+            "JP", "works_on", "mempalace",
+            valid_from="2026-04-21", valid_to=None,
+        )
+
+        # As of 2026-05-01, only mempalace is active
+        active = kg.query_triples(subject="JP", as_of="2026-05-01")
+        assert len(active) == 1
+        assert active[0]["object"] == "mempalace"
+
+        # As of 2025-06-01, only old_project was active
+        old = kg.query_triples(subject="JP", as_of="2025-06-01")
+        assert len(old) == 1
+        assert old[0]["object"] == "old_project"
+
+        # As of 2023-01-01, neither was active yet — empty
+        before = kg.query_triples(subject="JP", as_of="2023-01-01")
+        assert before == []
+
+        # Without as_of, both come back
+        all_triples = kg.query_triples(subject="JP")
+        assert len(all_triples) == 2
+    finally:
+        kg.close()
+
+
+def test_age_as_of_with_no_valid_from():
+    """A triple with valid_from=None is active forever in the past."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        # No temporal bounds at all — always active
+        kg.add_triple("X", "is", "Y")
+        for date in ("1900-01-01", "2026-05-13", "2099-12-31"):
+            assert len(kg.query_triples(subject="X", as_of=date)) == 1, (
+                f"unbounded triple should be active as of {date}"
+            )
+    finally:
+        kg.close()

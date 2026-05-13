@@ -165,8 +165,18 @@ class KnowledgeGraphAGE:
         }
         self._run_cypher(cypher, params)
 
-    def query_triples(self, subject: Optional[str] = None, **_filters) -> list:
-        """Return triples matching ``subject`` (other filters reserved for 2.3).
+    def query_triples(
+        self,
+        subject: Optional[str] = None,
+        as_of: Optional[str] = None,
+        **_filters,
+    ) -> list:
+        """Return triples matching ``subject`` and active ``as_of`` a date.
+
+        ``as_of`` filters to triples whose temporal interval contains the
+        given date: ``valid_from <= as_of <= valid_to``, with NULL on
+        either end interpreted as open (NULL valid_from = active since
+        forever; NULL valid_to = still active).
 
         Empty list when no match. Each triple is a dict with keys:
         ``subject, relation_type, object, source, valid_from, valid_to,
@@ -177,6 +187,11 @@ class KnowledgeGraphAGE:
         if subject is not None:
             where_parts.append("s.name = $subject")
             params["subject"] = sanitize_kg_value(subject, "subject")
+        if as_of is not None:
+            as_of = sanitize_iso_temporal(as_of, "as_of")
+            where_parts.append("(r.valid_from IS NULL OR r.valid_from <= $as_of)")
+            where_parts.append("(r.valid_to IS NULL OR r.valid_to >= $as_of)")
+            params["as_of"] = as_of
         where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
         cypher = f"""
             MATCH (s:Entity)-[r:RELATION]->(o:Entity)
