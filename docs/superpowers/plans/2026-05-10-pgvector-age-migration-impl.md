@@ -1348,11 +1348,11 @@ git add mempalace/migrate_to_postgres.py mempalace/cli.py tests/test_migrate_to_
 git commit -m "feat(migrate): scaffold migrate-to-postgres CLI + phase 0 preflight"
 ```
 
-### Task 3.2: Phase 1 — schema creation
+### Task 3.2: Phase 1 — schema creation ✅ Done 2026-05-13
 
 **Files:** Modify: `mempalace/migrate_to_postgres.py`, `tests/test_migrate_to_postgres.py`
 
-- [ ] **Step 1: Write failing test for schema creation**
+- [x] **Step 1: Write failing test for schema creation**
 
 ```python
 def test_phase_1_schema_creates_tables_and_extensions(tmp_path):
@@ -1375,9 +1375,9 @@ def test_phase_1_schema_creates_tables_and_extensions(tmp_path):
         assert "backend_meta" in tables
 ```
 
-- [ ] **Step 2: Run, expect ImportError on `phase_1_schema`**
+- [x] **Step 2: Run, expect ImportError on `phase_1_schema`**
 
-- [ ] **Step 3: Implement `phase_1_schema`**
+- [x] **Step 3: Implement `phase_1_schema`**
 
 ```python
 def phase_1_schema(postgres_dsn: str):
@@ -1429,9 +1429,9 @@ def run_migration(chroma_path, postgres_dsn, batch_size=1000, dry_run=False):
     raise NotImplementedError("phases 2-7 land next")
 ```
 
-- [ ] **Step 4: Run, expect pass**
+- [x] **Step 4: Run, expect pass**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -am "feat(migrate): phase 1 schema (extensions + tables + checkpoint helpers)"

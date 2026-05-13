@@ -44,8 +44,9 @@ def run_migration(
     if dry_run:
         print("[dry-run] preflight only; exiting before any writes")
         return
+    phase_1_schema(postgres_dsn)
     raise NotImplementedError(
-        "phases 1–6 land in subsequent tasks of the pgvector-age migration plan"
+        "phases 2–6 land in subsequent tasks of the pgvector-age migration plan"
     )
 
 
@@ -125,6 +126,48 @@ def _check_postgres_extensions(postgres_dsn: str) -> None:
             )
 
 
+# ── Phase 1 — Schema (extensions + checkpoint table) ─────────────────
+
+
+CHECKPOINT_TABLE = "mempalace_backend_meta"
+
+
+def phase_1_schema(postgres_dsn: str) -> None:
+    """Install pgvector + AGE extensions and create the checkpoint table.
+
+    Idempotent: ``CREATE EXTENSION IF NOT EXISTS`` and
+    ``CREATE TABLE IF NOT EXISTS`` mean a re-run is a no-op. The drawer
+    and closet tables themselves are NOT created here — ``PostgresBackend``
+    bootstraps those lazily during phase 2 when the first write lands.
+    Keeping schema-creation responsibilities split (extensions+meta here,
+    data tables in the backend) avoids two sources of truth for the
+    drawer schema.
+
+    Records ``migration_phase_schema=done`` in the checkpoint table so a
+    re-run of the whole migration can skip this phase next time.
+    """
+    import psycopg2
+
+    with psycopg2.connect(postgres_dsn) as conn:
+        # autocommit needed for CREATE EXTENSION on some Postgres builds
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+            cur.execute("CREATE EXTENSION IF NOT EXISTS age")
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {CHECKPOINT_TABLE} (
+                    key text PRIMARY KEY,
+                    value text NOT NULL,
+                    updated_at timestamptz NOT NULL DEFAULT now()
+                )
+                """
+            )
+        conn.autocommit = False
+        _set_checkpoint(conn, "migration_phase_schema", "done")
+    print("[phase 1] schema created")
+
+
 # ── Helpers ───────────────────────────────────────────────────────────
 
 
@@ -162,15 +205,16 @@ def _redact_dsn(dsn: str) -> str:
 
 
 def _set_checkpoint(conn, key: str, value: str) -> None:
-    """Idempotent upsert into mempalace.backend_meta(key, value).
+    """Idempotent upsert into the checkpoint table.
 
     Used by phases 1–6 to record completion so a re-run can skip work.
     Caller controls the transaction.
     """
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO mempalace.backend_meta (key, value) VALUES (%s, %s) "
-            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            f"INSERT INTO {CHECKPOINT_TABLE} (key, value) VALUES (%s, %s) "
+            f"ON CONFLICT (key) DO UPDATE SET "
+            f"  value = EXCLUDED.value, updated_at = now()",
             (key, value),
         )
     conn.commit()
@@ -180,7 +224,7 @@ def _get_checkpoint(conn, key: str) -> Optional[str]:
     """Read a checkpoint value; None if absent."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT value FROM mempalace.backend_meta WHERE key = %s",
+            f"SELECT value FROM {CHECKPOINT_TABLE} WHERE key = %s",
             (key,),
         )
         row = cur.fetchone()

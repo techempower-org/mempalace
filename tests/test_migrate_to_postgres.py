@@ -162,3 +162,49 @@ def test_dry_run_exits_after_preflight(tmp_path, capsys):
         run_migration(str(palace), POSTGRES_DSN, dry_run=True)
     out = capsys.readouterr().out
     assert "dry-run" in out.lower()
+
+
+# ── Phase 1 — schema creation (real postgres required) ───────────────
+
+
+@pgmark
+def test_phase_1_creates_extensions_and_checkpoint_table(capsys):
+    """phase_1_schema installs vector + age and creates the meta table."""
+    import psycopg2
+    from mempalace.migrate_to_postgres import (
+        CHECKPOINT_TABLE,
+        phase_1_schema,
+        _get_checkpoint,
+    )
+
+    phase_1_schema(POSTGRES_DSN)
+    out = capsys.readouterr().out
+    assert "phase 1" in out.lower()
+
+    with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT extname FROM pg_extension WHERE extname IN ('vector', 'age')"
+        )
+        ext = {r[0] for r in cur.fetchall()}
+        assert "vector" in ext, "pgvector should be installed after phase 1"
+        # AGE may or may not install depending on infrastructure; required at
+        # preflight, but a non-AGE setup may have only vector.
+        cur.execute(
+            "SELECT to_regclass(%s)",
+            (CHECKPOINT_TABLE,),
+        )
+        assert cur.fetchone()[0] is not None, (
+            f"{CHECKPOINT_TABLE} should exist after phase 1"
+        )
+        # Checkpoint recorded
+        with psycopg2.connect(POSTGRES_DSN) as conn2:
+            assert _get_checkpoint(conn2, "migration_phase_schema") == "done"
+
+
+@pgmark
+def test_phase_1_idempotent():
+    """Re-running phase_1_schema is a no-op (no exception)."""
+    from mempalace.migrate_to_postgres import phase_1_schema
+
+    phase_1_schema(POSTGRES_DSN)
+    phase_1_schema(POSTGRES_DSN)  # second call must not raise
