@@ -35,8 +35,8 @@ The plan was written 2026-05-10. PR [#21 (`feat/pgvector-age-impl`)](https://git
 | 3 | 3.4.a closets | ✅ Covered by 3.3 | same iterator handles all chromadb collections |
 | 3 | 3.4.b indexes | ✅ Covered by backend | `_ensure_schema` creates HNSW + BTrees on first write |
 | 3 | 3.4.c Phase 5 KG (sqlite → AGE) | ✅ Done | phase_5_kg uses KnowledgeGraphAGE.add_triple; watermark resume; bad-row skip+log |
-| 3 | 3.5 Phase 6 verify | ❌ Not done | needs 3.4.c first |
-| 3 | 3.6 Phase 7 cutover instructions | ❌ Not done | small wrap-up |
+| 3 | 3.5 Phase 6 verify | ✅ Done | drawer count + sample round-trip + lenient triple parity |
+| 3 | 3.6 Phase 7 cutover instructions | ✅ Done | phase_7_done prints systemctl steps; checkpoints cleaned |
 | 4 | 4.1 Dry-run on canonical palace | ❌ Not done | end-to-end smoke |
 | 4 | 4.2 Production cutover | ❌ Operator-driven | JP's call, not for the implementation team |
 
@@ -1588,11 +1588,11 @@ Same pattern as Task 3.3 — TDD per phase, one phase per task. Each writes a ch
 - [x] **3.4.b Phase 4 indexes** ✅ Covered by `PostgresBackend._ensure_schema`. HNSW (or sorted_hnsw) + BTrees on wing/room are created during `get_or_create_collection`, which happens during Phase 2. The plan's `CREATE INDEX CONCURRENTLY` is for production cutover scenarios with live traffic — not needed for a stop-the-world migration. If we want CONCURRENT indexes for live migration later, that's a separate enhancement.
 - [x] **3.4.c Phase 5 KG** — read sqlite triples; for each, call `KnowledgeGraphAGE.add_triple()` (Phase 2.2 surface); checkpoint via triple-watermark count for resume. **Per the plan's own instruction, stop here for explicit review before implementing.** The AGE Cypher-from-Python surface is the trickiest piece; warrants a focused session rather than a continuation of the bulk-implementation cadence.
 
-### Task 3.5: Phase 6 — verify
+### Task 3.5: Phase 6 — verify ✅ Done 2026-05-13
 
 **Files:** Modify: `mempalace/migrate_to_postgres.py`, `tests/test_migrate_to_postgres.py`
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```python
 def test_phase_6_verify_count_parity(fixture_chroma_palace):
@@ -1621,7 +1621,7 @@ def test_phase_6_verify_detects_mismatch(fixture_chroma_palace):
     assert result["drawers_match"] is False
 ```
 
-- [ ] **Step 2: Implement `phase_6_verify`**
+- [x] **Step 2: Implement `phase_6_verify`**
 
 ```python
 def phase_6_verify(chroma_path: str, postgres_dsn: str) -> dict:
@@ -1652,19 +1652,19 @@ def phase_6_verify(chroma_path: str, postgres_dsn: str) -> dict:
     return results
 ```
 
-- [ ] **Step 3: Run, expect pass**
+- [x] **Step 3: Run, expect pass**
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git commit -am "feat(migrate): phase 6 verify with parity checks + sample round-trip"
 ```
 
-### Task 3.6: Phase 7 — done; print cutover instructions
+### Task 3.6: Phase 7 — done; print cutover instructions ✅ Done 2026-05-13
 
 **Files:** Modify: `mempalace/migrate_to_postgres.py`
 
-- [ ] **Step 1: Implement `phase_7_done`**
+- [x] **Step 1: Implement `phase_7_done`**
 
 ```python
 def phase_7_done(chroma_path: str, postgres_dsn: str):
@@ -1697,7 +1697,7 @@ def phase_7_done(chroma_path: str, postgres_dsn: str):
     print(f"  6. mv {chroma_path} {chroma_path}.chromadb-backup-$(date +%Y-%m-%d)")
 ```
 
-- [ ] **Step 2: Wire end-to-end in `run_migration`**
+- [x] **Step 2: Wire end-to-end in `run_migration`**
 
 ```python
 def run_migration(chroma_path, postgres_dsn, batch_size=1000, dry_run=False):
@@ -1716,7 +1716,7 @@ def run_migration(chroma_path, postgres_dsn, batch_size=1000, dry_run=False):
     phase_7_done(chroma_path, postgres_dsn)
 ```
 
-- [ ] **Step 3: End-to-end test on fixture palace**
+- [x] **Step 3: End-to-end test on fixture palace**
 
 ```python
 def test_full_migration_end_to_end(fixture_chroma_palace):
@@ -1731,9 +1731,9 @@ def test_full_migration_end_to_end(fixture_chroma_palace):
         assert cur.fetchone() is not None
 ```
 
-- [ ] **Step 4: Run, expect pass**
+- [x] **Step 4: Run, expect pass**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -am "feat(migrate): phase 7 done + end-to-end run_migration wiring"

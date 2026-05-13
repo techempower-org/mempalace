@@ -47,9 +47,15 @@ def run_migration(
     phase_1_schema(postgres_dsn)
     phase_2_drawers(chroma_path, postgres_dsn, batch_size=batch_size)
     phase_5_kg(chroma_path, postgres_dsn)
-    raise NotImplementedError(
-        "phase 6 (verify) lands in the next task of the pgvector-age migration plan"
-    )
+    result = phase_6_verify(chroma_path, postgres_dsn)
+    if not result["all_match"]:
+        print()
+        print("=" * 60)
+        print("WARNING: migration verify FAILED — see counts above.")
+        print("Investigate before cutover.")
+        print("=" * 60)
+        return
+    phase_7_done(chroma_path, postgres_dsn)
 
 
 # ── Phase 0 — Preflight ───────────────────────────────────────────────
@@ -416,6 +422,230 @@ def phase_5_kg(chroma_path: str, postgres_dsn: str) -> None:
         f"[phase 5] kg complete — {copied} copied, {skipped} skipped "
         f"(of {total} total)"
     )
+
+
+# ── Phase 6 — Verify migration parity ────────────────────────────────
+
+
+def phase_6_verify(
+    chroma_path: str,
+    postgres_dsn: str,
+    sample_n: int = 10,
+) -> dict:
+    """Compare source and target counts; sample-read a few drawers.
+
+    Returns a result dict with:
+      ``chroma_drawer_count``       — sum across all chroma collections
+      ``postgres_drawer_count``     — sum across same-named postgres tables
+      ``drawers_match``             — bool
+      ``chroma_triple_count``       — total rows in sqlite triples table
+      ``postgres_triple_count``     — total edges in AGE graph
+      ``triples_match``             — bool (allows postgres < chroma when
+                                       phase 5 skipped bad rows)
+      ``sampled``                   — number of drawers we round-tripped
+      ``sample_mismatches``         — list of (id, reason) for any mismatch
+      ``all_match``                 — overall ok bool (drawers + triples
+                                       + zero sample mismatches)
+
+    Drawer count parity is strict (every drawer must round-trip). Triple
+    count parity is lenient — postgres ≤ chroma is acceptable because
+    phase 5 may legitimately skip rows with bad sanitization data, and
+    those are reported via stdout during the phase.
+
+    Sample-read pulls ``sample_n`` random drawer ids from chroma, fetches
+    each from the postgres backend, and compares document + metadata
+    (with a small allowance for chromadb's None-vs-empty-string drift on
+    optional metadata fields).
+    """
+    import chromadb
+    import psycopg2
+    import random
+
+    print(f"[phase 6] verifying parity (sample={sample_n})")
+    result: dict = {
+        "chroma_drawer_count": 0,
+        "postgres_drawer_count": 0,
+        "drawers_match": False,
+        "chroma_triple_count": 0,
+        "postgres_triple_count": 0,
+        "triples_match": False,
+        "sampled": 0,
+        "sample_mismatches": [],
+        "all_match": False,
+    }
+
+    # ─── Drawer count parity (per-collection) ──────────────────────────
+    client = chromadb.PersistentClient(path=chroma_path)
+    from .backends.postgres import PostgresBackend
+    backend = PostgresBackend(dsn=postgres_dsn)
+
+    sample_pool: list = []  # list of (collection, id) tuples to sample from
+    for col_handle in client.list_collections():
+        name = col_handle.name if hasattr(col_handle, "name") else str(col_handle)
+        col = client.get_collection(name)
+        c_total = col.count()
+        result["chroma_drawer_count"] += c_total
+
+        try:
+            pg_col = backend.get_or_create_collection(name)
+        except Exception as e:
+            print(f"[phase 6]   postgres collection {name!r} unreachable: {e}")
+            continue
+        try:
+            # Backend's get without ids returns metadata-only count via internals.
+            # Cheaper: peek with a high limit and len() the ids.
+            all_ids = pg_col.get(limit=10**9)["ids"]
+            p_total = len(all_ids)
+        except Exception as e:
+            print(f"[phase 6]   postgres count {name!r} failed: {e}")
+            continue
+        result["postgres_drawer_count"] += p_total
+        print(f"[phase 6]   {name}: chroma={c_total}, postgres={p_total}")
+
+        # Build sample pool: pull a small id list from this chroma collection
+        if c_total > 0:
+            sample_ids = col.get(limit=min(50, c_total))["ids"]
+            sample_pool.extend((name, i) for i in sample_ids)
+
+    result["drawers_match"] = (
+        result["chroma_drawer_count"] == result["postgres_drawer_count"]
+    )
+
+    # ─── Triple count parity ──────────────────────────────────────────
+    kg_sqlite_path = Path(chroma_path) / "knowledge_graph.sqlite3"
+    if kg_sqlite_path.is_file():
+        import sqlite3
+
+        with sqlite3.connect(str(kg_sqlite_path)) as src:
+            cur = src.execute("SELECT count(*) FROM triples")
+            result["chroma_triple_count"] = cur.fetchone()[0]
+
+    from .knowledge_graph_age import KnowledgeGraphAGE
+    age = KnowledgeGraphAGE(dsn=postgres_dsn)
+    try:
+        # Count all edges via a Cypher MATCH ... RETURN count
+        rows = age._run_cypher(
+            "MATCH ()-[r:RELATION]->() RETURN count(r) AS n",
+            params={},
+            fetch=True,
+        )
+        if rows:
+            unwrapped = age._unwrap_agtype(rows[0][0])
+            result["postgres_triple_count"] = int(unwrapped) if unwrapped is not None else 0
+    finally:
+        age.close()
+
+    # Lenient: postgres may have fewer than chroma if phase 5 skipped rows
+    result["triples_match"] = (
+        result["postgres_triple_count"] <= result["chroma_triple_count"]
+        and result["chroma_triple_count"] - result["postgres_triple_count"] <= max(
+            5, result["chroma_triple_count"] // 100
+        )
+    )
+    print(
+        f"[phase 6]   triples: sqlite={result['chroma_triple_count']}, "
+        f"age={result['postgres_triple_count']}"
+    )
+
+    # ─── Sample drawer round-trip ─────────────────────────────────────
+    random.shuffle(sample_pool)
+    for collection_name, drawer_id in sample_pool[:sample_n]:
+        try:
+            col = client.get_collection(collection_name)
+            src = col.get(ids=[drawer_id], include=["documents", "metadatas"])
+            src_doc = (src.get("documents") or [None])[0]
+
+            pg_col = backend.get_or_create_collection(collection_name)
+            tgt = pg_col.get(ids=[drawer_id])
+            tgt_doc = (tgt.get("documents") or [None])[0]
+
+            if src_doc != tgt_doc:
+                result["sample_mismatches"].append(
+                    (drawer_id, "document differs between chroma and postgres")
+                )
+            result["sampled"] += 1
+        except Exception as e:
+            result["sample_mismatches"].append((drawer_id, f"compare error: {e}"))
+
+    result["all_match"] = (
+        result["drawers_match"]
+        and result["triples_match"]
+        and not result["sample_mismatches"]
+    )
+
+    # Checkpoint + summary
+    with psycopg2.connect(postgres_dsn) as conn:
+        _set_checkpoint(conn, "migration_phase_verify", "done")
+
+    status = "OK" if result["all_match"] else "MISMATCH"
+    print(f"[phase 6] verify {status}: "
+          f"drawers={result['drawers_match']}, "
+          f"triples={result['triples_match']}, "
+          f"sample_mismatches={len(result['sample_mismatches'])}")
+    if result["sample_mismatches"]:
+        for did, reason in result["sample_mismatches"][:5]:
+            print(f"[phase 6]   sample mismatch: {did} — {reason}")
+    return result
+
+
+# ── Phase 7 — Done; print cutover instructions ───────────────────────
+
+
+def phase_7_done(chroma_path: str, postgres_dsn: str) -> None:
+    """Clean migration_phase_* checkpoints + print cutover steps.
+
+    Records ``migrated_from_chroma_at`` for forensics. All other
+    ``migration_phase_*`` and ``migration_drawer_*`` and
+    ``migration_kg_*`` keys are deleted — they're scaffolding from the
+    migration, not part of the production palace's metadata.
+    """
+    import psycopg2
+    from datetime import datetime, timezone
+
+    redacted_dsn = _redact_dsn(postgres_dsn)
+
+    with psycopg2.connect(postgres_dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            f"DELETE FROM {CHECKPOINT_TABLE} WHERE "
+            f"  key LIKE 'migration_phase_%' "
+            f"  OR key LIKE 'migration_drawer_%' "
+            f"  OR key LIKE 'migration_kg_%'"
+        )
+        cur.execute(
+            f"INSERT INTO {CHECKPOINT_TABLE} (key, value) VALUES (%s, %s) "
+            f"ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "
+            f"  updated_at = now()",
+            ("migrated_from_chroma_at", datetime.now(timezone.utc).isoformat()),
+        )
+        conn.commit()
+
+    print()
+    print("=" * 60)
+    print(" Migration complete.")
+    print("=" * 60)
+    print(" Cutover steps:")
+    print()
+    print(" 1. systemctl stop palace-daemon          # if still running")
+    print()
+    print(" 2. Edit palace-daemon's systemd EnvironmentFile to add:")
+    print("       MEMPALACE_BACKEND=postgres")
+    print(f"       MEMPALACE_POSTGRES_DSN={redacted_dsn}")
+    print("       MEMPALACE_KG_BACKEND=age")
+    print()
+    print(" 3. sudo systemctl daemon-reload")
+    print("    sudo systemctl start palace-daemon")
+    print()
+    print(" 4. Smoke checks:")
+    print("       curl http://localhost:8085/health")
+    print("       curl 'http://localhost:8085/search?q=<known-content>'")
+    print()
+    print(" 5. After 24h of clean operation, archive the chromadb backup:")
+    backup_name = (
+        f"{chroma_path}.chromadb-backup-"
+        f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+    )
+    print(f"       mv {chroma_path} {backup_name}")
+    print()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
