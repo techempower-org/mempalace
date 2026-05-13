@@ -1437,11 +1437,11 @@ def run_migration(chroma_path, postgres_dsn, batch_size=1000, dry_run=False):
 git commit -am "feat(migrate): phase 1 schema (extensions + tables + checkpoint helpers)"
 ```
 
-### Task 3.3: Phase 2 — drawer batch copy
+### Task 3.3: Phase 2 — drawer batch copy ✅ Done 2026-05-13
 
 **Files:** Modify: `mempalace/migrate_to_postgres.py`, `tests/test_migrate_to_postgres.py`
 
-- [ ] **Step 1: Write failing test using a fixture ChromaDB palace**
+- [x] **Step 1: Write failing test using a fixture ChromaDB palace**
 
 ```python
 @pytest.fixture
@@ -1491,9 +1491,9 @@ def test_phase_2_drawers_idempotent(fixture_chroma_palace):
         assert cur.fetchone()[0] == 10
 ```
 
-- [ ] **Step 2: Run, expect ImportError on `phase_2_drawers`**
+- [x] **Step 2: Run, expect ImportError on `phase_2_drawers`**
 
-- [ ] **Step 3: Implement `phase_2_drawers`**
+- [x] **Step 3: Implement `phase_2_drawers`**
 
 ```python
 def phase_2_drawers(chroma_path: str, postgres_dsn: str, batch_size: int = 1000):
@@ -1554,9 +1554,9 @@ def phase_2_drawers(chroma_path: str, postgres_dsn: str, batch_size: int = 1000)
     print("[phase 2] drawers complete")
 ```
 
-- [ ] **Step 4: Run, expect pass**
+- [x] **Step 4: Run, expect pass**
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git commit -am "feat(migrate): phase 2 batched drawer copy (idempotent via ON CONFLICT)"

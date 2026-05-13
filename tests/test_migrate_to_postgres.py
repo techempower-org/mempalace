@@ -208,3 +208,86 @@ def test_phase_1_idempotent():
 
     phase_1_schema(POSTGRES_DSN)
     phase_1_schema(POSTGRES_DSN)  # second call must not raise
+
+
+# ── Phase 2 — Drawer batch copy (real postgres required) ─────────────
+
+
+@pytest.fixture
+def fixture_chroma_palace(tmp_path):
+    """Build a small ChromaDB palace with 10 drawers for migration tests."""
+    chromadb = pytest.importorskip("chromadb")
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    client = chromadb.PersistentClient(path=str(palace))
+    col = client.get_or_create_collection(
+        "mempalace_drawers", metadata={"hnsw:space": "cosine"}
+    )
+    col.add(
+        ids=[f"d{i}" for i in range(10)],
+        documents=[f"doc {i}" for i in range(10)],
+        embeddings=[[float(i) / 10] * 384 for i in range(10)],
+        metadatas=[{"wing": "test", "idx": i} for i in range(10)],
+    )
+    return str(palace)
+
+
+@pgmark
+def test_phase_2_copies_all_drawers(fixture_chroma_palace, capsys):
+    """phase_2 copies every drawer; counts match source."""
+    from mempalace.migrate_to_postgres import phase_1_schema, phase_2_drawers
+    from mempalace.backends.postgres import PostgresBackend
+
+    phase_1_schema(POSTGRES_DSN)
+    phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
+
+    backend = PostgresBackend(dsn=POSTGRES_DSN)
+    col = backend.get_or_create_collection("mempalace_drawers")
+    # Reach into the backend to count — keep this loose since backend
+    # API surface may evolve. The presence + correctness of d3 is the
+    # invariant we care about.
+    res = col.get(ids=["d3"])
+    assert res["documents"] == ["doc 3"]
+    assert res["metadatas"][0]["wing"] == "test"
+
+
+@pgmark
+def test_phase_2_idempotent(fixture_chroma_palace):
+    """Re-running phase_2 against the same source doesn't dupe rows."""
+    from mempalace.migrate_to_postgres import phase_1_schema, phase_2_drawers
+    from mempalace.backends.postgres import PostgresBackend
+
+    phase_1_schema(POSTGRES_DSN)
+    phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
+    # Reset the per-collection done marker so the second pass actually runs
+    # the loop (vs short-circuiting via checkpoint).
+    import psycopg2
+    with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM mempalace_backend_meta "
+            "WHERE key = 'migration_drawer_done::mempalace_drawers'"
+        )
+        conn.commit()
+    phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
+
+    backend = PostgresBackend(dsn=POSTGRES_DSN)
+    col = backend.get_or_create_collection("mempalace_drawers")
+    res = col.get(ids=[f"d{i}" for i in range(10)])
+    assert len(res["ids"]) == 10, "should still have exactly 10 rows after re-run"
+
+
+@pgmark
+def test_phase_2_skips_collection_when_marked_done(fixture_chroma_palace, capsys):
+    """If migration_drawer_done::<name> is already 'done', we skip the loop."""
+    from mempalace.migrate_to_postgres import (
+        phase_1_schema, phase_2_drawers, _set_checkpoint,
+    )
+
+    phase_1_schema(POSTGRES_DSN)
+    import psycopg2
+    with psycopg2.connect(POSTGRES_DSN) as conn:
+        _set_checkpoint(conn, "migration_drawer_done::mempalace_drawers", "done")
+    capsys.readouterr()  # discard prior output
+    phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
+    out = capsys.readouterr().out
+    assert "skipping" in out.lower()

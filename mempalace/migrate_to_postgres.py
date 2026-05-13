@@ -45,8 +45,9 @@ def run_migration(
         print("[dry-run] preflight only; exiting before any writes")
         return
     phase_1_schema(postgres_dsn)
+    phase_2_drawers(chroma_path, postgres_dsn, batch_size=batch_size)
     raise NotImplementedError(
-        "phases 2–6 land in subsequent tasks of the pgvector-age migration plan"
+        "phases 3–6 land in subsequent tasks of the pgvector-age migration plan"
     )
 
 
@@ -166,6 +167,106 @@ def phase_1_schema(postgres_dsn: str) -> None:
         conn.autocommit = False
         _set_checkpoint(conn, "migration_phase_schema", "done")
     print("[phase 1] schema created")
+
+
+# ── Phase 2 — Drawer batch copy ──────────────────────────────────────
+
+
+def phase_2_drawers(
+    chroma_path: str,
+    postgres_dsn: str,
+    batch_size: int = 1000,
+) -> None:
+    """Stream drawers from every collection in the ChromaDB palace into Postgres.
+
+    Iterates each collection, pages through it ``batch_size`` rows at a
+    time, and writes each batch through ``PostgresBackend.upsert()``.
+    Upsert is idempotent (ON CONFLICT (id) DO UPDATE), so re-running the
+    phase against the same source is safe and converges to the same state.
+
+    Progress checkpoints are written per-collection and per-batch under
+    ``migration_drawer_progress::<collection_name>`` keys so a resumed
+    run can skip already-copied collections entirely (if marked done)
+    and pages within an in-flight collection (the upsert handles that
+    case naturally without a finer-grained checkpoint).
+
+    Embedding dimension is taken as-is from ChromaDB; if the source and
+    target dimensions disagree the postgres backend rejects the row at
+    insert time — better to surface there than to silently truncate.
+    """
+    import chromadb
+    import psycopg2
+    from .backends.postgres import PostgresBackend
+
+    client = chromadb.PersistentClient(path=chroma_path)
+    backend = PostgresBackend(dsn=postgres_dsn)
+    collections = list(client.list_collections())
+
+    if not collections:
+        print("[phase 2] source palace has no collections; nothing to copy")
+        return
+
+    with psycopg2.connect(postgres_dsn) as conn:
+        for col_handle in collections:
+            name = col_handle.name if hasattr(col_handle, "name") else str(col_handle)
+            done_key = f"migration_drawer_done::{name}"
+            if _get_checkpoint(conn, done_key) == "done":
+                print(f"[phase 2] skipping {name!r} (checkpoint says done)")
+                continue
+
+            col = client.get_collection(name)
+            total = col.count()
+            print(f"[phase 2] copying {total} drawers from collection {name!r}")
+
+            # PostgresBackend creates one table per collection name; reuse
+            # the chroma collection's name as the postgres table name so
+            # downstream reads can address by collection.
+            pg_col = backend.get_or_create_collection(name)
+
+            offset = 0
+            copied = 0
+            while offset < total:
+                batch = col.get(
+                    include=["embeddings", "documents", "metadatas"],
+                    limit=batch_size,
+                    offset=offset,
+                )
+                ids = batch.get("ids") or []
+                if not ids:
+                    break  # safety: empty page means we're done
+                docs = batch.get("documents") or [""] * len(ids)
+                embs = batch.get("embeddings")
+                metas = batch.get("metadatas") or [{}] * len(ids)
+
+                # Normalize embeddings: chromadb returns numpy arrays; the
+                # backend expects list[list[float]]. None embeddings stay
+                # None (will fail at insert if non-null required).
+                if embs is not None:
+                    embs = [
+                        list(map(float, e)) if e is not None else None
+                        for e in embs
+                    ]
+                # Normalize metadatas: chromadb may give None for missing.
+                metas = [m if isinstance(m, dict) else {} for m in metas]
+
+                pg_col.upsert(
+                    ids=ids,
+                    documents=docs,
+                    metadatas=metas,
+                    embeddings=embs,
+                )
+                copied += len(ids)
+                offset += batch_size
+                _set_checkpoint(
+                    conn,
+                    f"migration_drawer_progress::{name}",
+                    f"{copied}/{total}",
+                )
+                print(f"[phase 2]   {copied}/{total} copied in {name!r}")
+
+            _set_checkpoint(conn, done_key, "done")
+        _set_checkpoint(conn, "migration_phase_drawers", "done")
+    print("[phase 2] drawers complete")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
