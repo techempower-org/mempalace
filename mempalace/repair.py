@@ -36,7 +36,8 @@ import sqlite3
 import time
 from collections import defaultdict
 from datetime import datetime
-from typing import Iterator, Optional
+import re
+from typing import Callable, Iterator, Optional
 
 from chromadb.errors import NotFoundError as ChromaNotFoundError
 
@@ -597,9 +598,7 @@ def maybe_repair_poisoned_max_seq_id_before_rebuild(
         "  This can make writes report success while embeddings_queue grows "
         "and embeddings stay static."
     )
-    print(
-        "  Running the non-destructive max_seq_id repair instead of rebuilding " "the collection."
-    )
+    print("  Running the non-destructive max_seq_id repair instead of rebuilding the collection.")
     print(
         "  Queued writes remain in chroma.sqlite3 for Chroma to drain after "
         "the bookmark is unpoisoned."
@@ -613,10 +612,79 @@ def maybe_repair_poisoned_max_seq_id_before_rebuild(
     )
 
 
+_PROGRESS_RE_STAGED = re.compile(r"Staged\s+(\d+)/(\d+)")
+_PROGRESS_RE_REFILED = re.compile(r"Re-filed\s+(\d+)/(\d+)")
+
+
+def _format_eta(seconds: float) -> str:
+    """Pretty-print an ETA in the smallest reasonable unit."""
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    if seconds < 3600:
+        return f"{seconds / 60:.0f}m"
+    return f"{seconds / 3600:.1f}h"
+
+
+class _DefaultProgress:
+    """Default ``progress`` callable for :func:`rebuild_index`.
+
+    Behaves like ``print`` for non-progress lines. For ``"Staged N/M"`` /
+    ``"Re-filed N/M"`` lines it appends elapsed/rate/ETA to give the
+    operator a sense of how long the rebuild has left:
+
+        Staged 5000/182953 drawers... (elapsed 7m, rate 11.3/s, ETA 4h)
+
+    The clock resets at the stage→refile transition so the rate is
+    accurate within each phase (refile re-embeds from scratch and runs
+    at potentially different throughput than stage).
+    """
+
+    def __init__(self):
+        self._start: Optional[float] = None
+        self._phase: Optional[str] = None
+        self._initial_completed: int = 0
+
+    def __call__(self, msg) -> None:
+        msg = str(msg)
+        decorated = self._maybe_decorate(msg)
+        print(decorated)
+
+    def _maybe_decorate(self, msg: str) -> str:
+        for pattern, phase in (
+            (_PROGRESS_RE_STAGED, "stage"),
+            (_PROGRESS_RE_REFILED, "refile"),
+        ):
+            m = pattern.search(msg)
+            if m is None:
+                continue
+            completed = int(m.group(1))
+            expected = int(m.group(2))
+            return msg + self._eta_suffix(phase, completed, expected)
+        return msg
+
+    def _eta_suffix(self, phase: str, completed: int, expected: int) -> str:
+        now = time.monotonic()
+        # Reset clock + baseline at first call OR at phase transition,
+        # so refile-phase rate isn't muddied by the slower stage phase.
+        if self._phase != phase:
+            self._phase = phase
+            self._start = now
+            self._initial_completed = completed
+        elapsed = now - (self._start or now)
+        done_this_phase = completed - self._initial_completed
+        rate = done_this_phase / elapsed if elapsed > 0 and done_this_phase > 0 else 0.0
+        remaining = max(0, expected - completed)
+        if rate <= 0:
+            return f" (elapsed {_format_eta(elapsed)})"
+        eta = remaining / rate
+        return f" (elapsed {_format_eta(elapsed)}, rate {rate:.1f}/s, ETA {_format_eta(eta)})"
+
+
 def rebuild_index(
     palace_path=None,
     confirm_truncation_ok: bool = False,
     collection_name: Optional[str] = None,
+    progress: Optional[Callable[[str], None]] = None,
 ):
     """Rebuild the HNSW index from scratch.
 
@@ -630,18 +698,26 @@ def rebuild_index(
     Set to ``True`` only when you have independently verified that the
     palace genuinely contains exactly the extracted number of drawers
     (typically only a concern for palaces sized at exactly 10 000 rows).
+
+    ``progress`` is the callable used for status output. Defaults to
+    :class:`_DefaultProgress` which prints with elapsed/rate/ETA
+    annotations on ``Staged N/M`` and ``Re-filed N/M`` lines. Pass a
+    custom callable (e.g. a daemon-side capture for HTTP status, or a
+    silent ``lambda *_: None`` for tests) to override.
     """
+    if progress is None:
+        progress = _DefaultProgress()
     palace_path = palace_path or _get_palace_path()
     collection_name = collection_name or _drawers_collection_name()
 
     if not os.path.isdir(palace_path):
-        print(f"\n  No palace found at {palace_path}")
+        progress(f"\n  No palace found at {palace_path}")
         return
 
-    print(f"\n{'=' * 55}")
-    print("  MemPalace Repair — Index Rebuild")
-    print(f"{'=' * 55}\n")
-    print(f" Palace: {palace_path}")
+    progress(f"\n{'=' * 55}")
+    progress("  MemPalace Repair — Index Rebuild")
+    progress(f"{'=' * 55}\n")
+    progress(f" Palace: {palace_path}")
 
     # Run the SQLite integrity preflight before any chromadb client open.
     # ChromaDB's rust binding raises pyo3_runtime.PanicException (which is
@@ -666,21 +742,21 @@ def rebuild_index(
         col = backend.get_collection(palace_path, collection_name)
         total = col.count()
     except Exception as e:
-        print(f"  Error reading palace: {e}")
-        print("  Palace may need to be re-mined from source files.")
+        progress(f"  Error reading palace: {e}")
+        progress("  Palace may need to be re-mined from source files.")
         return
 
-    print(f"  Drawers found: {total}")
+    progress(f"  Drawers found: {total}")
 
     if total == 0:
-        print("  Nothing to repair.")
+        progress("  Nothing to repair.")
         return
 
     # Extract all drawers in batches
-    print("\n  Extracting drawers...")
+    progress("\n  Extracting drawers...")
     batch_size = 5000
     all_ids, all_docs, all_metas = _extract_drawers(col, total, batch_size)
-    print(f"  Extracted {len(all_ids)} drawers")
+    progress(f"  Extracted {len(all_ids)} drawers")
 
     # ── #1208 guard ──────────────────────────────────────────────────
     # Refuse to ``delete_collection`` + rebuild when extraction looks
@@ -694,19 +770,19 @@ def rebuild_index(
             collection_name=collection_name,
         )
     except TruncationDetected as e:
-        print(e.message)
+        progress(e.message)
         return
 
     # Back up ONLY the SQLite database, not the bloated HNSW files
     sqlite_path = os.path.join(palace_path, "chroma.sqlite3")
     backup_path = sqlite_path + ".backup"
     if os.path.exists(sqlite_path):
-        print(f"  Backing up chroma.sqlite3 ({os.path.getsize(sqlite_path) / 1e6:.0f} MB)...")
+        progress(f"  Backing up chroma.sqlite3 ({os.path.getsize(sqlite_path) / 1e6:.0f} MB)...")
         shutil.copy2(sqlite_path, backup_path)
-        print(f"  Backup: {backup_path}")
+        progress(f"  Backup: {backup_path}")
 
     # Rebuild with correct HNSW settings
-    print("  Rebuilding collection with hnsw:space=cosine...")
+    progress("  Rebuilding collection with hnsw:space=cosine...")
     try:
         filed = _rebuild_collection_via_temp(
             backend,
@@ -716,23 +792,23 @@ def rebuild_index(
             all_metas,
             batch_size,
             collection_name=collection_name,
-            progress=print,
+            progress=progress,
         )
     except RebuildCollectionError as e:
-        print(f"\n  ERROR during rebuild: {e}")
-        print("  Rebuild aborted before completion.")
+        progress(f"\n  ERROR during rebuild: {e}")
+        progress("  Rebuild aborted before completion.")
         if e.live_replaced and os.path.exists(backup_path):
-            print(f"  Restoring from backup: {backup_path}")
+            progress(f"  Restoring from backup: {backup_path}")
             try:
                 _close_chroma_handles(palace_path, backend=backend)
                 _delete_collection_if_exists(backend, palace_path, collection_name)
                 shutil.copy2(backup_path, sqlite_path)
-                print("  Backup restored. Palace is back to pre-repair state.")
+                progress("  Backup restored. Palace is back to pre-repair state.")
             except Exception as restore_error:
-                print(f"  Backup restore failed: {restore_error}")
-                print(f"  Manual restore required from: {backup_path}")
+                progress(f"  Backup restore failed: {restore_error}")
+                progress(f"  Manual restore required from: {backup_path}")
         elif e.live_replaced:
-            print("  No backup available. Re-mine from source files to recover.")
+            progress("  No backup available. Re-mine from source files to recover.")
         else:
             print("  Live collection was not replaced; leaving the original palace untouched.")
         raise

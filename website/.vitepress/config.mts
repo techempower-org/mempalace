@@ -30,8 +30,8 @@ export default withMermaid(
       ['meta', { property: 'og:description', content: '96.6% LongMemEval recall. Zero API calls. Local, free, open source.' }],
       ['meta', { property: 'og:image', content: `${docsBase}mempalace_logo.png` }],
       ...(gaId ? [
-        ['script', { async: '', src: `https://www.googletagmanager.com/gtag/js?id=${gaId}` }],
-        ['script', {}, `window.dataLayer = window.dataLayer || [];\nfunction gtag(){dataLayer.push(arguments);}\ngtag('js', new Date());\ngtag('config', '${gaId}');`],
+        ['script', { async: '', src: `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(gaId)}` }],
+        ['script', {}, `window.dataLayer = window.dataLayer || [];\nfunction gtag(){dataLayer.push(arguments);}\ngtag('js', new Date());\ngtag('config', ${JSON.stringify(gaId)});`],
       ] as const : []),
     ],
 
