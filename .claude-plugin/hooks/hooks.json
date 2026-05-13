@@ -1,6 +1,17 @@
 {
-  "description": "MemPalace auto-save and pre-compact hooks — routed via palace-daemon/clients/hook.py (post-2026-05-11 split-brain fix)",
+  "description": "MemPalace auto-save, pre-compact, and session-start hooks — routed via palace-daemon/clients/hook.py (post-2026-05-11 split-brain fix)",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/jp/Projects/palace-daemon/clients/hook.py --hook session-start --harness claude-code",
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
