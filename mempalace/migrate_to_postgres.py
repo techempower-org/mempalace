@@ -116,9 +116,11 @@ def _check_postgres_extensions(postgres_dsn: str) -> None:
 
     try:
         with psycopg2.connect(postgres_dsn) as conn, conn.cursor() as cur:
+            # NOTE: pg_available_extensions uses `name`, not `extname` —
+            # that's pg_extension's column. Different views, easy to mix up.
             cur.execute(
-                "SELECT extname FROM pg_available_extensions "
-                "WHERE extname IN ('vector', 'age')"
+                "SELECT name FROM pg_available_extensions "
+                "WHERE name IN ('vector', 'age')"
             )
             avail = {row[0] for row in cur.fetchall()}
     except psycopg2.OperationalError as e:
