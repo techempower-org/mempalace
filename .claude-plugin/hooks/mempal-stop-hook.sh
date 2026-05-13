@@ -9,10 +9,15 @@
 # they restart. Making this script a thin pass-through means those
 # stale sessions still route through the daemon instead of erroring.
 #
+# Override the hook.py location with PALACE_DAEMON_HOOK_PY=/path/to/hook.py
+# — required on hosts where palace-daemon lives somewhere other than the
+# default below (e.g. /home/jp/.local/share/palace-daemon/ on disks, or
+# CI fixtures).
+#
 # If palace-daemon's hook.py is missing on this machine, we exit 0 (not
 # a hard error) so a Stop event from a host without palace-daemon
 # doesn't gum up the harness.
-HOOK_PY=/home/jp/Projects/palace-daemon/clients/hook.py
+HOOK_PY="${PALACE_DAEMON_HOOK_PY:-/home/jp/Projects/palace-daemon/clients/hook.py}"
 if [ -x "$(command -v python3)" ] && [ -f "$HOOK_PY" ]; then
     exec python3 "$HOOK_PY" --hook stop --harness claude-code "$@"
 fi
