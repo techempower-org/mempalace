@@ -291,3 +291,211 @@ def test_phase_2_skips_collection_when_marked_done(fixture_chroma_palace, capsys
     phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
     out = capsys.readouterr().out
     assert "skipping" in out.lower()
+
+
+# ── Phase 5 — KG migration (sqlite → AGE) ─────────────────────────────
+
+
+def _build_sqlite_kg(palace_dir, triples):
+    """Build a knowledge_graph.sqlite3 fixture with the supplied triples.
+
+    Each triple is a dict: {id, subject, predicate, object, valid_from?,
+    valid_to?, confidence?, source_drawer_id?}.
+    """
+    import sqlite3
+
+    kg_path = palace_dir / "knowledge_graph.sqlite3"
+    with sqlite3.connect(str(kg_path)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE triples (
+                id TEXT PRIMARY KEY,
+                subject TEXT NOT NULL,
+                predicate TEXT NOT NULL,
+                object TEXT NOT NULL,
+                valid_from TEXT,
+                valid_to TEXT,
+                confidence REAL DEFAULT 1.0,
+                source_closet TEXT,
+                source_file TEXT,
+                source_drawer_id TEXT,
+                adapter_name TEXT,
+                extracted_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        for t in triples:
+            conn.execute(
+                """
+                INSERT INTO triples
+                    (id, subject, predicate, object,
+                     valid_from, valid_to, confidence, source_drawer_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    t["id"],
+                    t["subject"],
+                    t["predicate"],
+                    t["object"],
+                    t.get("valid_from"),
+                    t.get("valid_to"),
+                    t.get("confidence", 1.0),
+                    t.get("source_drawer_id"),
+                ),
+            )
+        conn.commit()
+    return kg_path
+
+
+def test_phase_5_no_sqlite_kg_marks_done(tmp_path, capsys):
+    """If <chroma_path>/knowledge_graph.sqlite3 absent, phase no-ops cleanly."""
+    from mempalace.migrate_to_postgres import phase_5_kg, _KG_DONE_KEY
+
+    # Need POSTGRES_DSN even to check checkpoint, so skip if absent.
+    if POSTGRES_DSN is None:
+        pytest.skip("phase_5 checkpoint check needs postgres")
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    # No knowledge_graph.sqlite3 in palace dir
+    phase_5_kg(str(palace), POSTGRES_DSN)
+    out = capsys.readouterr().out
+    assert "nothing to migrate" in out.lower() or "no sqlite" in out.lower()
+
+    # Verify checkpoint was set
+    import psycopg2
+    from mempalace.migrate_to_postgres import _get_checkpoint
+    with psycopg2.connect(POSTGRES_DSN) as conn:
+        assert _get_checkpoint(conn, _KG_DONE_KEY) == "done"
+
+
+@pgmark
+def test_phase_5_copies_triples(tmp_path, capsys):
+    """phase_5_kg moves triples from sqlite to AGE."""
+    from mempalace.migrate_to_postgres import (
+        phase_1_schema, phase_5_kg, _set_checkpoint, _KG_DONE_KEY,
+    )
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    _build_sqlite_kg(
+        palace,
+        [
+            {
+                "id": "t1", "subject": "JP", "predicate": "works_on",
+                "object": "mempalace", "valid_from": "2026-04-21",
+                "source_drawer_id": "drawer_abc", "confidence": 0.9,
+            },
+            {
+                "id": "t2", "subject": "JP", "predicate": "uses",
+                "object": "Postgres", "confidence": 1.0,
+            },
+        ],
+    )
+
+    phase_1_schema(POSTGRES_DSN)
+
+    # Reset state for a clean test
+    import psycopg2
+    with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM mempalace_backend_meta "
+            "WHERE key LIKE 'migration_kg_%' OR key = %s",
+            (_KG_DONE_KEY,),
+        )
+        conn.commit()
+    age_for_clear = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    age_for_clear.clear()
+    age_for_clear.close()
+
+    phase_5_kg(str(palace), POSTGRES_DSN)
+    out = capsys.readouterr().out
+    assert "2 copied" in out or "kg complete" in out.lower()
+
+    # Read back via AGE
+    age = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        jp_triples = age.query_triples(subject="JP")
+        assert len(jp_triples) == 2
+        # Sanity: one of them is the "works_on mempalace" relation
+        works_on = [t for t in jp_triples if t["relation_type"] == "works_on"]
+        assert len(works_on) == 1
+        assert works_on[0]["object"] == "mempalace"
+        assert works_on[0]["valid_from"] == "2026-04-21"
+    finally:
+        age.close()
+
+
+@pgmark
+def test_phase_5_skips_when_done_checkpoint(tmp_path, capsys):
+    """Phase exits immediately when migration_phase_kg=done."""
+    from mempalace.migrate_to_postgres import (
+        phase_1_schema, phase_5_kg, _set_checkpoint, _KG_DONE_KEY,
+    )
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    _build_sqlite_kg(palace, [
+        {"id": "t1", "subject": "A", "predicate": "r", "object": "B"},
+    ])
+
+    phase_1_schema(POSTGRES_DSN)
+    import psycopg2
+    with psycopg2.connect(POSTGRES_DSN) as conn:
+        _set_checkpoint(conn, _KG_DONE_KEY, "done")
+
+    capsys.readouterr()
+    phase_5_kg(str(palace), POSTGRES_DSN)
+    out = capsys.readouterr().out
+    assert "already migrated" in out.lower() or "skipping" in out.lower()
+
+
+@pgmark
+def test_phase_5_skips_bad_temporal_data(tmp_path, capsys):
+    """Triples with inverted intervals get logged + skipped, not crash."""
+    from mempalace.migrate_to_postgres import (
+        phase_1_schema, phase_5_kg, _KG_DONE_KEY,
+    )
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    _build_sqlite_kg(
+        palace,
+        [
+            {
+                "id": "good", "subject": "A", "predicate": "r", "object": "B",
+            },
+            {
+                "id": "bad_temporal", "subject": "X", "predicate": "y", "object": "Z",
+                "valid_from": "2026-05-10", "valid_to": "2025-01-01",  # inverted
+            },
+        ],
+    )
+
+    phase_1_schema(POSTGRES_DSN)
+    import psycopg2
+    with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_kg_%' OR key = %s",
+            (_KG_DONE_KEY,),
+        )
+        conn.commit()
+    age = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    age.clear()
+    age.close()
+
+    phase_5_kg(str(palace), POSTGRES_DSN)
+    out = capsys.readouterr().out
+    assert "1 skipped" in out or "skip bad_temporal" in out
+
+    # Good triple landed, bad one did not
+    age = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        triples = age.query_triples(subject="A")
+        assert len(triples) == 1
+        triples = age.query_triples(subject="X")
+        assert len(triples) == 0
+    finally:
+        age.close()

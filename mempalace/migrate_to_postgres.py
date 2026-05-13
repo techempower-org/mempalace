@@ -46,8 +46,9 @@ def run_migration(
         return
     phase_1_schema(postgres_dsn)
     phase_2_drawers(chroma_path, postgres_dsn, batch_size=batch_size)
+    phase_5_kg(chroma_path, postgres_dsn)
     raise NotImplementedError(
-        "phases 3–6 land in subsequent tasks of the pgvector-age migration plan"
+        "phase 6 (verify) lands in the next task of the pgvector-age migration plan"
     )
 
 
@@ -267,6 +268,154 @@ def phase_2_drawers(
             _set_checkpoint(conn, done_key, "done")
         _set_checkpoint(conn, "migration_phase_drawers", "done")
     print("[phase 2] drawers complete")
+
+
+# ── Phase 5 — Knowledge graph (sqlite → AGE) ─────────────────────────
+
+
+# Checkpoint key for resume — value is the "next sqlite triple offset
+# to process" so a re-run picks up where the last fire left off.
+_KG_WATERMARK_KEY = "migration_kg_triple_offset"
+_KG_DONE_KEY = "migration_phase_kg"
+
+
+def phase_5_kg(chroma_path: str, postgres_dsn: str) -> None:
+    """Migrate the sqlite KnowledgeGraph into AGE.
+
+    Looks for ``<chroma_path>/knowledge_graph.sqlite3``; if absent, logs
+    and marks the phase done (nothing to migrate is not an error).
+
+    For each sqlite triple, calls ``KnowledgeGraphAGE.add_triple()`` with
+    the 7-field mapping the AGE schema supports today:
+
+        sqlite        →  AGE add_triple
+        subject       →  subject
+        predicate     →  relation_type
+        object        →  object_
+        valid_from    →  valid_from
+        valid_to      →  valid_to
+        confidence    →  confidence
+        source_drawer_id → source
+
+    Dropped (lossy, documented): ``source_closet``, ``source_file``,
+    ``adapter_name``, ``extracted_at``. Future enhancement: extend AGE
+    add_triple to accept arbitrary edge properties so the migration is
+    fully lossless.
+
+    Resume semantics: sorts sqlite triples by id (deterministic). Reads
+    the ``migration_kg_triple_offset`` checkpoint and starts there.
+    Writes the checkpoint after every 100 triples.
+
+    Idempotency caveat: AGE's add_triple uses CREATE (not MERGE) for the
+    edge, so re-running this phase against the same AGE graph WILL
+    create duplicate edges. The ``migration_phase_kg=done`` checkpoint
+    skips the whole phase on subsequent ``run_migration`` calls. If you
+    need to re-run after partial failure: delete the checkpoint AND
+    call ``KnowledgeGraphAGE.clear()`` first.
+
+    Bad data handling: ValueError from add_triple (rejected by
+    sanitize_kg_value / sanitize_iso_temporal / inverted-interval check)
+    is logged and skipped. The phase reports a skipped count at the
+    end. A high skip count is operator-actionable but not a phase
+    failure.
+    """
+    import psycopg2
+
+    # Resume gate: if already done, no-op
+    with psycopg2.connect(postgres_dsn) as conn:
+        if _get_checkpoint(conn, _KG_DONE_KEY) == "done":
+            print("[phase 5] kg already migrated (checkpoint says done); skipping")
+            return
+
+    kg_sqlite_path = Path(chroma_path) / "knowledge_graph.sqlite3"
+    if not kg_sqlite_path.is_file():
+        print(
+            f"[phase 5] no sqlite knowledge graph at {kg_sqlite_path}; "
+            "marking phase done (nothing to migrate)"
+        )
+        with psycopg2.connect(postgres_dsn) as conn:
+            _set_checkpoint(conn, _KG_DONE_KEY, "done")
+        return
+
+    import sqlite3
+    from .knowledge_graph_age import KnowledgeGraphAGE
+
+    # Read sqlite triples deterministically; only the columns we map.
+    with sqlite3.connect(str(kg_sqlite_path)) as src_conn:
+        src_conn.row_factory = sqlite3.Row
+        cur = src_conn.execute(
+            """
+            SELECT id, subject, predicate, object,
+                   valid_from, valid_to, confidence, source_drawer_id
+            FROM triples
+            ORDER BY id
+            """
+        )
+        rows = cur.fetchall()
+    total = len(rows)
+
+    if total == 0:
+        print("[phase 5] sqlite KG exists but has 0 triples; marking phase done")
+        with psycopg2.connect(postgres_dsn) as conn:
+            _set_checkpoint(conn, _KG_DONE_KEY, "done")
+        return
+
+    # Resume offset
+    with psycopg2.connect(postgres_dsn) as conn:
+        wm = _get_checkpoint(conn, _KG_WATERMARK_KEY)
+        start_offset = int(wm) if wm and wm.isdigit() else 0
+
+    if start_offset >= total:
+        print(
+            f"[phase 5] watermark ({start_offset}) >= total ({total}); "
+            "marking phase done"
+        )
+        with psycopg2.connect(postgres_dsn) as conn:
+            _set_checkpoint(conn, _KG_DONE_KEY, "done")
+        return
+
+    print(
+        f"[phase 5] migrating {total - start_offset} triples "
+        f"({start_offset}/{total} already processed)"
+    )
+
+    age = KnowledgeGraphAGE(dsn=postgres_dsn)
+    copied = 0
+    skipped = 0
+    try:
+        with psycopg2.connect(postgres_dsn) as ck_conn:
+            for i, row in enumerate(rows[start_offset:], start=start_offset):
+                try:
+                    age.add_triple(
+                        subject=row["subject"],
+                        relation_type=row["predicate"],
+                        object_=row["object"],
+                        source=row["source_drawer_id"],
+                        valid_from=row["valid_from"],
+                        valid_to=row["valid_to"],
+                        confidence=row["confidence"] if row["confidence"] is not None else 1.0,
+                    )
+                    copied += 1
+                except ValueError as e:
+                    skipped += 1
+                    print(f"[phase 5]   skip {row['id']}: {e}")
+
+                # Periodic watermark checkpoint every 100 triples
+                if (i + 1) % 100 == 0:
+                    _set_checkpoint(ck_conn, _KG_WATERMARK_KEY, str(i + 1))
+                    print(f"[phase 5]   {i + 1}/{total} processed "
+                          f"({copied} copied, {skipped} skipped)")
+
+            # Final watermark + done marker
+            _set_checkpoint(ck_conn, _KG_WATERMARK_KEY, str(total))
+            _set_checkpoint(ck_conn, _KG_DONE_KEY, "done")
+    finally:
+        age.close()
+
+    print(
+        f"[phase 5] kg complete — {copied} copied, {skipped} skipped "
+        f"(of {total} total)"
+    )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────

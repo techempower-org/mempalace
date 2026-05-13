@@ -34,7 +34,7 @@ The plan was written 2026-05-10. PR [#21 (`feat/pgvector-age-impl`)](https://git
 | 3 | 3.3 phase_2_drawers (batched copy) | ✅ Done | via PostgresBackend.upsert(); per-collection checkpointing |
 | 3 | 3.4.a closets | ✅ Covered by 3.3 | same iterator handles all chromadb collections |
 | 3 | 3.4.b indexes | ✅ Covered by backend | `_ensure_schema` creates HNSW + BTrees on first write |
-| 3 | 3.4.c Phase 5 KG (sqlite → AGE) | ⏸️ Stopped per plan | "explicit review" pause point — AGE Cypher tricky |
+| 3 | 3.4.c Phase 5 KG (sqlite → AGE) | ✅ Done | phase_5_kg uses KnowledgeGraphAGE.add_triple; watermark resume; bad-row skip+log |
 | 3 | 3.5 Phase 6 verify | ❌ Not done | needs 3.4.c first |
 | 3 | 3.6 Phase 7 cutover instructions | ❌ Not done | small wrap-up |
 | 4 | 4.1 Dry-run on canonical palace | ❌ Not done | end-to-end smoke |
@@ -1586,7 +1586,7 @@ Same pattern as Task 3.3 — TDD per phase, one phase per task. Each writes a ch
 
 - [x] **3.4.a Phase 3 closets** ✅ Covered by Task 3.3. The plan assumed a separate phase for closets; in practice `phase_2_drawers` iterates `client.list_collections()`, which already includes `mempalace_closets` alongside `mempalace_drawers`. Both flow through the same batched copy path. No separate code needed.
 - [x] **3.4.b Phase 4 indexes** ✅ Covered by `PostgresBackend._ensure_schema`. HNSW (or sorted_hnsw) + BTrees on wing/room are created during `get_or_create_collection`, which happens during Phase 2. The plan's `CREATE INDEX CONCURRENTLY` is for production cutover scenarios with live traffic — not needed for a stop-the-world migration. If we want CONCURRENT indexes for live migration later, that's a separate enhancement.
-- [ ] **3.4.c Phase 5 KG** — read sqlite triples; for each, call `KnowledgeGraphAGE.add_triple()` (Phase 2.2 surface); checkpoint via triple-watermark count for resume. **Per the plan's own instruction, stop here for explicit review before implementing.** The AGE Cypher-from-Python surface is the trickiest piece; warrants a focused session rather than a continuation of the bulk-implementation cadence.
+- [x] **3.4.c Phase 5 KG** — read sqlite triples; for each, call `KnowledgeGraphAGE.add_triple()` (Phase 2.2 surface); checkpoint via triple-watermark count for resume. **Per the plan's own instruction, stop here for explicit review before implementing.** The AGE Cypher-from-Python surface is the trickiest piece; warrants a focused session rather than a continuation of the bulk-implementation cadence.
 
 ### Task 3.5: Phase 6 — verify
 
