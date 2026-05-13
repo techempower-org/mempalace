@@ -1378,8 +1378,13 @@ def cmd_repair(args):
     # Extract all drawers in batches
     print("\n  Extracting drawers...")
     batch_size = 5000
-    all_ids, all_docs, all_metas = _extract_drawers(col, total, batch_size)
-    print(f"  Extracted {len(all_ids)} drawers")
+    all_ids, all_docs, all_metas, all_embeddings = _extract_drawers(col, total, batch_size)
+    emb_status = (
+        "with stored embeddings"
+        if all_embeddings is not None
+        else "without embeddings (will recompute)"
+    )
+    print(f"  Extracted {len(all_ids)} drawers ({emb_status})")
 
     # ── #1208 guard ──────────────────────────────────────────────────
     # Cross-check against the SQLite ground truth before doing anything
@@ -1422,6 +1427,7 @@ def cmd_repair(args):
             batch_size,
             collection_name=collection_name,
             progress=print,
+            all_embeddings=all_embeddings,
         )
     except RebuildCollectionError as e:
         print(f"  Repair failed: {e}")

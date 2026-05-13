@@ -87,7 +87,7 @@ def test_extract_drawers_preserves_valid_metadata():
         "documents": ["doc1", "doc2"],
         "metadatas": [{"wing": "a", "room": "1"}, {"wing": "b", "room": "2"}],
     }
-    all_ids, all_docs, all_metas = repair._extract_drawers(col, total=2, batch_size=2)
+    all_ids, all_docs, all_metas, _ = repair._extract_drawers(col, total=2, batch_size=2)
     assert all_ids == ["id1", "id2"]
     assert all_docs == ["doc1", "doc2"]
     assert all_metas == [{"wing": "a", "room": "1"}, {"wing": "b", "room": "2"}]
@@ -106,7 +106,7 @@ def test_extract_drawers_sanitizes_none_metadata():
         "documents": ["doc1", "doc2", "doc3"],
         "metadatas": [{"wing": "a"}, None, {"wing": "c"}],
     }
-    _, _, all_metas = repair._extract_drawers(col, total=3, batch_size=3)
+    _, _, all_metas, _ = repair._extract_drawers(col, total=3, batch_size=3)
     assert all_metas[0] == {"wing": "a"}
     assert all_metas[1] == {"_repaired_empty_meta": True}
     assert all_metas[2] == {"wing": "c"}
@@ -124,7 +124,7 @@ def test_extract_drawers_sanitizes_empty_dict_metadata():
         "documents": ["doc1", "doc2"],
         "metadatas": [{}, {"wing": "b"}],
     }
-    _, _, all_metas = repair._extract_drawers(col, total=2, batch_size=2)
+    _, _, all_metas, _ = repair._extract_drawers(col, total=2, batch_size=2)
     assert all_metas[0] == {"_repaired_empty_meta": True}
     assert all_metas[1] == {"wing": "b"}
 
@@ -142,7 +142,7 @@ def test_extract_drawers_sanitization_preserves_alignment():
         "documents": ["d1", "d2", "d3", "d4"],
         "metadatas": [None, {"k": "v"}, {}, None],
     }
-    all_ids, all_docs, all_metas = repair._extract_drawers(col, total=4, batch_size=4)
+    all_ids, all_docs, all_metas, _ = repair._extract_drawers(col, total=4, batch_size=4)
     assert len(all_ids) == len(all_docs) == len(all_metas) == 4
     assert all_ids == ["id1", "id2", "id3", "id4"]
     assert all_metas[0] == {"_repaired_empty_meta": True}
@@ -159,9 +159,65 @@ def test_extract_drawers_multiple_batches():
         {"ids": ["id3"], "documents": ["d3"], "metadatas": [{}]},
         {"ids": [], "documents": [], "metadatas": []},
     ]
-    all_ids, all_docs, all_metas = repair._extract_drawers(col, total=3, batch_size=2)
+    all_ids, all_docs, all_metas, _ = repair._extract_drawers(col, total=3, batch_size=2)
     assert all_ids == ["id1", "id2", "id3"]
     assert all_metas == [{"a": 1}, {"_repaired_empty_meta": True}, {"_repaired_empty_meta": True}]
+
+
+# ── embeddings preservation (upstream #1367 cherry-pick) ────────────
+
+
+def test_extract_drawers_preserves_embeddings_when_all_present():
+    """When every drawer has an embedding, return them aligned with ids.
+
+    The fast-path of upstream #1367: re-uses stored vectors during repair
+    instead of forcing ChromaDB to recompute via ONNX. Saves hours on
+    large palaces.
+    """
+    col = MagicMock()
+    col.get.return_value = {
+        "ids": ["id1", "id2"],
+        "documents": ["d1", "d2"],
+        "metadatas": [{"a": 1}, {"b": 2}],
+        "embeddings": [[0.1] * 384, [0.2] * 384],
+    }
+    _, _, _, all_embeddings = repair._extract_drawers(col, total=2, batch_size=2)
+    assert all_embeddings is not None
+    assert len(all_embeddings) == 2
+    assert all_embeddings[0] == [0.1] * 384
+
+
+def test_extract_drawers_falls_back_to_none_when_any_embedding_missing():
+    """If any drawer's embedding is None (HNSW unreadable), return None.
+
+    Signals to the rebuild caller that ChromaDB must recompute embeddings
+    rather than try to upsert with partial vectors. The whole-or-nothing
+    semantics mean we never end up with a half-vectored collection.
+    """
+    col = MagicMock()
+    col.get.return_value = {
+        "ids": ["id1", "id2", "id3"],
+        "documents": ["d1", "d2", "d3"],
+        "metadatas": [{}, {}, {}],
+        "embeddings": [[0.1] * 384, None, [0.3] * 384],
+    }
+    _, _, _, all_embeddings = repair._extract_drawers(col, total=3, batch_size=3)
+    assert all_embeddings is None, "any None forces caller to recompute all"
+
+
+def test_extract_drawers_embeddings_absent_in_batch_signals_recompute():
+    """When chromadb returns no `embeddings` key at all, the result is None."""
+    col = MagicMock()
+    col.get.return_value = {
+        "ids": ["id1"],
+        "documents": ["d1"],
+        "metadatas": [{}],
+        # 'embeddings' key absent entirely (chromadb may return None for
+        # this on unreadable HNSW)
+        "embeddings": None,
+    }
+    _, _, _, all_embeddings = repair._extract_drawers(col, total=1, batch_size=1)
+    assert all_embeddings is None
 
 
 # ── scan_palace ───────────────────────────────────────────────────────
