@@ -76,6 +76,94 @@ def test_paginate_ids_offset_exception_fallback():
     assert "id1" in ids
 
 
+# ── _extract_drawers ──────────────────────────────────────────────────
+
+
+def test_extract_drawers_preserves_valid_metadata():
+    """Non-empty dict metadata passes through unchanged."""
+    col = MagicMock()
+    col.get.return_value = {
+        "ids": ["id1", "id2"],
+        "documents": ["doc1", "doc2"],
+        "metadatas": [{"wing": "a", "room": "1"}, {"wing": "b", "room": "2"}],
+    }
+    all_ids, all_docs, all_metas = repair._extract_drawers(col, total=2, batch_size=2)
+    assert all_ids == ["id1", "id2"]
+    assert all_docs == ["doc1", "doc2"]
+    assert all_metas == [{"wing": "a", "room": "1"}, {"wing": "b", "room": "2"}]
+
+
+def test_extract_drawers_sanitizes_none_metadata():
+    """None entries in metadatas are coerced to the sentinel dict.
+
+    chromadb 1.5.x's `validate_metadata` raises `ValueError: Expected metadata
+    to be a non-empty dict, got 0 metadata attributes in add.` if it sees a
+    None entry; the sanitizer keeps the rebuild upsert from crashing.
+    """
+    col = MagicMock()
+    col.get.return_value = {
+        "ids": ["id1", "id2", "id3"],
+        "documents": ["doc1", "doc2", "doc3"],
+        "metadatas": [{"wing": "a"}, None, {"wing": "c"}],
+    }
+    _, _, all_metas = repair._extract_drawers(col, total=3, batch_size=3)
+    assert all_metas[0] == {"wing": "a"}
+    assert all_metas[1] == {"_repaired_empty_meta": True}
+    assert all_metas[2] == {"wing": "c"}
+
+
+def test_extract_drawers_sanitizes_empty_dict_metadata():
+    """Empty dict {} entries are coerced to the sentinel dict.
+
+    chromadb 1.5.x rejects `{}` the same way it rejects `None`. The comment
+    in the previous code path mistakenly assumed otherwise.
+    """
+    col = MagicMock()
+    col.get.return_value = {
+        "ids": ["id1", "id2"],
+        "documents": ["doc1", "doc2"],
+        "metadatas": [{}, {"wing": "b"}],
+    }
+    _, _, all_metas = repair._extract_drawers(col, total=2, batch_size=2)
+    assert all_metas[0] == {"_repaired_empty_meta": True}
+    assert all_metas[1] == {"wing": "b"}
+
+
+def test_extract_drawers_sanitization_preserves_alignment():
+    """Sanitized output keeps the same length and ordering as input.
+
+    Critical invariant: ids[i] / documents[i] / metadatas[i] must stay in
+    lockstep through the sanitizer; otherwise the rebuild upsert mis-pairs
+    documents with metadata.
+    """
+    col = MagicMock()
+    col.get.return_value = {
+        "ids": ["id1", "id2", "id3", "id4"],
+        "documents": ["d1", "d2", "d3", "d4"],
+        "metadatas": [None, {"k": "v"}, {}, None],
+    }
+    all_ids, all_docs, all_metas = repair._extract_drawers(col, total=4, batch_size=4)
+    assert len(all_ids) == len(all_docs) == len(all_metas) == 4
+    assert all_ids == ["id1", "id2", "id3", "id4"]
+    assert all_metas[0] == {"_repaired_empty_meta": True}
+    assert all_metas[1] == {"k": "v"}
+    assert all_metas[2] == {"_repaired_empty_meta": True}
+    assert all_metas[3] == {"_repaired_empty_meta": True}
+
+
+def test_extract_drawers_multiple_batches():
+    """Pagination handles batch boundaries without losing/duplicating rows."""
+    col = MagicMock()
+    col.get.side_effect = [
+        {"ids": ["id1", "id2"], "documents": ["d1", "d2"], "metadatas": [{"a": 1}, None]},
+        {"ids": ["id3"], "documents": ["d3"], "metadatas": [{}]},
+        {"ids": [], "documents": [], "metadatas": []},
+    ]
+    all_ids, all_docs, all_metas = repair._extract_drawers(col, total=3, batch_size=2)
+    assert all_ids == ["id1", "id2", "id3"]
+    assert all_metas == [{"a": 1}, {"_repaired_empty_meta": True}, {"_repaired_empty_meta": True}]
+
+
 # ── scan_palace ───────────────────────────────────────────────────────
 
 
