@@ -12,7 +12,32 @@
 
 ---
 
-## Phase 0 — Preflight
+## Status as of 2026-05-13
+
+The plan was written 2026-05-10. PR [#21 (`feat/pgvector-age-impl`)](https://github.com/jphein/mempalace/pull/21) merged 2026-05-11 + the AGE skeleton commit `a3ee623` landed parts of Phases 1–2. Below is the reconciliation; see each Task heading for the status marker.
+
+| Phase | Task | Status | Evidence |
+|---|---|---|---|
+| 0 | 0.1 Postgres install verify | ✅ Done | env verified; subsequent phases shipped |
+| 0 | 0.2 #665 stance | ✅ Done | `docs/internal/pgvector-665-decision.md` (WAIT chosen) |
+| 1 | 1.A.1 #665 cherry-pick + smoke | ✅ Done | `mempalace/backends/postgres.py`, `tests/test_backends_postgres.py` |
+| 1 | 1.2 HNSW indexes | ✅ Done | `postgres.py:556-660` (sorted_hnsw / hnsw variants) |
+| 1 | 1.3 Where-clause filters | ✅ Done | `postgres.py:289` (`def query(where=...)`) |
+| 1 | 1.4 `backend` + `postgres_dsn` config | ✅ Done | `config.py:301, 318` |
+| 1 | 1.5 Postgres CI workflow | ✅ Done | `.github/workflows/ci.yml:73` (`test-postgres` job, pgvector/pgvector:pg16) |
+| 2 | 2.1 AGE schema + skeleton | ✅ Done | `mempalace/knowledge_graph_age.py`, `tests/test_knowledge_graph_age.py` |
+| 2 | 2.2 `add_triple()` Cypher | ❌ Not done | skeleton file's docstring: "add/query operations and temporal filtering arrive in subsequent..." |
+| 2 | 2.3 Temporal filtering | ❌ Not done | as above |
+| 2 | 2.4 `kg_backend` config + routing | ❌ Not done | no `kg_backend` property in `config.py` |
+| 3 | 3.1–3.6 Migration tool (chromadb → pg) | ❌ Not done | `cmd_migrate` exists but it's for ChromaDB version migrations, not substrate migration |
+| 4 | 4.1 Dry-run on canonical palace | ❌ Not done | — |
+| 4 | 4.2 Production cutover | ❌ Not done | — |
+
+**Canonical next task:** Phase 2.2 — implement `add_triple()` with Cypher MERGE/CREATE on the existing `KnowledgeGraphAGE` skeleton. The skeleton bootstraps the AGE extension and graph; what's missing is the actual write surface for triples.
+
+---
+
+## Phase 0 — Preflight ✅ Done 2026-05-11
 
 Lock in environment assumptions and decide the upstream-composition path before touching code.
 
@@ -20,7 +45,7 @@ Lock in environment assumptions and decide the upstream-composition path before 
 
 **Files:** none — environment probe only
 
-- [ ] **Step 1: Check Postgres version available**
+- [x] **Step 1: Check Postgres version available**
 
 ```bash
 which psql && psql --version
@@ -29,7 +54,7 @@ apt list --installed 2>/dev/null | grep -i postgres | head -5
 
 Expected: PostgreSQL client present, ideally 15+. If absent, install via apt (`sudo apt install postgresql-15 postgresql-15-pgvector postgresql-15-age`) or via brew on macOS.
 
-- [ ] **Step 2: Probe AGE extension availability**
+- [x] **Step 2: Probe AGE extension availability**
 
 ```bash
 sudo -u postgres psql -c "SELECT extname FROM pg_available_extensions WHERE extname IN ('vector', 'age');"
@@ -37,11 +62,11 @@ sudo -u postgres psql -c "SELECT extname FROM pg_available_extensions WHERE extn
 
 Expected: both `vector` and `age` listed. If `age` is missing, document the install path (build-from-source vs distro package) in a new `docs/postgres-setup.md`.
 
-- [ ] **Step 3: Document findings in scratch**
+- [x] **Step 3: Document findings in scratch**
 
 Write findings to `scratch/postgres-preflight-2026-05-10.md`: Postgres version, extension availability, install commands used, any compatibility caveats discovered (especially AGE vs Postgres 17 if applicable). This file is for the implementation team's reference; not committed.
 
-- [ ] **Step 4: Commit nothing**
+- [x] **Step 4: Commit nothing**
 
 Preflight is information-gathering only. No source changes yet.
 
@@ -49,7 +74,7 @@ Preflight is information-gathering only. No source changes yet.
 
 **Files:** none — decision recorded in `scratch/pgvector-665-decision.md`
 
-- [ ] **Step 1: Fetch and check #665's current state**
+- [x] **Step 1: Fetch and check #665's current state**
 
 ```bash
 gh pr view 665 --repo MemPalace/mempalace --json state,mergeable,updatedAt,commits -q '{state,mergeable,updated:.updatedAt,commits:(.commits | length)}'
@@ -58,7 +83,7 @@ git fetch upstream pull/665/head:pr-665 2>&1 | tail -3
 
 Expected: state OPEN. Note last update date and commit count. If a maintainer engaged in the last 7 days, lean "wait." If stale >2 weeks, lean "fork-port."
 
-- [ ] **Step 2: Test that #665 applies on our main**
+- [x] **Step 2: Test that #665 applies on our main**
 
 ```bash
 git checkout -b test-665-apply main
@@ -70,7 +95,7 @@ git branch -D test-665-apply
 
 Expected: clean merge or only documentation conflicts. Record any non-trivial conflicts.
 
-- [ ] **Step 3: Decide and document**
+- [x] **Step 3: Decide and document**
 
 Write decision to `scratch/pgvector-665-decision.md` with one of:
 - **Wait** — #665 has recent maintainer activity; we'll comment after our implementation is done and contribute follow-ups
@@ -78,7 +103,7 @@ Write decision to `scratch/pgvector-665-decision.md` with one of:
 
 The rest of Phase 1 branches on this decision. Each branch is enumerated below.
 
-- [ ] **Step 4: Commit the decision document**
+- [x] **Step 4: Commit the decision document**
 
 ```bash
 mkdir -p docs/internal
@@ -100,7 +125,7 @@ Make `MEMPALACE_BACKEND=postgres` a working alternative to ChromaDB for the stor
 **Files:**
 - Modify: `tests/test_backends_postgres.py` (new — minimal smoke test)
 
-- [ ] **Step 1: Cherry-pick #665's commits onto our branch**
+- [x] **Step 1: Cherry-pick #665's commits onto our branch**
 
 ```bash
 git fetch upstream pull/665/head:pr-665
@@ -109,7 +134,7 @@ git cherry-pick pr-665~..pr-665   # cherry-pick the range — adjust if #665 has
 
 Expected: cherry-pick succeeds or surfaces conflicts. Resolve any conflicts following the pattern of our PR #18 sync (keep fork docs, take upstream code).
 
-- [ ] **Step 2: Run the existing test suite**
+- [x] **Step 2: Run the existing test suite**
 
 ```bash
 source venv/bin/activate
@@ -118,7 +143,7 @@ python -m pytest tests/ -x -q 2>&1 | tail -20
 
 Expected: PASS. The full ChromaDB-default suite must remain green. If #665 broke anything in non-postgres paths, fix before continuing.
 
-- [ ] **Step 3: Write a smoke test for the postgres backend's `BaseCollection` contract**
+- [x] **Step 3: Write a smoke test for the postgres backend's `BaseCollection` contract**
 
 ```python
 # tests/test_backends_postgres.py
@@ -150,7 +175,7 @@ def test_postgres_backend_smoke():
     backend.delete_collection("smoke_test_drawers")
 ```
 
-- [ ] **Step 4: Run smoke test against local Postgres**
+- [x] **Step 4: Run smoke test against local Postgres**
 
 ```bash
 # Assumes a local Postgres at $TEST_POSTGRES_DSN with pgvector installed
@@ -160,7 +185,7 @@ TEST_POSTGRES_DSN="postgresql://palace@localhost/mempalace_test" \
 
 Expected: PASS. If FAIL, debug and fix before continuing — the postgres backend must round-trip a single drawer at minimum.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/test_backends_postgres.py
@@ -400,7 +425,7 @@ git commit -m "feat(backends): pgvector-backed PostgresBackend (fork-port of #66
 - Modify: `mempalace/backends/postgres.py` (extend `_ensure_schema`)
 - Modify: `tests/test_backends_postgres.py` (add index-existence test)
 
-- [ ] **Step 1: Write failing test for HNSW index presence**
+- [x] **Step 1: Write failing test for HNSW index presence**
 
 ```python
 # Append to tests/test_backends_postgres.py
@@ -421,7 +446,7 @@ def test_postgres_indexes_created():
     assert "drawers_metadata_gin_idx" in names
 ```
 
-- [ ] **Step 2: Run, expect failure**
+- [x] **Step 2: Run, expect failure**
 
 ```bash
 TEST_POSTGRES_DSN="..." python -m pytest tests/test_backends_postgres.py::test_postgres_indexes_created -v
@@ -429,7 +454,7 @@ TEST_POSTGRES_DSN="..." python -m pytest tests/test_backends_postgres.py::test_p
 
 Expected: FAIL — indexes don't exist yet.
 
-- [ ] **Step 3: Add index creation to `_ensure_schema`**
+- [x] **Step 3: Add index creation to `_ensure_schema`**
 
 Append after the `drawers` CREATE TABLE:
 
@@ -464,7 +489,7 @@ Append after the `drawers` CREATE TABLE:
             )
 ```
 
-- [ ] **Step 4: Run, expect pass**
+- [x] **Step 4: Run, expect pass**
 
 ```bash
 TEST_POSTGRES_DSN="..." python -m pytest tests/test_backends_postgres.py -v
@@ -472,7 +497,7 @@ TEST_POSTGRES_DSN="..." python -m pytest tests/test_backends_postgres.py -v
 
 Expected: PASS for both smoke and index tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add mempalace/backends/postgres.py tests/test_backends_postgres.py
@@ -485,7 +510,7 @@ git commit -m "feat(backends/postgres): HNSW + supporting indexes for fork rows 
 - Modify: `mempalace/backends/postgres.py` (extend `get` and `query` for `where=` translation)
 - Modify: `tests/test_backends_postgres.py` (add where-clause tests)
 
-- [ ] **Step 1: Write failing tests for where-clause filters**
+- [x] **Step 1: Write failing tests for where-clause filters**
 
 ```python
 def test_postgres_filter_by_wing():
@@ -520,11 +545,11 @@ def test_postgres_query_with_where():
     backend.delete_collection("test_qf")
 ```
 
-- [ ] **Step 2: Run, expect failure**
+- [x] **Step 2: Run, expect failure**
 
 Expected: tests FAIL — `where=` is silently dropped in current `get`/`query`.
 
-- [ ] **Step 3: Implement minimal where-translation helper**
+- [x] **Step 3: Implement minimal where-translation helper**
 
 Add to `mempalace/backends/postgres.py`:
 
@@ -581,7 +606,7 @@ def get(self, ids=None, where=None, limit=None):
 
 Update `query` similarly: add `where_sql` after the `WHERE collection = %s` clause.
 
-- [ ] **Step 4: Run, expect pass**
+- [x] **Step 4: Run, expect pass**
 
 ```bash
 TEST_POSTGRES_DSN="..." python -m pytest tests/test_backends_postgres.py -v
@@ -589,7 +614,7 @@ TEST_POSTGRES_DSN="..." python -m pytest tests/test_backends_postgres.py -v
 
 Expected: all four tests PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add mempalace/backends/postgres.py tests/test_backends_postgres.py
@@ -603,7 +628,7 @@ git commit -m "feat(backends/postgres): where-clause filter translation (\$eq, \
 - Modify: `tests/test_config.py` (add tests)
 - Modify: `mempalace/palace.py` (route `get_collection` via `get_backend(config.backend)`)
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```python
 # Append to tests/test_config.py
@@ -630,13 +655,13 @@ def test_backend_env_overrides_config(tmp_path, monkeypatch):
     assert cfg.postgres_dsn == "postgresql://env-host/y"
 ```
 
-- [ ] **Step 2: Run, expect failure (AttributeError on `cfg.backend`)**
+- [x] **Step 2: Run, expect failure (AttributeError on `cfg.backend`)**
 
 ```bash
 python -m pytest tests/test_config.py::test_backend_defaults_to_chroma -v
 ```
 
-- [ ] **Step 3: Add the properties to `MempalaceConfig`**
+- [x] **Step 3: Add the properties to `MempalaceConfig`**
 
 In `mempalace/config.py`:
 
@@ -656,7 +681,7 @@ def postgres_dsn(self) -> Optional[str]:
     return self._file_config.get("postgres_dsn")
 ```
 
-- [ ] **Step 4: Run tests, expect pass**
+- [x] **Step 4: Run tests, expect pass**
 
 ```bash
 python -m pytest tests/test_config.py -v -k backend
@@ -664,7 +689,7 @@ python -m pytest tests/test_config.py -v -k backend
 
 Expected: 3 PASS.
 
-- [ ] **Step 5: Route `get_collection` via the configured backend**
+- [x] **Step 5: Route `get_collection` via the configured backend**
 
 In `mempalace/palace.py`, find the existing `get_collection()` function (currently hardcoded to ChromaDB) and refactor to:
 
@@ -679,7 +704,7 @@ def get_collection(palace_path: str, collection_name: str = "mempalace_drawers")
     return _get_chroma_collection(palace_path, collection_name)
 ```
 
-- [ ] **Step 6: Run the full test suite to confirm no ChromaDB regressions**
+- [x] **Step 6: Run the full test suite to confirm no ChromaDB regressions**
 
 ```bash
 python -m pytest tests/ -x -q 2>&1 | tail -10
@@ -687,7 +712,7 @@ python -m pytest tests/ -x -q 2>&1 | tail -10
 
 Expected: all 1828+ tests PASS (the smoke + filter tests add 4-5 new tests, the ChromaDB path is unchanged).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add mempalace/config.py mempalace/palace.py tests/test_config.py
@@ -699,7 +724,7 @@ git commit -m "feat(config): MEMPALACE_BACKEND + MEMPALACE_POSTGRES_DSN selector
 **Files:**
 - Create: `.github/workflows/test-postgres.yml`
 
-- [ ] **Step 1: Write the workflow**
+- [x] **Step 1: Write the workflow**
 
 ```yaml
 # .github/workflows/test-postgres.yml
@@ -744,7 +769,7 @@ jobs:
         run: python -m pytest tests/test_backends_postgres.py -v
 ```
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add .github/workflows/test-postgres.yml
@@ -765,7 +790,7 @@ Add a Cypher-queryable graph layer co-located with the pgvector backend, selecta
 - Create: `mempalace/knowledge_graph_age.py`
 - Create: `tests/test_knowledge_graph_age.py`
 
-- [ ] **Step 1: Write the failing skeleton test**
+- [x] **Step 1: Write the failing skeleton test**
 
 ```python
 # tests/test_knowledge_graph_age.py
@@ -795,13 +820,13 @@ def test_age_graph_created():
     kg.close()
 ```
 
-- [ ] **Step 2: Run, expect ModuleNotFoundError**
+- [x] **Step 2: Run, expect ModuleNotFoundError**
 
 ```bash
 TEST_POSTGRES_DSN="..." python -m pytest tests/test_knowledge_graph_age.py -v
 ```
 
-- [ ] **Step 3: Implement the skeleton**
+- [x] **Step 3: Implement the skeleton**
 
 ```python
 # mempalace/knowledge_graph_age.py
@@ -846,7 +871,7 @@ class KnowledgeGraphAGE:
         self.close()
 ```
 
-- [ ] **Step 4: Run, expect pass**
+- [x] **Step 4: Run, expect pass**
 
 ```bash
 TEST_POSTGRES_DSN="..." python -m pytest tests/test_knowledge_graph_age.py -v
@@ -854,7 +879,7 @@ TEST_POSTGRES_DSN="..." python -m pytest tests/test_knowledge_graph_age.py -v
 
 Expected: both tests PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add mempalace/knowledge_graph_age.py tests/test_knowledge_graph_age.py
