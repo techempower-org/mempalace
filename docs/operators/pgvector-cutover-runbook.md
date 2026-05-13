@@ -9,14 +9,38 @@ Plan: [`docs/superpowers/plans/2026-05-10-pgvector-age-migration-impl.md`](../su
 
 ## Phase 4.1 — Dry-run on canonical 160K palace
 
-### 1. Snapshot the canonical palace (instant, hardlinks)
+### 1. Snapshot the canonical palace
 
+**If you're stopping the daemon** (cleanest):
 ```bash
-ssh disks 'cp -al /mnt/raid/projects/mempalace-data/palace \
+ssh disks 'sudo systemctl stop palace-daemon && \
+           cp -al /mnt/raid/projects/mempalace-data/palace \
                   /mnt/raid/projects/mempalace-data/palace.dry-run-$(date +%Y-%m-%d)'
 ```
+`cp -al` is O(N) hardlinks — instant.
 
-`cp -al` is an O(N) hardlink copy — no extra disk usage unless files diverge. Confirms in ~10s for 160K drawers.
+**If you're leaving the daemon running** (use `cp -a`, NOT `cp -al`):
+```bash
+ssh disks 'cp -a /mnt/raid/projects/mempalace-data/palace \
+                 /mnt/raid/projects/mempalace-data/palace.dry-run-$(date +%Y-%m-%d)'
+```
+Real copy (~2 min for 8 GB on local SSD). Hardlinks share inodes with the live palace — ChromaDB 1.5.x's concurrent-writer SIGSEGV will trip when the daemon's client and the migration's client touch the same HNSW files.
+
+### 1b. (Likely required) Repair the snapshot before migrating
+
+ChromaDB 1.5.x SIGSEGVs on raw `PersistentClient(path=...)` opens of long-lived palaces with stale HNSW segments or legacy index_metadata files. The daemon serves the live palace fine because it caches client state in-memory; fresh opens crash. The migration tool calls `ChromaBackend._prepare_palace_for_open` before opening, which quarantines invalid metadata + stale segments — but on a heavily-evolved palace that still isn't enough.
+
+Symptom: faulthandler trace ends in `chromadb/api/rust.py:440 in _get` returning SIGSEGV / exit 139 even for metadata-only `col.get(limit=5, include=["metadatas"])`. Related upstream: chroma-core/chroma#6949.
+
+Workaround: rebuild HNSW from sqlite (which has all the drawer data intact):
+
+```bash
+ssh disks '/mnt/raid/projects/mempalace-dryrun-venv/bin/mempalace \
+    --palace /mnt/raid/projects/mempalace-data/palace.dry-run-$(date +%Y-%m-%d) \
+    repair --mode from-sqlite --archive-existing --yes'
+```
+
+This moves the broken snapshot to `palace.dry-run-<date>.pre-rebuild-<timestamp>` and constructs a fresh palace at the original path with the sqlite data re-vectored into clean HNSW segments. Expect 30–60 min for ~270K embeddings.
 
 ### 2. Stand up Postgres on disks
 
