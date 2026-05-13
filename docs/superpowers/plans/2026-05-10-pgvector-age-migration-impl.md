@@ -26,7 +26,7 @@ The plan was written 2026-05-10. PR [#21 (`feat/pgvector-age-impl`)](https://git
 | 1 | 1.4 `backend` + `postgres_dsn` config | ✅ Done | `config.py:301, 318` |
 | 1 | 1.5 Postgres CI workflow | ✅ Done | `.github/workflows/ci.yml:73` (`test-postgres` job, pgvector/pgvector:pg16) |
 | 2 | 2.1 AGE schema + skeleton | ✅ Done | `mempalace/knowledge_graph_age.py`, `tests/test_knowledge_graph_age.py` |
-| 2 | 2.2 `add_triple()` Cypher | ❌ Not done | skeleton file's docstring: "add/query operations and temporal filtering arrive in subsequent..." |
+| 2 | 2.2 `add_triple()` Cypher | ✅ Done | now in `knowledge_graph_age.py` (clear + add_triple + query_triples). Skeleton file's docstring: "add/query operations and temporal filtering arrive in subsequent..." |
 | 2 | 2.3 Temporal filtering | ❌ Not done | as above |
 | 2 | 2.4 `kg_backend` config + routing | ❌ Not done | no `kg_backend` property in `config.py` |
 | 3 | 3.1–3.6 Migration tool (chromadb → pg) | ❌ Not done | `cmd_migrate` exists but it's for ChromaDB version migrations, not substrate migration |
@@ -886,13 +886,13 @@ git add mempalace/knowledge_graph_age.py tests/test_knowledge_graph_age.py
 git commit -m "feat(kg): KnowledgeGraphAGE skeleton + graph bootstrap"
 ```
 
-### Task 2.2: Implement `add_triple()` with Cypher MERGE/CREATE
+### Task 2.2: Implement `add_triple()` with Cypher MERGE/CREATE ✅ Done 2026-05-13
 
 **Files:**
 - Modify: `mempalace/knowledge_graph_age.py`
 - Modify: `tests/test_knowledge_graph_age.py`
 
-- [ ] **Step 1: Write failing tests for add + read-back**
+- [x] **Step 1: Write failing tests for add + read-back**
 
 ```python
 def test_age_add_triple_basic():
@@ -934,9 +934,9 @@ def test_age_rejects_inverted_temporal_interval():
     kg.close()
 ```
 
-- [ ] **Step 2: Run, expect AttributeError (`add_triple` not implemented)**
+- [x] **Step 2: Run, expect AttributeError (`add_triple` not implemented)**
 
-- [ ] **Step 3: Implement `clear`, `add_triple`, `query_triples`**
+- [x] **Step 3: Implement `clear`, `add_triple`, `query_triples`**
 
 ```python
 # Append to mempalace/knowledge_graph_age.py
@@ -1064,7 +1064,7 @@ class KnowledgeGraphAGE:
         return rows
 ```
 
-- [ ] **Step 4: Run, expect pass**
+- [x] **Step 4: Run, expect pass**
 
 ```bash
 TEST_POSTGRES_DSN="..." python -m pytest tests/test_knowledge_graph_age.py -v
@@ -1072,7 +1072,7 @@ TEST_POSTGRES_DSN="..." python -m pytest tests/test_knowledge_graph_age.py -v
 
 Expected: 4 PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add mempalace/knowledge_graph_age.py tests/test_knowledge_graph_age.py

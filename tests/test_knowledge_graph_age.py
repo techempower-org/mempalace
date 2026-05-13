@@ -58,3 +58,80 @@ def test_age_context_manager():
         assert not kg._conn.closed
     # After the with block, the connection should be closed.
     assert kg._conn.closed
+
+
+def test_age_add_triple_basic():
+    """add_triple persists a triple that query_triples can read back."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple(
+            subject="JP",
+            relation_type="works_on",
+            object_="mempalace",
+            source="drawer_abc",
+            valid_from="2026-05-01",
+            valid_to=None,
+            confidence=0.9,
+        )
+        triples = kg.query_triples(subject="JP")
+        assert len(triples) == 1
+        t = triples[0]
+        assert t["subject"] == "JP"
+        assert t["relation_type"] == "works_on"
+        assert t["object"] == "mempalace"
+        assert t["source"] == "drawer_abc"
+        assert t["valid_from"] == "2026-05-01"
+        assert t["confidence"] == 0.9
+    finally:
+        kg.close()
+
+
+def test_age_rejects_inverted_temporal_interval():
+    """add_triple rejects valid_to < valid_from at write time."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        with pytest.raises(ValueError, match="valid_to.*valid_from"):
+            kg.add_triple(
+                subject="X",
+                relation_type="r",
+                object_="Y",
+                valid_from="2026-05-10",
+                valid_to="2026-05-01",  # inverted
+            )
+    finally:
+        kg.close()
+
+
+def test_age_query_triples_returns_empty_on_no_match():
+    """query_triples returns [] when nothing matches the filter."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple(subject="Alice", relation_type="knows", object_="Bob")
+        triples = kg.query_triples(subject="NonExistent")
+        assert triples == []
+    finally:
+        kg.close()
+
+
+def test_age_clear_drops_and_recreates_graph():
+    """clear() removes existing triples and restores empty graph."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple(subject="A", relation_type="r", object_="B")
+        assert len(kg.query_triples(subject="A")) == 1
+        kg.clear()
+        assert kg.query_triples(subject="A") == []
+    finally:
+        kg.close()
