@@ -1,29 +1,12 @@
 #!/bin/bash
-# MemPalace PreCompact Hook — thin wrapper calling Python CLI
-# All logic lives in mempalace.hooks_cli for cross-harness extensibility
-run_mempalace_hook() {
-  if [ -n "$MEMPALACE_PYTHON" ] && [ -x "$MEMPALACE_PYTHON" ]; then
-    "$MEMPALACE_PYTHON" -m mempalace hook run "$@"
-    return $?
-  fi
-
-  if command -v mempalace >/dev/null 2>&1; then
-    mempalace hook run "$@"
-    return $?
-  fi
-
-  if command -v python3 >/dev/null 2>&1 && python3 -c "import mempalace" >/dev/null 2>&1; then
-    python3 -m mempalace hook run "$@"
-    return $?
-  fi
-
-  if command -v python >/dev/null 2>&1 && python -c "import mempalace" >/dev/null 2>&1; then
-    python -m mempalace hook run "$@"
-    return $?
-  fi
-
-  echo "MemPalace hook error: could not find a runnable mempalace command or module" >&2
-  return 1
-}
-
-run_mempalace_hook --hook precompact --harness claude-code
+# MemPalace PreCompact Hook — thin wrapper delegating to palace-daemon's hook.py.
+#
+# See companion mempal-stop-hook.sh for the rationale. Post-2026-05-11
+# we route all hook traffic through palace-daemon so a single canonical
+# palace is the source of truth. This script is the back-compat shim
+# for stale Claude Code sessions still pointing at the .sh wrapper.
+HOOK_PY=/home/jp/Projects/palace-daemon/clients/hook.py
+if [ -x "$(command -v python3)" ] && [ -f "$HOOK_PY" ]; then
+    exec python3 "$HOOK_PY" --hook precompact --harness claude-code "$@"
+fi
+exit 0

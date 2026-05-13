@@ -1,29 +1,19 @@
 #!/bin/bash
-# MemPalace Stop Hook — thin wrapper calling Python CLI
-# All logic lives in mempalace.hooks_cli for cross-harness extensibility
-run_mempalace_hook() {
-  if [ -n "$MEMPALACE_PYTHON" ] && [ -x "$MEMPALACE_PYTHON" ]; then
-    "$MEMPALACE_PYTHON" -m mempalace hook run "$@"
-    return $?
-  fi
-
-  if command -v mempalace >/dev/null 2>&1; then
-    mempalace hook run "$@"
-    return $?
-  fi
-
-  if command -v python3 >/dev/null 2>&1 && python3 -c "import mempalace" >/dev/null 2>&1; then
-    python3 -m mempalace hook run "$@"
-    return $?
-  fi
-
-  if command -v python >/dev/null 2>&1 && python -c "import mempalace" >/dev/null 2>&1; then
-    python -m mempalace hook run "$@"
-    return $?
-  fi
-
-  echo "MemPalace hook error: could not find a runnable mempalace command or module" >&2
-  return 1
-}
-
-run_mempalace_hook --hook stop --harness claude-code
+# MemPalace Stop Hook — thin wrapper delegating to palace-daemon's hook.py.
+#
+# Post-2026-05-11 split-brain fix: all hook traffic routes through the
+# palace-daemon HTTP gateway so a single canonical palace is the source
+# of truth. The hooks.json in this plugin already declares
+# palace-daemon's hook.py directly, but Claude Code sessions that loaded
+# the old hook config (which called this script) keep firing it until
+# they restart. Making this script a thin pass-through means those
+# stale sessions still route through the daemon instead of erroring.
+#
+# If palace-daemon's hook.py is missing on this machine, we exit 0 (not
+# a hard error) so a Stop event from a host without palace-daemon
+# doesn't gum up the harness.
+HOOK_PY=/home/jp/Projects/palace-daemon/clients/hook.py
+if [ -x "$(command -v python3)" ] && [ -f "$HOOK_PY" ]; then
+    exec python3 "$HOOK_PY" --hook stop --harness claude-code "$@"
+fi
+exit 0
