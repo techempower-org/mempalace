@@ -164,7 +164,7 @@ def test_dry_run_exits_after_preflight(tmp_path, capsys):
     assert "dry-run" in out.lower()
 
 
-# ── Phase 1 — schema creation (real postgres required) ───────────────
+# ── Schema creation (real postgres required) ─────────────────────────
 
 
 @pgmark
@@ -179,19 +179,21 @@ def test_phase_1_creates_extensions_and_checkpoint_table(capsys):
 
     phase_1_schema(POSTGRES_DSN)
     out = capsys.readouterr().out
-    assert "phase 1" in out.lower()
+    assert "schema" in out.lower()
 
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute("SELECT extname FROM pg_extension WHERE extname IN ('vector', 'age')")
         ext = {r[0] for r in cur.fetchall()}
-        assert "vector" in ext, "pgvector should be installed after phase 1"
+        assert "vector" in ext, "pgvector should be installed after the schema-setup step"
         # AGE may or may not install depending on infrastructure; required at
         # preflight, but a non-AGE setup may have only vector.
         cur.execute(
             "SELECT to_regclass(%s)",
             (CHECKPOINT_TABLE,),
         )
-        assert cur.fetchone()[0] is not None, f"{CHECKPOINT_TABLE} should exist after phase 1"
+        assert (
+            cur.fetchone()[0] is not None
+        ), f"{CHECKPOINT_TABLE} should exist after the schema-setup step"
         # Checkpoint recorded
         with psycopg2.connect(POSTGRES_DSN) as conn2:
             assert _get_checkpoint(conn2, "migration_phase_schema") == "done"
@@ -206,7 +208,7 @@ def test_phase_1_idempotent():
     phase_1_schema(POSTGRES_DSN)  # second call must not raise
 
 
-# ── Phase 2 — Drawer batch copy (real postgres required) ─────────────
+# ── Drawer batch copy (real postgres required) ───────────────────────
 
 
 @pytest.fixture

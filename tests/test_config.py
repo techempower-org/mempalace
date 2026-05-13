@@ -347,7 +347,7 @@ def test_iso_temporal_normalizes_plus_zero_offset_to_z():
     assert sanitize_iso_temporal("2026-05-06T14:23:00+00:00") == "2026-05-06T14:23:00Z"
 
 
-# ── kg_backend (Phase 2.4) ────────────────────────────────────────────
+# ── kg_backend feature ───────────────────────────────────────────────
 
 
 def test_kg_backend_defaults_to_sqlite(tmp_path, monkeypatch):

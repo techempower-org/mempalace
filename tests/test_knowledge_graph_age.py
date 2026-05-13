@@ -192,8 +192,8 @@ def test_age_as_of_with_no_valid_from():
         # No temporal bounds at all — always active
         kg.add_triple("X", "is", "Y")
         for date in ("1900-01-01", "2026-05-13", "2099-12-31"):
-            assert len(kg.query_triples(subject="X", as_of=date)) == 1, (
-                f"unbounded triple should be active as of {date}"
-            )
+            assert (
+                len(kg.query_triples(subject="X", as_of=date)) == 1
+            ), f"unbounded triple should be active as of {date}"
     finally:
         kg.close()

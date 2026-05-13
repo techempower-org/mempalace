@@ -84,9 +84,9 @@ def test_wrapper_execs_hook_py_with_correct_args(
     payload = '{"session_id":"abc123"}'
     result = _run_hook(script_name, payload, hook_py=fake_hook_py)
 
-    assert result.returncode == 0, (
-        f"wrapper returned {result.returncode}; stdout={result.stdout!r} stderr={result.stderr!r}"
-    )
+    assert (
+        result.returncode == 0
+    ), f"wrapper returned {result.returncode}; stdout={result.stdout!r} stderr={result.stderr!r}"
     assert args_file.read_text(encoding="utf-8") == (f"--hook {hook_name} --harness claude-code")
     assert stdin_file.read_text(encoding="utf-8") == payload
 

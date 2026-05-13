@@ -130,7 +130,7 @@ def _check_postgres_extensions(postgres_dsn: str) -> None:
             )
 
 
-# ── Phase 1 — Schema (extensions + checkpoint table) ─────────────────
+# ── Schema setup (extensions + checkpoint table) ─────────────────────
 
 
 CHECKPOINT_TABLE = "mempalace_backend_meta"
@@ -142,7 +142,7 @@ def phase_1_schema(postgres_dsn: str) -> None:
     Idempotent: ``CREATE EXTENSION IF NOT EXISTS`` and
     ``CREATE TABLE IF NOT EXISTS`` mean a re-run is a no-op. The drawer
     and closet tables themselves are NOT created here — ``PostgresBackend``
-    bootstraps those lazily during phase 2 when the first write lands.
+    bootstraps those lazily during the drawer-copy phase when the first write lands.
     Keeping schema-creation responsibilities split (extensions+meta here,
     data tables in the backend) avoids two sources of truth for the
     drawer schema.
@@ -180,10 +180,10 @@ def phase_1_schema(postgres_dsn: str) -> None:
     # Connection 2: transactional for the checkpoint write
     with psycopg2.connect(postgres_dsn) as conn:
         _set_checkpoint(conn, "migration_phase_schema", "done")
-    print("[phase 1] schema created")
+    print("[schema] schema created")
 
 
-# ── Phase 2 — Drawer batch copy ──────────────────────────────────────
+# ── Drawer batch copy ─────────────────────────────────────────────────
 
 
 def phase_2_drawers(
@@ -227,7 +227,7 @@ def phase_2_drawers(
     collections = list(client.list_collections())
 
     if not collections:
-        print("[phase 2] source palace has no collections; nothing to copy")
+        print("[drawers] source palace has no collections; nothing to copy")
         return
 
     with psycopg2.connect(postgres_dsn) as conn:
@@ -235,12 +235,12 @@ def phase_2_drawers(
             name = col_handle.name if hasattr(col_handle, "name") else str(col_handle)
             done_key = f"migration_drawer_done::{name}"
             if _get_checkpoint(conn, done_key) == "done":
-                print(f"[phase 2] skipping {name!r} (checkpoint says done)")
+                print(f"[drawers] skipping {name!r} (checkpoint says done)")
                 continue
 
             col = client.get_collection(name)
             total = col.count()
-            print(f"[phase 2] copying {total} drawers from collection {name!r}")
+            print(f"[drawers] copying {total} drawers from collection {name!r}")
 
             # PostgresBackend creates one table per collection name; reuse
             # the chroma collection's name as the postgres table name so
@@ -283,11 +283,11 @@ def phase_2_drawers(
                     f"migration_drawer_progress::{name}",
                     f"{copied}/{total}",
                 )
-                print(f"[phase 2]   {copied}/{total} copied in {name!r}")
+                print(f"[drawers]   {copied}/{total} copied in {name!r}")
 
             _set_checkpoint(conn, done_key, "done")
         _set_checkpoint(conn, "migration_phase_drawers", "done")
-    print("[phase 2] drawers complete")
+    print("[drawers] drawers complete")
 
 
 # ── Phase 5 — Knowledge graph (sqlite → AGE) ─────────────────────────
@@ -687,7 +687,7 @@ def _redact_dsn(dsn: str) -> str:
     return " ".join(parts)
 
 
-# ── Checkpoint helpers (used from phase 1+) ───────────────────────────
+# ── Checkpoint helpers (used from schema-setup onward) ───────────────────────────
 
 
 def _set_checkpoint(conn, key: str, value: str) -> None:

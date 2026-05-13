@@ -28,10 +28,10 @@ class KnowledgeGraphAGE:
       inverted temporal intervals at write time.
     - ``query_triples(subject=..., **filters)`` — read triples matching the
       filter. Filter set is intentionally small for now; temporal ``as_of``
-      filtering arrives in Phase 2.3.
+      filtering arrives in the as_of-filter feature.
     - ``clear()`` — drop + recreate the graph (test isolation).
 
-    Routing via ``MempalaceConfig.kg_backend`` arrives in Phase 2.4.
+    Routing via ``MempalaceConfig.kg_backend`` arrives in the kg_backend feature.
     """
 
     GRAPH_NAME = "mempalace_kg"

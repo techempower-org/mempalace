@@ -122,7 +122,7 @@ def _resolve_kg_path() -> str:
 def _get_kg() -> KnowledgeGraph:
     """Return the cached KG instance, constructing one lazily.
 
-    Backend selection (Phase 2.4 of the pgvector-age migration plan):
+    Backend selection (kg_backend routing, per the pgvector-age migration plan):
     ``MEMPALACE_KG_BACKEND=age`` or ``config.json {"kg_backend": "age"}``
     routes construction to ``KnowledgeGraphAGE`` against
     ``MempalaceConfig.postgres_dsn``. Default ``"sqlite"`` keeps the

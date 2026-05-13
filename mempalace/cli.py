@@ -2038,7 +2038,7 @@ def main():
         "--batch-size",
         type=int,
         default=1000,
-        help="Drawer batch size for phase 2 (default 1000)",
+        help="Drawer batch size for the drawer-copy step (default 1000)",
     )
     p_mig_pg.add_argument(
         "--dry-run",
