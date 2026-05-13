@@ -83,7 +83,7 @@ Workflow for landing new fork-ahead changes lives in [Documentation maintenance]
 Claude Code has two complementary memory layers, used in tandem:
 
 - **Auto-memory** (`~/.claude/projects/*/memory/`) — lightweight preferences, context, feedback. Manual writes only. (Anthropic's "Auto Dream" research-preview shipped late April 2026 in Claude Code `/dream` + the Managed Agents Dreams API; MemPalace deliberately stays un-consolidated and the Dreams API design ratifies the verbatim-vs-derivative axis. See `~/.claude/projects/-home-jp-Projects-memorypalace/memory/project_auto_dream.md`.)
-- **MemPalace** (`~/.mempalace/palace/`, ~160K drawers behind the daemon) — verbatim conversations, tool output, code. Write-only archive, searchable via MCP. Completeness is the feature.
+- **MemPalace** (`~/.mempalace/palace/`, ~183K drawers behind the daemon) — verbatim conversations, tool output, code. Write-only archive, searchable via MCP. Completeness is the feature. Wing/room layout follows the canonical 7-room taxonomy (see `palace-taxonomy` skill / `~/Projects/familiar.realm.watch/docs/superpowers/specs/2026-05-13-palace-room-taxonomy.md`).
 
 Both systems coexist. Hook saves are scoped to MemPalace ("For THIS save, use MemPalace MCP tools only") — this is not a permanent ban on auto-memory.
 
