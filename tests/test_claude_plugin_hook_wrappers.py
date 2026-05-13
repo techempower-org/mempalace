@@ -85,12 +85,9 @@ def test_wrapper_execs_hook_py_with_correct_args(
     result = _run_hook(script_name, payload, hook_py=fake_hook_py)
 
     assert result.returncode == 0, (
-        f"wrapper returned {result.returncode}; "
-        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+        f"wrapper returned {result.returncode}; stdout={result.stdout!r} stderr={result.stderr!r}"
     )
-    assert args_file.read_text(encoding="utf-8") == (
-        f"--hook {hook_name} --harness claude-code"
-    )
+    assert args_file.read_text(encoding="utf-8") == (f"--hook {hook_name} --harness claude-code")
     assert stdin_file.read_text(encoding="utf-8") == payload
 
 
@@ -117,8 +114,7 @@ def test_wrapper_passes_through_extra_args(
     args_file = tmp_path / "args.txt"
     fake_hook_py = tmp_path / "hook.py"
     fake_hook_py.write_text(
-        "import sys\n"
-        f"open({str(args_file)!r}, 'w').write(' '.join(sys.argv[1:]))\n",
+        f"import sys\nopen({str(args_file)!r}, 'w').write(' '.join(sys.argv[1:]))\n",
         encoding="utf-8",
     )
 
@@ -127,8 +123,7 @@ def test_wrapper_passes_through_extra_args(
 
     assert BASH is not None
     result = subprocess.run(
-        [BASH, _shell_path(PLUGIN_HOOKS_DIR / script_name),
-         "--extra-flag", "extra-value"],
+        [BASH, _shell_path(PLUGIN_HOOKS_DIR / script_name), "--extra-flag", "extra-value"],
         input="{}",
         text=True,
         capture_output=True,
