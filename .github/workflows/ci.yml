@@ -1,10 +1,20 @@
 name: Tests
 
+# Path-filter: skip the full workflow when only docs change (markdown
+# under any path + the docs/ tree). Mixed PRs (docs + code) still run.
+# workflow_dispatch lets us manually re-run the full matrix when needed.
 on:
   push:
     branches: [main, develop]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
   pull_request:
     branches: [main, develop]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  workflow_dispatch:
 
 jobs:
   test-linux:
@@ -21,7 +31,12 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: python -m pytest tests/ -v --ignore=tests/benchmarks --cov=mempalace --cov-report=term-missing --cov-fail-under=80 --durations=10
 
+  # Windows + macOS run only on manual dispatch (Actions budget — Windows
+  # is 2x Linux billing, macOS is 10x). Trigger via Actions tab → "Tests"
+  # → Run workflow when a release or platform-sensitive change needs the
+  # cross-platform pass.
   test-windows:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -33,6 +48,7 @@ jobs:
       - run: python -m pytest tests/ -v --ignore=tests/benchmarks --cov=mempalace --cov-report=term-missing --cov-fail-under=80 --durations=10
 
   test-macos:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
