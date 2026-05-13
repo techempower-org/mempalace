@@ -373,7 +373,7 @@ def test_phase_5_no_sqlite_kg_marks_done(tmp_path, capsys):
 def test_phase_5_copies_triples(tmp_path, capsys):
     """phase_5_kg moves triples from sqlite to AGE."""
     from mempalace.migrate_to_postgres import (
-        phase_1_schema, phase_5_kg, _set_checkpoint, _KG_DONE_KEY,
+        phase_1_schema, phase_5_kg, _KG_DONE_KEY,
     )
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
 
@@ -458,7 +458,7 @@ def test_phase_5_skips_when_done_checkpoint(tmp_path, capsys):
 def test_phase_6_verify_reports_match(fixture_chroma_palace, tmp_path, capsys):
     """After full migration, phase_6_verify returns all_match=True."""
     from mempalace.migrate_to_postgres import (
-        phase_1_schema, phase_2_drawers, phase_5_kg, phase_6_verify, _KG_DONE_KEY,
+        phase_1_schema, phase_2_drawers, phase_5_kg, phase_6_verify,
     )
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
 
@@ -536,7 +536,7 @@ def test_phase_7_redacts_dsn_in_output(capsys, tmp_path):
     """The printed cutover instructions show a redacted DSN, not the password."""
     if POSTGRES_DSN is None:
         pytest.skip("phase_7 needs postgres for checkpoint write")
-    from mempalace.migrate_to_postgres import phase_1_schema, phase_7_done
+    from mempalace.migrate_to_postgres import phase_1_schema
 
     phase_1_schema(POSTGRES_DSN)
     # Use a DSN with a fake password in it; checkpoint goes via the real DSN
