@@ -679,26 +679,59 @@ class PostgresCollection(BaseCollection):
             return
         self._rows_since_index_check = 0
 
-        cur = self._get_conn().cursor()
         index_name = f"{self.table_name}_vec_idx"
-        cur.execute("SELECT 1 FROM pg_indexes WHERE indexname = %s", (index_name,))
-        if cur.fetchone():
-            self._vector_index_ready = True
-            return
 
-        if self._estimated_count() < VECTOR_INDEX_MIN_ROWS:
-            return
+        # Open a side connection for the index-management transaction.
+        # pg_advisory_xact_lock auto-releases at commit and requires a
+        # real transaction; the main backend connection is autocommit=
+        # True, and psycopg2 forbids toggling autocommit mid-flight (we
+        # hit this earlier in phase_1_schema). A short-lived side
+        # connection sidesteps both constraints.
+        #
+        # The advisory lock serializes check+create across every
+        # connection on this database, preventing the lookup-vs-create
+        # race that wedges Postgres when concurrent writers cross the
+        # threshold simultaneously and each issue their own CREATE
+        # INDEX (each takes ACCESS EXCLUSIVE; they stack and block all
+        # other writes for the duration of the build).
+        #
+        # `IF NOT EXISTS` is belt-and-suspenders against any path that
+        # slips past the advisory (e.g. an out-of-band loader that
+        # already created an HNSW under this exact name).
+        psycopg2, _sql = _load_psycopg2()
+        ix_conn = psycopg2.connect(self.dsn)
+        try:
+            with ix_conn:
+                with ix_conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(hashtext(%s))",
+                        (f"vec_idx:{self.table_name}",),
+                    )
+                    cur.execute(
+                        "SELECT 1 FROM pg_indexes WHERE indexname = %s",
+                        (index_name,),
+                    )
+                    if cur.fetchone():
+                        self._vector_index_ready = True
+                        return
 
-        ops = "svec_cosine_ops" if self._vec_type == "svec" else "vector_cosine_ops"
-        cur.execute(
-            self._sql.SQL("CREATE INDEX {} ON {} USING {} (embedding {})").format(
-                self._sql.Identifier(index_name),
-                self._table_id,
-                self._sql.SQL(self._index_am),
-                self._sql.SQL(ops),
-            )
-        )
-        self._vector_index_ready = True
+                    if self._estimated_count() < VECTOR_INDEX_MIN_ROWS:
+                        return
+
+                    ops = "svec_cosine_ops" if self._vec_type == "svec" else "vector_cosine_ops"
+                    cur.execute(
+                        self._sql.SQL(
+                            "CREATE INDEX IF NOT EXISTS {} ON {} USING {} (embedding {})"
+                        ).format(
+                            self._sql.Identifier(index_name),
+                            self._table_id,
+                            self._sql.SQL(self._index_am),
+                            self._sql.SQL(ops),
+                        )
+                    )
+                    self._vector_index_ready = True
+        finally:
+            ix_conn.close()
 
     def _estimated_count(self) -> int:
         cur = self._get_conn().cursor()
