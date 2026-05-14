@@ -485,8 +485,9 @@ def mine_sessions(
     manifest drawers — ONE drawer per session, addressable by session_id.
 
     Restores the addressable-session-anchor semantic that the hook's
-    legacy ``mempalace_diary_write`` call used to provide. The Phase 1D
-    refactor moved hook checkpointing to ``mine_convos`` which produces
+    legacy ``mempalace_diary_write`` call used to provide. The
+    unified-write-path refactor moved hook checkpointing to ``mine_convos``
+    which produces
     N chunked drawers; this complements it with a single manifest
     drawer per session that callers can grab as a navigation anchor
     ("did session X exist? show me a summary").

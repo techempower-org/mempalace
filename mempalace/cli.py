@@ -749,7 +749,7 @@ def cmd_mine(args):
 
     try:
         if args.mode == "session":
-            # Phase 1D follow-up: per-session manifest mode.
+            # hybrid-search-taxonomy follow-up: per-session manifest mode.
             # One addressable drawer per session file (vs convos mode's
             # N chunked drawers). Use when you want a single navigable
             # anchor for "did session X exist? what did it cover?" —
@@ -1035,7 +1035,7 @@ def cmd_migrate_to_postgres(args):
 def cmd_rooms(args):
     """Manage the canonical room set (mempalace_canonical_rooms table).
 
-    Phase 1D follow-up. The FK constraint on mempalace_drawers.room
+    hybrid-search-taxonomy follow-up. The FK constraint on mempalace_drawers.room
     means this CLI is the supported way to add/rename/remove canonical
     rooms without breaking the DB. ON UPDATE CASCADE on the FK makes
     renames safe (all drawers auto-update); removes fail if any drawer
@@ -1141,7 +1141,7 @@ def cmd_rooms(args):
     except psycopg2.errors.UndefinedTable:
         print(
             "error: mempalace_canonical_rooms table doesn't exist yet.\n"
-            "  Run the Phase 1D migration first (see hybrid-search-taxonomy spec).",
+            "  Run the hybrid-search-taxonomy migration first (see hybrid-search-taxonomy spec).",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -2193,7 +2193,7 @@ def main():
     )
     p_purge.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
 
-    # ── rooms — manage the canonical room set (Phase 1D follow-up) ────
+    # ── rooms — manage the canonical room set (hybrid-search-taxonomy follow-up) ────
     p_rooms = sub.add_parser(
         "rooms",
         help="Manage the canonical room set (mempalace_canonical_rooms postgres table)",
