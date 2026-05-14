@@ -1247,9 +1247,7 @@ def _merge_hybrid_candidates(
     # hybrid retrieval explicitly wants BM25 candidates that vector
     # missed, even when a strict vector threshold would normally filter
     # them out.
-    _merge_bm25_union_candidates(
-        hits, query, palace_path, wing, room, n_results, max_distance=0.0
-    )
+    _merge_bm25_union_candidates(hits, query, palace_path, wing, room, n_results, max_distance=0.0)
 
     # Step 2 + 3: graph expansion requires postgres backend
     dsn = None

@@ -473,6 +473,179 @@ def _file_chunks_locked(collection, source_file, chunks, wing, room, agent, extr
     return drawers_added, room_counts_delta, False
 
 
+def mine_sessions(
+    convo_dir: str,
+    palace_path: str,
+    wing: str = None,
+    agent: str = "mempalace",
+    limit: int = 0,
+    dry_run: bool = False,
+):
+    """Mine a directory of session/transcript files into per-session
+    manifest drawers — ONE drawer per session, addressable by session_id.
+
+    Restores the addressable-session-anchor semantic that the hook's
+    legacy ``mempalace_diary_write`` call used to provide. The Phase 1D
+    refactor moved hook checkpointing to ``mine_convos`` which produces
+    N chunked drawers; this complements it with a single manifest
+    drawer per session that callers can grab as a navigation anchor
+    ("did session X exist? show me a summary").
+
+    Content of each manifest drawer (no LLM call required — pure
+    structural extraction):
+
+      Session manifest
+      ─────────────────
+      session_id:        <UUID from filename stem>
+      started_at:        <first message timestamp>
+      ended_at:          <last message timestamp>
+      exchanges:         <count of user messages>
+      first_user_msg:    <first 400 chars of first user message>
+      last_user_msg:     <first 400 chars of last user message>
+      cwd:               <cwd field if present>
+
+    Drawer ID is stable: ``drawer_<wing>_sessions_<sha256(session_id)>``
+    so re-running on the same session overwrites the existing manifest
+    rather than duplicating.
+
+    Wing defaults to the convo_dir basename per the spec's normalization
+    rules. Room is hard-coded ``sessions`` (canonical).
+    """
+    import hashlib
+    import json as _json
+
+    from .config import normalize_wing_name
+
+    if not wing:
+        wing = normalize_wing_name(Path(convo_dir).expanduser().resolve().name)
+
+    files = scan_convos(convo_dir)
+    if limit > 0:
+        files = files[:limit]
+
+    print(f"\n{'=' * 55}")
+    print("  MemPalace Mine — Sessions (manifest mode)")
+    print(f"{'=' * 55}")
+    print(f"  Wing:    {wing}")
+    print(f"  Files:   {len(files)}")
+    print(f"  Palace:  {palace_path}")
+    print("  Room:    sessions  (canonical, FK-enforced)")
+    if dry_run:
+        print("  DRY RUN — no writes")
+    print()
+
+    # Open palace via the configured backend (chroma or postgres). Same
+    # path as mine_convos so we don't need a separate write surface.
+    if not dry_run:
+        from .mcp_server import _get_collection
+
+        collection = _get_collection(create=True)
+
+    written = 0
+    skipped = 0
+    for filepath in files:
+        try:
+            with filepath.open("r", encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+        except OSError:
+            skipped += 1
+            continue
+
+        # Parse JSONL transcript (Claude Code shape). Tolerate non-JSONL
+        # files by falling through to "single-blob" manifest.
+        first_user_msg = ""
+        last_user_msg = ""
+        first_ts = ""
+        last_ts = ""
+        user_count = 0
+        cwd = ""
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = _json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("cwd") and not cwd:
+                cwd = str(entry["cwd"])
+            ts = entry.get("timestamp") or ""
+            msg = entry.get("message", {})
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    # Newer Claude transcripts use content blocks; concat the text blocks.
+                    text = " ".join(
+                        b.get("text", "")
+                        for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                else:
+                    text = str(content)
+                text = text.strip()
+                if not text or "<command-message>" in text:
+                    continue
+                user_count += 1
+                if not first_user_msg:
+                    first_user_msg = text[:400]
+                    first_ts = ts
+                last_user_msg = text[:400]
+                last_ts = ts
+
+        if user_count == 0:
+            skipped += 1
+            continue
+
+        session_id = filepath.stem  # UUID from filename
+        manifest_text = (
+            f"Session manifest\n"
+            f"─────────────────\n"
+            f"session_id:     {session_id}\n"
+            f"started_at:     {first_ts or '(unknown)'}\n"
+            f"ended_at:       {last_ts or '(unknown)'}\n"
+            f"exchanges:      {user_count}\n"
+            f"cwd:            {cwd or '(unknown)'}\n"
+            f"first_user_msg: {first_user_msg or '(empty)'}\n"
+            f"last_user_msg:  {last_user_msg or '(empty)'}\n"
+        )
+
+        # Stable ID — re-running upserts rather than duplicates.
+        sid_hash = hashlib.sha256(session_id.encode()).hexdigest()[:24]
+        drawer_id = f"drawer_{wing}_sessions_{sid_hash}"
+        metadata = {
+            "session_id": session_id,
+            "started_at": first_ts,
+            "ended_at": last_ts,
+            "exchanges": user_count,
+            "cwd": cwd,
+            "source_file": str(filepath),
+            "ingest_mode": "session",
+            "agent": agent,
+            "wing": wing,
+            "room": "sessions",
+        }
+
+        if dry_run:
+            print(f"  [DRY RUN] {filepath.name} → {drawer_id} ({user_count} exchanges)")
+            written += 1
+            continue
+
+        try:
+            collection.upsert(
+                ids=[drawer_id],
+                documents=[manifest_text],
+                metadatas=[metadata],
+            )
+            written += 1
+        except Exception as e:
+            print(f"  WARN failed to write {filepath.name}: {e}")
+            skipped += 1
+
+    print(f"\nWrote {written} session manifest drawers; skipped {skipped}.")
+
+
 def mine_convos(
     convo_dir: str,
     palace_path: str,

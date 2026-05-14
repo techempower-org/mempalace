@@ -748,7 +748,23 @@ def cmd_mine(args):
     from .palace import MineAlreadyRunning
 
     try:
-        if args.mode == "convos":
+        if args.mode == "session":
+            # Phase 1D follow-up: per-session manifest mode.
+            # One addressable drawer per session file (vs convos mode's
+            # N chunked drawers). Use when you want a single navigable
+            # anchor for "did session X exist? what did it cover?" —
+            # complements convos mode, doesn't replace it.
+            from .convo_miner import mine_sessions
+
+            mine_sessions(
+                convo_dir=args.dir,
+                palace_path=palace_path,
+                wing=args.wing,
+                agent=args.agent,
+                limit=args.limit,
+                dry_run=args.dry_run,
+            )
+        elif args.mode == "convos":
             from .convo_miner import mine_convos
 
             mine_convos(
@@ -1739,9 +1755,13 @@ def main():
     p_mine.add_argument("dir", help="Directory to mine")
     p_mine.add_argument(
         "--mode",
-        choices=["projects", "convos"],
+        choices=["projects", "convos", "session"],
         default="projects",
-        help="Ingest mode: 'projects' for code/docs (default), 'convos' for chat exports",
+        help=(
+            "Ingest mode: 'projects' for code/docs (default), 'convos' for chat exports "
+            "(one drawer per exchange), 'session' for one addressable manifest drawer per "
+            "session file (use as an anchor for 'did session X exist?' queries)"
+        ),
     )
     p_mine.add_argument("--wing", default=None, help="Wing name (default: directory name)")
     p_mine.add_argument(
