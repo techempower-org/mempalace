@@ -210,6 +210,7 @@ def phase_2_drawers(
     """
     import chromadb
     import psycopg2
+    from .backends.base import PalaceRef
     from .backends.postgres import PostgresBackend
     from .backends.chroma import ChromaBackend
 
@@ -224,6 +225,10 @@ def phase_2_drawers(
 
     client = chromadb.PersistentClient(path=chroma_path)
     backend = PostgresBackend(dsn=postgres_dsn)
+    # PalaceRef identifies the source palace for backend's per-palace
+    # caches. Use the chroma path as the canonical id (filesystem-rooted
+    # palace); namespace is unused for the local migration.
+    palace_ref = PalaceRef(id=chroma_path, local_path=chroma_path)
     collections = list(client.list_collections())
 
     if not collections:
@@ -244,8 +249,9 @@ def phase_2_drawers(
 
             # PostgresBackend creates one table per collection name; reuse
             # the chroma collection's name as the postgres table name so
-            # downstream reads can address by collection.
-            pg_col = backend.get_or_create_collection(name)
+            # downstream reads can address by collection. Post-#995 the
+            # API is get_collection(*, palace, collection_name, create=True).
+            pg_col = backend.get_collection(palace=palace_ref, collection_name=name, create=True)
 
             offset = 0
             copied = 0
@@ -486,9 +492,11 @@ def phase_6_verify(
 
     # ─── Drawer count parity (per-collection) ──────────────────────────
     client = chromadb.PersistentClient(path=chroma_path)
+    from .backends.base import PalaceRef
     from .backends.postgres import PostgresBackend
 
     backend = PostgresBackend(dsn=postgres_dsn)
+    palace_ref = PalaceRef(id=chroma_path, local_path=chroma_path)
 
     sample_pool: list = []  # list of (collection, id) tuples to sample from
     for col_handle in client.list_collections():
@@ -498,7 +506,7 @@ def phase_6_verify(
         result["chroma_drawer_count"] += c_total
 
         try:
-            pg_col = backend.get_or_create_collection(name)
+            pg_col = backend.get_collection(palace=palace_ref, collection_name=name, create=True)
         except Exception as e:
             print(f"[phase 6]   postgres collection {name!r} unreachable: {e}")
             continue
@@ -564,7 +572,9 @@ def phase_6_verify(
             src = col.get(ids=[drawer_id], include=["documents", "metadatas"])
             src_doc = (src.get("documents") or [None])[0]
 
-            pg_col = backend.get_or_create_collection(collection_name)
+            pg_col = backend.get_collection(
+                palace=palace_ref, collection_name=collection_name, create=True
+            )
             tgt = pg_col.get(ids=[drawer_id])
             tgt_doc = (tgt.get("documents") or [None])[0]
 

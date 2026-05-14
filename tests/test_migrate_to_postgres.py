@@ -223,7 +223,10 @@ def fixture_chroma_palace(tmp_path):
         ids=[f"d{i}" for i in range(10)],
         documents=[f"doc {i}" for i in range(10)],
         embeddings=[[float(i) / 10] * 384 for i in range(10)],
-        metadatas=[{"wing": "test", "idx": i} for i in range(10)],
+        # Room must be canonical per the FK constraint on mempalace_drawers
+        # (added in the hybrid-search-taxonomy work, 2026-05-14). Without
+        # this, phase_2_drawers inserts trip mempalace_drawers_room_fk.
+        metadatas=[{"wing": "test", "room": "references", "idx": i} for i in range(10)],
     )
     return str(palace)
 
@@ -238,7 +241,12 @@ def test_phase_2_copies_all_drawers(fixture_chroma_palace, capsys):
     phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
 
     backend = PostgresBackend(dsn=POSTGRES_DSN)
-    col = backend.get_or_create_collection("mempalace_drawers")
+    from mempalace.backends.base import PalaceRef
+
+    palace_ref = PalaceRef(id=fixture_chroma_palace, local_path=fixture_chroma_palace)
+    col = backend.get_collection(
+        palace=palace_ref, collection_name="mempalace_drawers", create=True
+    )
     # Reach into the backend to count — keep this loose since backend
     # API surface may evolve. The presence + correctness of d3 is the
     # invariant we care about.
@@ -268,7 +276,12 @@ def test_phase_2_idempotent(fixture_chroma_palace):
     phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
 
     backend = PostgresBackend(dsn=POSTGRES_DSN)
-    col = backend.get_or_create_collection("mempalace_drawers")
+    from mempalace.backends.base import PalaceRef
+
+    palace_ref = PalaceRef(id=fixture_chroma_palace, local_path=fixture_chroma_palace)
+    col = backend.get_collection(
+        palace=palace_ref, collection_name="mempalace_drawers", create=True
+    )
     res = col.get(ids=[f"d{i}" for i in range(10)])
     assert len(res["ids"]) == 10, "should still have exactly 10 rows after re-run"
 
@@ -411,7 +424,7 @@ def test_phase_5_copies_triples(tmp_path, capsys):
 
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_kg_%' OR key = %s",
+            "DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_kg_%%' OR key = %s",
             (_KG_DONE_KEY,),
         )
         conn.commit()
@@ -523,8 +536,13 @@ def test_phase_6_verify_detects_drawer_mismatch(fixture_chroma_palace, capsys):
 
     phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
     # Delete one drawer to create the mismatch
+    from mempalace.backends.base import PalaceRef
+
     backend = PostgresBackend(dsn=POSTGRES_DSN)
-    backend.get_or_create_collection("mempalace_drawers").delete(ids=["d0"])
+    palace_ref = PalaceRef(id=fixture_chroma_palace, local_path=fixture_chroma_palace)
+    backend.get_collection(
+        palace=palace_ref, collection_name="mempalace_drawers", create=True
+    ).delete(ids=["d0"])
 
     result = phase_6_verify(fixture_chroma_palace, POSTGRES_DSN, sample_n=10)
     assert result["chroma_drawer_count"] == 10
@@ -616,7 +634,7 @@ def test_phase_5_skips_bad_temporal_data(tmp_path, capsys):
 
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_kg_%' OR key = %s",
+            "DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_kg_%%' OR key = %s",
             (_KG_DONE_KEY,),
         )
         conn.commit()
