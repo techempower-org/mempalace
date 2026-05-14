@@ -1032,6 +1032,121 @@ def cmd_migrate_to_postgres(args):
     )
 
 
+def cmd_rooms(args):
+    """Manage the canonical room set (mempalace_canonical_rooms table).
+
+    Phase 1D follow-up. The FK constraint on mempalace_drawers.room
+    means this CLI is the supported way to add/rename/remove canonical
+    rooms without breaking the DB. ON UPDATE CASCADE on the FK makes
+    renames safe (all drawers auto-update); removes fail if any drawer
+    still in the target room.
+
+    Requires postgres backend + MEMPALACE_POSTGRES_DSN env var.
+    """
+    try:
+        import psycopg2  # noqa: F401
+    except ImportError:
+        print("error: rooms CLI requires psycopg2. Install with: pip install mempalace[postgres]")
+        sys.exit(1)
+
+    import psycopg2
+
+    dsn = os.environ.get("MEMPALACE_POSTGRES_DSN")
+    if not dsn:
+        print("error: MEMPALACE_POSTGRES_DSN env var is not set", file=sys.stderr)
+        sys.exit(1)
+
+    cmd = getattr(args, "rooms_cmd", None)
+    try:
+        with psycopg2.connect(dsn) as conn:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                if cmd == "list":
+                    cur.execute(
+                        "SELECT name, COALESCE(description, '') AS description, added_at FROM mempalace_canonical_rooms ORDER BY name"
+                    )
+                    rows = cur.fetchall()
+                    if not rows:
+                        print("(no canonical rooms registered)")
+                        return
+                    print(f"{'name':14}  {'added_at':25}  description")
+                    print("-" * 80)
+                    for name, desc, added_at in rows:
+                        ts = added_at.strftime("%Y-%m-%d") if added_at else ""
+                        print(f"{name:14}  {ts:25}  {desc}")
+
+                elif cmd == "add":
+                    name = args.name.strip().lower()
+                    if not name or not name.replace("_", "").isalnum():
+                        print(
+                            f"error: room name must be lowercase snake_case alphanumeric, got {args.name!r}"
+                        )
+                        sys.exit(1)
+                    cur.execute(
+                        "INSERT INTO mempalace_canonical_rooms (name, description) VALUES (%s, %s) "
+                        "ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description "
+                        "RETURNING (xmax = 0) AS inserted",
+                        (name, args.description or None),
+                    )
+                    inserted = cur.fetchone()[0]
+                    action = "added" if inserted else "updated description for"
+                    print(f"{action} canonical room {name!r}")
+                    print("hint: POST /admin/refresh-rooms on the daemon to invalidate its cache")
+
+                elif cmd == "rename":
+                    old = args.old.strip().lower()
+                    new = args.new.strip().lower()
+                    if not new.replace("_", "").isalnum():
+                        print(
+                            f"error: new room name must be lowercase snake_case alphanumeric, got {args.new!r}"
+                        )
+                        sys.exit(1)
+                    # UPDATE PK triggers ON UPDATE CASCADE on the drawers FK,
+                    # renaming the room across all drawers atomically.
+                    cur.execute(
+                        "UPDATE mempalace_canonical_rooms SET name = %s WHERE name = %s",
+                        (new, old),
+                    )
+                    if cur.rowcount == 0:
+                        print(f"error: no canonical room named {old!r}")
+                        sys.exit(1)
+                    cur.execute("SELECT count(*) FROM mempalace_drawers WHERE room = %s", (new,))
+                    affected = cur.fetchone()[0]
+                    print(
+                        f"renamed canonical room {old!r} → {new!r} ({affected:,} drawers cascade-renamed)"
+                    )
+                    print("hint: POST /admin/refresh-rooms on the daemon to invalidate its cache")
+
+                elif cmd == "remove":
+                    name = args.name.strip().lower()
+                    cur.execute("SELECT count(*) FROM mempalace_drawers WHERE room = %s", (name,))
+                    n_drawers = cur.fetchone()[0]
+                    if n_drawers > 0:
+                        print(
+                            f"error: cannot remove {name!r} — {n_drawers:,} drawers still in this room.\n"
+                            f"  Move them first: UPDATE mempalace_drawers SET room = 'discoveries' WHERE room = '{name}';\n"
+                            f"  Or via mempalace purge --room {name}"
+                        )
+                        sys.exit(1)
+                    cur.execute("DELETE FROM mempalace_canonical_rooms WHERE name = %s", (name,))
+                    if cur.rowcount == 0:
+                        print(f"error: no canonical room named {name!r}")
+                        sys.exit(1)
+                    print(f"removed canonical room {name!r}")
+                    print("hint: POST /admin/refresh-rooms on the daemon to invalidate its cache")
+
+                else:
+                    print(f"error: unknown rooms subcommand {cmd!r}")
+                    sys.exit(1)
+    except psycopg2.errors.UndefinedTable:
+        print(
+            "error: mempalace_canonical_rooms table doesn't exist yet.\n"
+            "  Run the Phase 1D migration first (see hybrid-search-taxonomy spec).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def cmd_purge(args):
     """Delete drawers by wing and/or room.
 
@@ -2078,6 +2193,30 @@ def main():
     )
     p_purge.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
 
+    # ── rooms — manage the canonical room set (Phase 1D follow-up) ────
+    p_rooms = sub.add_parser(
+        "rooms",
+        help="Manage the canonical room set (mempalace_canonical_rooms postgres table)",
+    )
+    rooms_sub = p_rooms.add_subparsers(dest="rooms_cmd", required=True)
+    rooms_sub.add_parser("list", help="List all canonical rooms with descriptions")
+    p_rooms_add = rooms_sub.add_parser("add", help="Add a new canonical room")
+    p_rooms_add.add_argument("name", help="Room slug (lowercase snake_case)")
+    p_rooms_add.add_argument(
+        "--description",
+        default="",
+        help="Human-readable description",
+    )
+    p_rooms_rename = rooms_sub.add_parser(
+        "rename", help="Rename a canonical room (cascades to all drawers via ON UPDATE CASCADE)"
+    )
+    p_rooms_rename.add_argument("old", help="Current room name")
+    p_rooms_rename.add_argument("new", help="New room name")
+    p_rooms_remove = rooms_sub.add_parser(
+        "remove", help="Remove a canonical room (fails if any drawers still in it)"
+    )
+    p_rooms_remove.add_argument("name", help="Room slug to remove")
+
     sub.add_parser("status", help="Show what's been filed")
 
     p_mined = sub.add_parser(
@@ -2144,6 +2283,7 @@ def main():
         "migrate": cmd_migrate,
         "migrate-to-postgres": cmd_migrate_to_postgres,
         "purge": cmd_purge,
+        "rooms": cmd_rooms,
         "status": cmd_status,
         "mined": cmd_mined,
     }

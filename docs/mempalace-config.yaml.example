@@ -1,0 +1,128 @@
+# MemPalace per-installation configuration
+#
+# Drop a copy at ~/.mempalace/config.yaml to override default behavior
+# without editing source. All sections are optional — missing values
+# fall back to the baked-in defaults.
+#
+# Spec reference: familiar.realm.watch/docs/superpowers/specs/2026-05-14-hybrid-search-taxonomy-spec.md
+
+# ── room_rules ────────────────────────────────────────────────────────
+# Keyword → canonical-room routing used by convo_miner.detect_convo_room.
+# Each key is a canonical room name (must exist in the
+# mempalace_canonical_rooms postgres table; use `mempalace rooms add`
+# to register new ones). The values are substring patterns matched
+# case-insensitively against the first 3000 chars of drawer content.
+#
+# When multiple rooms match, the room with the highest keyword count
+# wins. When none match, content routes to the value of `write.default_room`
+# (or 'discoveries' if unset).
+room_rules:
+  problems:
+    - problem
+    - issue
+    - broken
+    - failed
+    - crash
+    - stuck
+    - workaround
+    - fix
+    - solved
+    - resolved
+    - bug
+    - error
+    - debug
+    - exception
+    - traceback
+  architecture:
+    - architecture
+    - design
+    - pattern
+    - structure
+    - schema
+    - interface
+    - module
+    - component
+    - service
+    - layer
+  planning:
+    - plan
+    - roadmap
+    - milestone
+    - deadline
+    - priority
+    - sprint
+    - backlog
+    - scope
+    - requirement
+    - spec
+    - todo
+  decisions:
+    - decided
+    - chose
+    - picked
+    - switched
+    - migrated
+    - replaced
+    - trade-off
+    - alternative
+    - option
+    - approach
+    - selected
+  sessions:
+    - session
+    - conversation
+    - chat
+    - diary
+    - checkpoint
+    - convo
+  references:
+    - code
+    - python
+    - function
+    - api
+    - database
+    - server
+    - deploy
+    - git
+    - test
+    - refactor
+    - config
+    - documentation
+  discoveries:
+    - discovered
+    - found
+    - learned
+    - insight
+    - finding
+    - note
+    - observed
+
+# ── wing_rules ────────────────────────────────────────────────────────
+# Wing slug normalization. Defaults are baked into normalize_wing_slug;
+# these knobs let per-installation overrides happen without editing
+# source. Prefixes are stripped; replace_chars maps individual
+# characters before the [^a-z0-9_] catch-all kicks in.
+wing_rules:
+  strip_prefixes:
+    - wing_
+    - project_
+  replace_chars:
+    "-": "_"
+    ".": "_"
+  fallback: unknown
+
+# ── write ─────────────────────────────────────────────────────────────
+# Write-path behavior shared by hook and miner.
+write:
+  # If true, neither the hook nor the miner LLM-summarizes content.
+  # Drawers contain raw verbatim text (chunked but not transformed).
+  # Useful for forensic / audit scenarios.
+  verbatim: false
+
+  # Default room when content-classification returns no signal. Must
+  # be a canonical room name (FK-enforced at write time).
+  default_room: discoveries
+
+  # Whether --mode session produces a manifest drawer (true) or a
+  # raw-concat drawer (false). Manifest is the spec default.
+  session_summary: true
