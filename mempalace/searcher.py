@@ -159,8 +159,24 @@ def _hybrid_rank(
             vec_sim = 0.0
         else:
             vec_sim = max(0.0, 1.0 - distance)
-        r["bm25_score"] = round(raw, 3)
-        scored.append((vector_weight * vec_sim + bm25_weight * norm, r))
+        # Tokenizer disagreement guard: BM25 search backends (postgres
+        # tsvector, sqlite FTS5) tokenize on punctuation including
+        # underscores, so `ts_rank_cd` splits into 3 tokens. Local
+        # `_tokenize` uses `\w{2,}` which keeps underscores, treating
+        # `ts_rank_cd` as one token. Candidates surfaced via BM25
+        # search would get `raw=0` from local recompute even though
+        # they're genuinely strong BM25 matches in the source backend.
+        # Treat the BM25-surfaced signal as "already vetted" — give
+        # them max BM25 contribution rather than re-judging with the
+        # weaker local tokenizer.
+        matched_via = r.get("matched_via", "")
+        if matched_via in ("bm25_postgres", "bm25_sqlite"):
+            effective_norm = max(norm, 0.9)  # near-max; tiebreak still possible via vec_sim
+            r["bm25_score"] = round(max(raw, 0.9), 3)
+        else:
+            effective_norm = norm
+            r["bm25_score"] = round(raw, 3)
+        scored.append((vector_weight * vec_sim + bm25_weight * effective_norm, r))
 
     scored.sort(key=lambda pair: pair[0], reverse=True)
     results[:] = [r for _, r in scored]
@@ -797,8 +813,20 @@ def _bm25_only_via_postgres(
     """BM25-only search reading drawers directly from postgres tsvector.
 
     Postgres backend equivalent of ``_bm25_only_via_sqlite``. Uses
-    ``websearch_to_tsquery`` for user-friendly query parsing (phrase
-    syntax, OR, negation) and ``ts_rank_cd`` for cover-density ranking.
+    ``plainto_tsquery`` for parsing (AND-of-tokens semantics — what
+    users actually want for keyword search over code identifiers) and
+    ``ts_rank_cd`` for cover-density ranking.
+
+    Why not ``websearch_to_tsquery``: it interprets identifiers with
+    underscores (e.g. ``ts_rank_cd``, ``websearch_to_tsquery``) as
+    PHRASE queries (``'ts' <-> 'rank' <-> 'cd'``). When the same
+    identifier appears in a drawer, the tokenizer may insert position
+    gaps due to surrounding code punctuation, so the phrase doesn't
+    match — even though all three tokens are present. ``plainto_tsquery``
+    treats them as AND-of-tokens which is the right behavior for
+    keyword identifier search. Trade-off: users lose web-search syntax
+    (quoted phrases, ``-exclude``, ``OR``), but those weren't usable
+    for code identifiers anyway.
 
     The ``doc_tsv`` generated column auto-populates from ``document``
     (truncated to 100KB to stay under tsvector's 1MB limit); the GIN
@@ -818,7 +846,7 @@ def _bm25_only_via_postgres(
             'Install with: pip install "mempalace[postgres]"'
         ) from exc
 
-    # Compose WHERE — wing/room optional. websearch_to_tsquery handles
+    # Compose WHERE — wing/room optional. plainto_tsquery handles
     # empty / nonsense queries by returning empty tsquery; we treat that
     # as no-match (return empty results) rather than scanning the table.
     conditions = ["doc_tsv @@ q"]
@@ -831,17 +859,62 @@ def _bm25_only_via_postgres(
         params.append(room)
     where = " AND ".join(conditions)
 
-    sql = f"""
-        SELECT id, wing, room, document, metadata,
-               ts_rank_cd(doc_tsv, q) AS rank
-        FROM {table_name}, websearch_to_tsquery('english', %s) q
-        WHERE {where}
-        ORDER BY rank DESC
-        LIMIT %s
-    """
-    # The query parameter is referenced twice (once for the q CTE, once
-    # for the WHERE). Reorder params to match SQL placeholder order.
-    sql_params = [query] + params[1:] + [n_results]
+    # Identifier-aware boost: when the query contains tokens with
+    # underscores (e.g. ts_rank_cd, websearch_to_tsquery), postgres's
+    # tsvector parser splits on `_` so the search devolves into
+    # AND-of-token-stems — surfacing scattered-token matches alongside
+    # the literal. Union an ILIKE substring search on the identifier
+    # tokens so genuine literal matches always rise to the top.
+    import re as _re
+
+    ident_tokens = [
+        t for t in _re.findall(r"[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+", query) if len(t) >= 5
+    ]
+
+    if ident_tokens:
+        # Build an OR of ILIKEs over the identifier tokens. The literal-
+        # substring match is unioned with the tsvector match; a CASE
+        # boost in ORDER BY floats genuine literal matches to the top.
+        ilike_clauses = " OR ".join(["document ILIKE %s"] * len(ident_tokens))
+        wing_room_filters = []
+        wing_room_params = []
+        if wing:
+            wing_room_filters.append("wing = %s")
+            wing_room_params.append(wing)
+        if room:
+            wing_room_filters.append("room = %s")
+            wing_room_params.append(room)
+        wing_room_clause = (" AND " + " AND ".join(wing_room_filters)) if wing_room_filters else ""
+
+        sql = f"""
+            SELECT id, wing, room, document, metadata,
+                   ts_rank_cd(doc_tsv, q) +
+                   CASE WHEN ({ilike_clauses}) THEN 10.0 ELSE 0.0 END AS rank
+            FROM {table_name}, plainto_tsquery('english', %s) q
+            WHERE (doc_tsv @@ q OR ({ilike_clauses}))
+                  {wing_room_clause}
+            ORDER BY rank DESC
+            LIMIT %s
+        """
+        # Param order: CASE ILIKEs, plainto query, WHERE ILIKEs, wing, room, limit
+        like_patterns = [f"%{t}%" for t in ident_tokens]
+        sql_params = (
+            like_patterns  # CASE WHEN clauses
+            + [query]  # plainto_tsquery
+            + like_patterns  # OR-fallback in WHERE
+            + wing_room_params
+            + [n_results]
+        )
+    else:
+        sql = f"""
+            SELECT id, wing, room, document, metadata,
+                   ts_rank_cd(doc_tsv, q) AS rank
+            FROM {table_name}, plainto_tsquery('english', %s) q
+            WHERE {where}
+            ORDER BY rank DESC
+            LIMIT %s
+        """
+        sql_params = [query] + params[1:] + [n_results]
 
     results = []
     try:
