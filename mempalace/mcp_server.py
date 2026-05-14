@@ -910,6 +910,8 @@ def tool_search(
     max_distance: float = 1.5,
     min_similarity: float = None,
     context: str = None,
+    candidate_strategy: str = "vector",
+    include_trace: bool = False,
 ):
     limit = max(1, min(limit, _MAX_RESULTS))
     try:
@@ -936,7 +938,18 @@ def tool_search(
         max_distance=dist,
         vector_disabled=_vector_disabled,
         collection_name=_config.collection_name,
+        candidate_strategy=candidate_strategy,
     )
+    # Attach per-source trace if requested (Phase 4 hybrid retrieval).
+    # Surfaces matched_via counts so callers can debug which channel
+    # contributed which drawer.
+    if include_trace and isinstance(result, dict) and "results" in result:
+        from collections import Counter as _Counter
+        sources = _Counter(r.get("matched_via", "vector") for r in result["results"])
+        result["trace"] = {
+            "candidate_strategy": candidate_strategy,
+            "sources": dict(sources),
+        }
     if _is_transient_index_error(result):
         # Post-bulk-write HNSW flush window (#1315): drop caches, give
         # the segment a moment to settle, retry once. Caller never sees
@@ -2117,6 +2130,15 @@ TOOLS = {
                 "context": {
                     "type": "string",
                     "description": "Background context for the search (optional). NOT used for embedding — only for future re-ranking.",
+                },
+                "candidate_strategy": {
+                    "type": "string",
+                    "description": "Candidate selection: 'vector' (default), 'union' (vector + BM25), or 'hybrid' (vector + BM25 + graph).",
+                    "enum": ["vector", "union", "hybrid"],
+                },
+                "include_trace": {
+                    "type": "boolean",
+                    "description": "If true, attaches per-source matched_via counts to the response (debug/eval).",
                 },
             },
             "required": ["query"],

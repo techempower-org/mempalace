@@ -904,6 +904,199 @@ def _bm25_only_via_postgres(
     }
 
 
+def _graph_expand_from_seeds(
+    seed_drawer_ids: list[str],
+    dsn: str,
+    max_entities: int = 10,
+    max_drawers_per_entity: int = 10,
+) -> list[str]:
+    """Find drawers connected to seed drawers via the AGE knowledge graph.
+
+    Phase 3 of the hybrid-search-taxonomy initiative — adds a third
+    retrieval mode to the union strategy. Steps:
+
+      1. For each seed drawer, find the Entity nodes whose RELATION edges
+         have source=seed_drawer_id. Returns the set of entities those
+         drawers "talk about".
+      2. For each surfaced entity, find drawers that *other* RELATION
+         edges name as source — i.e., other drawers about the same
+         entities.
+
+    Returns the deduped drawer-id list. Caller's responsibility to
+    fetch full drawer content + merge into the candidate pool.
+
+    Fan-out caps (max_entities, max_drawers_per_entity) keep the AGE
+    query bounded. The Cypher inlines literals (no $1 parameters)
+    because AGE's parameter binding requires PG-prepared statements
+    that psycopg2's %s substitution doesn't produce — see
+    knowledge_graph_age._run_cypher's docstring for the upstream issue.
+
+    Returns empty list on any error — graph expansion is value-add,
+    never blocks hybrid retrieval.
+    """
+    if not seed_drawer_ids:
+        return []
+    try:
+        import psycopg2
+    except ImportError:
+        return []
+
+    # Inline-literal Cypher (safe — seed_drawer_ids come from internal
+    # vector hits, not user input; if that changes, sanitize first)
+    def _esc(s: str) -> str:
+        return s.replace("\\", "\\\\").replace("'", "\\'")
+
+    seeds = [s for s in seed_drawer_ids if isinstance(s, str)][:20]
+    if not seeds:
+        return []
+    seeds_clause = "[" + ", ".join(f"'{_esc(s)}'" for s in seeds) + "]"
+
+    entity_cypher = f"""
+        MATCH (e:Entity)-[r:RELATION]-()
+        WHERE r.source IN {seeds_clause}
+        RETURN DISTINCT e.name AS name
+        LIMIT {max_entities}
+    """
+
+    expanded_drawers: set = set()
+    try:
+        with psycopg2.connect(dsn) as conn:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute("LOAD 'age'")
+                cur.execute('SET search_path = ag_catalog, "$user", public')
+                # Find entities mentioned in seed drawers
+                cur.execute(
+                    f"SELECT * FROM cypher('mempalace_kg', $${entity_cypher}$$) AS (name agtype)"
+                )
+                entities = []
+                for (name_agtype,) in cur.fetchall():
+                    # agtype renders strings as '"..."'; strip quotes
+                    raw = str(name_agtype)
+                    if raw.startswith('"') and raw.endswith('"'):
+                        raw = raw[1:-1]
+                    entities.append(raw)
+
+                # For each entity, find drawers mentioning it (via their
+                # RELATION source ids)
+                for ent in entities:
+                    ent_safe = _esc(ent)
+                    expand_cypher = f"""
+                        MATCH (a:Entity {{name: '{ent_safe}'}})-[r:RELATION]-()
+                        RETURN DISTINCT r.source AS source
+                        LIMIT {max_drawers_per_entity}
+                    """
+                    cur.execute(
+                        f"SELECT * FROM cypher('mempalace_kg', $${expand_cypher}$$) AS (source agtype)"
+                    )
+                    for (source_agtype,) in cur.fetchall():
+                        raw = str(source_agtype)
+                        if raw.startswith('"') and raw.endswith('"'):
+                            raw = raw[1:-1]
+                        if raw and raw != "null" and raw not in seeds:
+                            expanded_drawers.add(raw)
+    except Exception:
+        logger.debug("_graph_expand_from_seeds failed", exc_info=True)
+        return []
+
+    return list(expanded_drawers)
+
+
+def _graph_expand_from_entities(
+    entity_names: list[str],
+    dsn: str,
+    max_drawers_per_entity: int = 10,
+) -> list[str]:
+    """Find drawers mentioning the given entities, via AGE.
+
+    Companion to _graph_expand_from_seeds. Used when callers have entity
+    names directly (from query NER or a static project-name catalog)
+    rather than seed drawer ids. Returns deduped drawer-id list.
+    """
+    if not entity_names:
+        return []
+    try:
+        import psycopg2
+    except ImportError:
+        return []
+
+    def _esc(s: str) -> str:
+        return s.replace("\\", "\\\\").replace("'", "\\'")
+
+    expanded_drawers: set = set()
+    try:
+        with psycopg2.connect(dsn) as conn:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute("LOAD 'age'")
+                cur.execute('SET search_path = ag_catalog, "$user", public')
+                for ent in entity_names[:10]:
+                    ent_safe = _esc(ent)
+                    # Case-insensitive partial match — query NER produces
+                    # capitalized forms that may not exactly match the
+                    # canonical entity name in the KG.
+                    expand_cypher = f"""
+                        MATCH (a:Entity)-[r:RELATION]-()
+                        WHERE a.name = '{ent_safe}' OR a.name =~ '(?i).*{ent_safe}.*'
+                        RETURN DISTINCT r.source AS source
+                        LIMIT {max_drawers_per_entity}
+                    """
+                    try:
+                        cur.execute(
+                            f"SELECT * FROM cypher('mempalace_kg', $${expand_cypher}$$) AS (source agtype)"
+                        )
+                        for (source_agtype,) in cur.fetchall():
+                            raw = str(source_agtype)
+                            if raw.startswith('"') and raw.endswith('"'):
+                                raw = raw[1:-1]
+                            if raw and raw != "null":
+                                expanded_drawers.add(raw)
+                    except Exception:
+                        continue  # bad regex / missing entity — keep going
+    except Exception:
+        logger.debug("_graph_expand_from_entities failed", exc_info=True)
+        return []
+
+    return list(expanded_drawers)
+
+
+_ENTITY_REGEX = re.compile(r"\b([A-Z][a-zA-Z0-9_]+(?:\s+[A-Z][a-zA-Z0-9_]+)*)\b")
+
+
+def _ner_from_query(query: str, known_entities: set[str] | None = None) -> list[str]:
+    """Cheap NER for hybrid retrieval — capitalized multi-word phrases
+    plus matches against a known-entity set (e.g. project names from the
+    catalog).
+
+    Not a real NER model. Catches the common cases for our corpus —
+    project names, person names, system names — without paying a model
+    inference per query. The hybrid retrieval can survive missed
+    entities (vector + BM25 cover that ground); the NER is purely
+    additive signal.
+
+    Returns up to 8 distinct entity candidates.
+    """
+    candidates: list[str] = []
+    seen = set()
+    for m in _ENTITY_REGEX.finditer(query):
+        token = m.group(1).strip()
+        if token in seen or len(token) < 3:
+            continue
+        candidates.append(token)
+        seen.add(token)
+
+    if known_entities:
+        # Add lowercase substring matches against known entities (catches
+        # "palace_daemon" in lowercased queries).
+        q_lower = query.lower()
+        for ent in known_entities:
+            if ent and ent in q_lower and ent not in seen:
+                candidates.append(ent)
+                seen.add(ent)
+
+    return candidates[:8]
+
+
 def _merge_bm25_union_candidates(
     hits: list,
     query: str,
@@ -995,12 +1188,151 @@ def _merge_bm25_union_candidates(
         seen.add(key)
 
 
+def _merge_hybrid_candidates(
+    hits: list,
+    query: str,
+    palace_path: str,
+    wing: str,
+    room: str,
+    n_results: int,
+    max_distance: float = 0.0,
+) -> None:
+    """Three-mode hybrid merger: BM25 + graph (vector-seeded + NER).
+
+    Phase 4 of the hybrid-search-taxonomy initiative. Extends the union
+    pattern from #1306 with a graph source: drawers reachable from the
+    seeded entities in AGE get added to the candidate pool, with
+    distance=None so the hybrid reranker scores them on their other
+    signals only.
+
+    Steps:
+      1. Run the existing BM25 union merge (same as candidate_strategy
+         "union"); this adds BM25-only candidates with distance=None.
+      2. Take vector hits' drawer IDs as seeds; AGE-expand to find
+         drawers about the same entities. Add as graph-source candidates.
+      3. Run cheap NER on the query; AGE-expand any matched entities.
+         Add as graph-source candidates.
+
+    The graph-source candidates get `matched_via="graph_postgres"` so
+    debug traces can attribute which source surfaced each hit. They
+    carry the same shape as BM25-only hits (distance=None) so the
+    hybrid reranker handles them uniformly.
+
+    Only postgres backend (the AGE graph lives there). Falls through
+    to BM25-only union for chroma.
+    """
+    # Step 1: BM25 candidates (delegates to the existing merger which is
+    # already backend-aware).
+    _merge_bm25_union_candidates(hits, query, palace_path, wing, room,
+                                 n_results, max_distance=max_distance)
+
+    # Step 2 + 3: graph expansion requires postgres backend
+    dsn = None
+    try:
+        from .config import MempalaceConfig
+        cfg = MempalaceConfig()
+        if getattr(cfg, "backend", None) == "postgres":
+            dsn = getattr(cfg, "postgres_dsn", None) or os.environ.get("MEMPALACE_POSTGRES_DSN")
+    except Exception:
+        logger.debug("hybrid merger: backend probe failed", exc_info=True)
+    if not dsn:
+        return
+
+    # Collect existing dedup keys before graph expansion so we don't
+    # re-add what BM25/vector already surfaced.
+    def _dedup_key(entry):
+        full = entry.get("_source_file_full")
+        ci = entry.get("_chunk_index")
+        if full and ci is not None:
+            return (full, ci)
+        return entry.get("source_file") or entry.get("id")
+
+    seen = {_dedup_key(h) for h in hits}
+    seen_ids = {h.get("id") for h in hits if h.get("id")}
+
+    # Step 2: vector-seeded graph expansion. Use top-5 vector hits (those
+    # with a real distance, not distance=None BM25-only entries).
+    seed_ids = [h.get("id") for h in hits[:5] if h.get("distance") is not None and h.get("id")]
+    seed_expanded = _graph_expand_from_seeds(seed_ids, dsn) if seed_ids else []
+
+    # Step 3: NER-based graph expansion
+    ner_candidates = _ner_from_query(query)
+    ner_expanded = _graph_expand_from_entities(ner_candidates, dsn) if ner_candidates else []
+
+    # Fetch full drawer content for any new graph-surfaced IDs in one
+    # batched query (vs N round-trips). Skip the ones we've already
+    # surfaced via vector or BM25.
+    new_ids = [did for did in (seed_expanded + ner_expanded) if did and did not in seen_ids]
+    new_ids = list(dict.fromkeys(new_ids))  # dedup, preserve order
+    if not new_ids:
+        return
+
+    try:
+        import psycopg2
+        with psycopg2.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, wing, room, document, metadata
+                    FROM mempalace_drawers
+                    WHERE id = ANY(%s)
+                    LIMIT %s
+                    """,
+                    (new_ids, max(n_results * 2, 20)),
+                )
+                rows = cur.fetchall()
+    except Exception:
+        logger.debug("hybrid merger: drawer fetch failed", exc_info=True)
+        return
+
+    import json as _json
+    for drawer_id, drawer_wing, drawer_room, document, metadata in rows:
+        # Honor wing/room filters
+        if wing and drawer_wing != wing:
+            continue
+        if room and drawer_room != room:
+            continue
+        if isinstance(metadata, str):
+            try:
+                metadata = _json.loads(metadata)
+            except Exception:
+                metadata = {}
+        elif metadata is None:
+            metadata = {}
+        full_source = (metadata or {}).get("source_file", "") or ""
+        entry_key = (full_source, (metadata or {}).get("chunk_index"))
+        if entry_key in seen or drawer_id in seen_ids:
+            continue
+        # Determine which graph channel surfaced this for trace purposes
+        via = "graph_seeded" if drawer_id in seed_expanded else "graph_ner"
+        hit = {
+            "id": drawer_id,
+            "text": document,
+            "wing": drawer_wing,
+            "room": drawer_room,
+            "source_file": full_source.rsplit("/", 1)[-1] if full_source else "?",
+            "created_at": (metadata or {}).get("added_at") or (metadata or {}).get("filed_at", "unknown"),
+            "similarity": None,
+            "distance": None,
+            "effective_distance": None,
+            "closet_boost": 0.05,  # small graph-presence boost in hybrid rerank
+            "bm25_score": 0.0,
+            "matched_via": via,
+            "_source_file_full": full_source,
+            "_chunk_index": (metadata or {}).get("chunk_index"),
+        }
+        hits.append(hit)
+        seen.add(entry_key)
+        seen_ids.add(drawer_id)
+
+
 # Strategy dispatch — keeps search_memories' branch count under the
 # project's complexity ceiling (C901 max-complexity=25). New strategies
 # register here.
 _CANDIDATE_MERGERS = {
     "vector": None,  # default no-op
-    "union": _merge_bm25_union_candidates,
+    "union":  _merge_bm25_union_candidates,
+    "hybrid": _merge_hybrid_candidates,  # BM25 + graph (Phase 4)
 }
 
 
