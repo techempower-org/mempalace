@@ -165,6 +165,12 @@ def phase_1_schema(postgres_dsn: str) -> None:
         with schema_conn.cursor() as cur:
             cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
             cur.execute("CREATE EXTENSION IF NOT EXISTS age")
+            # pg_trgm powers the gin_trgm_ops GIN that
+            # _bm25_only_via_postgres falls back to for underscore-bearing
+            # identifier queries (ts_rank_cd, websearch_to_tsquery, ...).
+            # Without it, those queries hit a sequential scan instead of
+            # the GIN index. Idempotent — IF NOT EXISTS.
+            cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
             cur.execute(
                 f"""
                 CREATE TABLE IF NOT EXISTS {CHECKPOINT_TABLE} (

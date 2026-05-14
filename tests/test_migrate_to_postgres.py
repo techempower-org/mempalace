@@ -212,13 +212,25 @@ def test_phase_1_idempotent():
 
 
 @pytest.fixture
-def fixture_chroma_palace(tmp_path):
-    """Build a small ChromaDB palace with 10 drawers for migration tests."""
+def fixture_chroma_palace(tmp_path, request):
+    """Build a small ChromaDB palace with 10 drawers for migration tests.
+
+    Test isolation: each test gets a uniquely-named chroma collection
+    (e.g. ``mempalace_drawers_test_abc123``). phase_2_drawers writes to
+    a postgres table with the same name, so per-test data lives in its
+    own table — separate from production's ``mempalace_drawers`` table
+    on the shared postgres instance. Cleanup drops the table after.
+    """
+    import secrets
+
     chromadb = pytest.importorskip("chromadb")
     palace = tmp_path / "palace"
     palace.mkdir()
     client = chromadb.PersistentClient(path=str(palace))
-    col = client.get_or_create_collection("mempalace_drawers", metadata={"hnsw:space": "cosine"})
+
+    # Unique collection name per test → unique postgres table name.
+    test_table = f"mempalace_drawers_test_{secrets.token_hex(4)}"
+    col = client.get_or_create_collection(test_table, metadata={"hnsw:space": "cosine"})
     col.add(
         ids=[f"d{i}" for i in range(10)],
         documents=[f"doc {i}" for i in range(10)],
@@ -228,7 +240,23 @@ def fixture_chroma_palace(tmp_path):
         # this, phase_2_drawers inserts trip mempalace_drawers_room_fk.
         metadatas=[{"wing": "test", "room": "references", "idx": i} for i in range(10)],
     )
-    return str(palace)
+
+    # Register cleanup so test-specific postgres tables don't accumulate
+    def _cleanup():
+        if POSTGRES_DSN:
+            try:
+                import psycopg2
+
+                with psycopg2.connect(POSTGRES_DSN) as conn:
+                    conn.autocommit = True
+                    with conn.cursor() as cur:
+                        cur.execute(f'DROP TABLE IF EXISTS "{test_table}" CASCADE')
+            except Exception:
+                pass  # best-effort cleanup
+
+    request.addfinalizer(_cleanup)
+
+    return (str(palace), test_table)
 
 
 @pgmark
@@ -237,16 +265,15 @@ def test_phase_2_copies_all_drawers(fixture_chroma_palace, capsys):
     from mempalace.migrate_to_postgres import phase_1_schema, phase_2_drawers
     from mempalace.backends.postgres import PostgresBackend
 
+    palace_path, test_table = fixture_chroma_palace
     phase_1_schema(POSTGRES_DSN)
-    phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
+    phase_2_drawers(palace_path, POSTGRES_DSN, batch_size=4)
 
     backend = PostgresBackend(dsn=POSTGRES_DSN)
     from mempalace.backends.base import PalaceRef
 
-    palace_ref = PalaceRef(id=fixture_chroma_palace, local_path=fixture_chroma_palace)
-    col = backend.get_collection(
-        palace=palace_ref, collection_name="mempalace_drawers", create=True
-    )
+    palace_ref = PalaceRef(id=palace_path, local_path=palace_path)
+    col = backend.get_collection(palace=palace_ref, collection_name=test_table, create=True)
     # Reach into the backend to count — keep this loose since backend
     # API surface may evolve. The presence + correctness of d3 is the
     # invariant we care about.
@@ -261,27 +288,26 @@ def test_phase_2_idempotent(fixture_chroma_palace):
     from mempalace.migrate_to_postgres import phase_1_schema, phase_2_drawers
     from mempalace.backends.postgres import PostgresBackend
 
+    palace_path, test_table = fixture_chroma_palace
     phase_1_schema(POSTGRES_DSN)
-    phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
+    phase_2_drawers(palace_path, POSTGRES_DSN, batch_size=4)
     # Reset the per-collection done marker so the second pass actually runs
     # the loop (vs short-circuiting via checkpoint).
     import psycopg2
 
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute(
-            "DELETE FROM mempalace_backend_meta "
-            "WHERE key = 'migration_drawer_done::mempalace_drawers'"
+            "DELETE FROM mempalace_backend_meta WHERE key = %s",
+            (f"migration_drawer_done::{test_table}",),
         )
         conn.commit()
-    phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
+    phase_2_drawers(palace_path, POSTGRES_DSN, batch_size=4)
 
     backend = PostgresBackend(dsn=POSTGRES_DSN)
     from mempalace.backends.base import PalaceRef
 
-    palace_ref = PalaceRef(id=fixture_chroma_palace, local_path=fixture_chroma_palace)
-    col = backend.get_collection(
-        palace=palace_ref, collection_name="mempalace_drawers", create=True
-    )
+    palace_ref = PalaceRef(id=palace_path, local_path=palace_path)
+    col = backend.get_collection(palace=palace_ref, collection_name=test_table, create=True)
     res = col.get(ids=[f"d{i}" for i in range(10)])
     assert len(res["ids"]) == 10, "should still have exactly 10 rows after re-run"
 
@@ -295,13 +321,14 @@ def test_phase_2_skips_collection_when_marked_done(fixture_chroma_palace, capsys
         _set_checkpoint,
     )
 
+    palace_path, test_table = fixture_chroma_palace
     phase_1_schema(POSTGRES_DSN)
     import psycopg2
 
     with psycopg2.connect(POSTGRES_DSN) as conn:
-        _set_checkpoint(conn, "migration_drawer_done::mempalace_drawers", "done")
+        _set_checkpoint(conn, f"migration_drawer_done::{test_table}", "done")
     capsys.readouterr()  # discard prior output
-    phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
+    phase_2_drawers(palace_path, POSTGRES_DSN, batch_size=4)
     out = capsys.readouterr().out
     assert "skipping" in out.lower()
 
@@ -367,6 +394,21 @@ def test_phase_5_no_sqlite_kg_marks_done(tmp_path, capsys):
     # Need POSTGRES_DSN even to check checkpoint, so skip if absent.
     if POSTGRES_DSN is None:
         pytest.skip("phase_5 checkpoint check needs postgres")
+
+    # Test isolation: clear the KG done checkpoint from any prior test run
+    # so phase_5_kg actually runs the no-sqlite path (vs short-circuiting
+    # via checkpoint). Without this, a previous test run that completed
+    # phase_5 leaves the checkpoint set and the assert below misfires.
+    from mempalace.migrate_to_postgres import phase_1_schema
+    import psycopg2
+
+    phase_1_schema(POSTGRES_DSN)
+    with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM mempalace_backend_meta WHERE key = %s",
+            (_KG_DONE_KEY,),
+        )
+        conn.commit()
 
     palace = tmp_path / "palace"
     palace.mkdir()
@@ -495,21 +537,22 @@ def test_phase_6_verify_reports_match(fixture_chroma_palace, tmp_path, capsys):
     )
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
 
+    palace_path, test_table = fixture_chroma_palace
     # Reset state for a clean test
     phase_1_schema(POSTGRES_DSN)
     import psycopg2
 
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_%'")
+        cur.execute("DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_%%'")
         conn.commit()
     age = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
     age.clear()
     age.close()
 
-    phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
-    phase_5_kg(fixture_chroma_palace, POSTGRES_DSN)
+    phase_2_drawers(palace_path, POSTGRES_DSN, batch_size=4)
+    phase_5_kg(palace_path, POSTGRES_DSN)
 
-    result = phase_6_verify(fixture_chroma_palace, POSTGRES_DSN, sample_n=5)
+    result = phase_6_verify(palace_path, POSTGRES_DSN, sample_n=5)
     assert result["chroma_drawer_count"] == 10
     assert result["postgres_drawer_count"] == 10
     assert result["drawers_match"] is True
@@ -527,24 +570,25 @@ def test_phase_6_verify_detects_drawer_mismatch(fixture_chroma_palace, capsys):
     )
     from mempalace.backends.postgres import PostgresBackend
 
+    palace_path, test_table = fixture_chroma_palace
     phase_1_schema(POSTGRES_DSN)
     import psycopg2
 
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_%'")
+        cur.execute("DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_%%'")
         conn.commit()
 
-    phase_2_drawers(fixture_chroma_palace, POSTGRES_DSN, batch_size=4)
+    phase_2_drawers(palace_path, POSTGRES_DSN, batch_size=4)
     # Delete one drawer to create the mismatch
     from mempalace.backends.base import PalaceRef
 
     backend = PostgresBackend(dsn=POSTGRES_DSN)
-    palace_ref = PalaceRef(id=fixture_chroma_palace, local_path=fixture_chroma_palace)
-    backend.get_collection(
-        palace=palace_ref, collection_name="mempalace_drawers", create=True
-    ).delete(ids=["d0"])
+    palace_ref = PalaceRef(id=palace_path, local_path=palace_path)
+    backend.get_collection(palace=palace_ref, collection_name=test_table, create=True).delete(
+        ids=["d0"]
+    )
 
-    result = phase_6_verify(fixture_chroma_palace, POSTGRES_DSN, sample_n=10)
+    result = phase_6_verify(palace_path, POSTGRES_DSN, sample_n=10)
     assert result["chroma_drawer_count"] == 10
     assert result["postgres_drawer_count"] == 9
     assert result["drawers_match"] is False
@@ -560,8 +604,9 @@ def test_phase_7_done_prints_cutover_and_records_timestamp(fixture_chroma_palace
         _get_checkpoint,
     )
 
+    palace_path, _ = fixture_chroma_palace
     phase_1_schema(POSTGRES_DSN)
-    phase_7_done(fixture_chroma_palace, POSTGRES_DSN)
+    phase_7_done(palace_path, POSTGRES_DSN)
     out = capsys.readouterr().out
     assert "Migration complete" in out
     assert "MEMPALACE_BACKEND=postgres" in out

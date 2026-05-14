@@ -643,6 +643,10 @@ class PostgresCollection(BaseCollection):
                 )
             )
         else:
+            # doc_tsv is a generated tsvector column for BM25 search via
+            # plainto_tsquery/websearch_to_tsquery. Truncated to 100KB to
+            # stay under postgres's 1MB tsvector cap (some drawers are
+            # very large; the head 100KB is plenty for keyword surface).
             cur.execute(
                 self._sql.SQL(
                     "CREATE TABLE {} ("
@@ -651,7 +655,10 @@ class PostgresCollection(BaseCollection):
                     "room text NOT NULL DEFAULT '', "
                     "document text NOT NULL, "
                     "embedding {}, "
-                    "metadata jsonb DEFAULT '{{}}'"
+                    "metadata jsonb DEFAULT '{{}}', "
+                    "doc_tsv tsvector GENERATED ALWAYS AS ("
+                    "    to_tsvector('english', substring(coalesce(document, '') for 100000))"
+                    ") STORED"
                     ")"
                 ).format(self._table_id, vec_type)
             )
@@ -662,6 +669,35 @@ class PostgresCollection(BaseCollection):
                         self._table_id,
                         self._sql.Identifier(column),
                     )
+                )
+            # GIN on doc_tsv — BM25 keyword search path. Index build is
+            # incremental on the empty table; later writes auto-update it.
+            cur.execute(
+                self._sql.SQL("CREATE INDEX {} ON {} USING gin (doc_tsv)").format(
+                    self._sql.Identifier(f"{self.table_name}_doc_tsv_idx"),
+                    self._table_id,
+                )
+            )
+            # GIN trigram on document — ILIKE substring fallback for
+            # underscore-bearing identifiers (ts_rank_cd,
+            # websearch_to_tsquery, etc.) that postgres's tsvector parser
+            # splits into separate tokens. Requires the pg_trgm extension
+            # — migrate-to-postgres' phase_1_schema installs it; an
+            # in-process backend init in a fresh DB without pg_trgm will
+            # skip this index gracefully via the try/except.
+            try:
+                cur.execute(
+                    self._sql.SQL("CREATE INDEX {} ON {} USING gin (document gin_trgm_ops)").format(
+                        self._sql.Identifier(f"{self.table_name}_doc_trgm_idx"),
+                        self._table_id,
+                    )
+                )
+            except Exception:
+                logger.warning(
+                    "pg_trgm extension not available; skipping trigram index "
+                    "on %s.document — ILIKE substring search will be slow. "
+                    "Install with: CREATE EXTENSION pg_trgm;",
+                    self.table_name,
                 )
 
         logger.info(
