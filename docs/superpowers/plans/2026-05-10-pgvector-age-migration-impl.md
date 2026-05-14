@@ -37,10 +37,88 @@ The plan was written 2026-05-10. PR [#21 (`feat/pgvector-age-impl`)](https://git
 | 3 | 3.4.c Phase 5 KG (sqlite → AGE) | ✅ Done | phase_5_kg uses KnowledgeGraphAGE.add_triple; watermark resume; bad-row skip+log |
 | 3 | 3.5 Phase 6 verify | ✅ Done | drawer count + sample round-trip + lenient triple parity |
 | 3 | 3.6 Phase 7 cutover instructions | ✅ Done | phase_7_done prints systemctl steps; checkpoints cleaned |
-| 4 | 4.1 Dry-run on canonical palace | ✅ Runbook shipped | `docs/operators/pgvector-cutover-runbook.md` — operator runs the snapshot + Postgres stand-up + migration |
-| 4 | 4.2 Production cutover | ✅ Documented | runbook Phase 4.2 + phase_7_done's printed instructions cover the cutover sequence end-to-end |
+| 4 | 4.1 Dry-run on canonical palace | ✅ Executed 2026-05-14 | OOM-bypass pipeline at `~/palace-snapshot/{extract_drawers,embed,load_pgvector,load_age_kg}.py`; 271,346 drawers + KG triples in ~14 min |
+| 4 | 4.2 Production cutover | ✅ Executed 2026-05-14 | daemon on disks runs `MEMPALACE_BACKEND=postgres` against `mempalace_2026_05_13`; `/health`, `/search`, `/list`, `/cypher`, `/embed` all functional |
 
-**Canonical next task:** Phase 2.2 — implement `add_triple()` with Cypher MERGE/CREATE on the existing `KnowledgeGraphAGE` skeleton. The skeleton bootstraps the AGE extension and graph; what's missing is the actual write surface for triples.
+**Canonical next task:** *Plan complete.* Follow-up work is now tracked as incident artifacts and individual issues (see "Status as of 2026-05-14" below).
+
+---
+
+## Status as of 2026-05-14 — cutover executed, lazy-index race surfaced
+
+Phases 4.1 + 4.2 actually ran today. The `migrate-to-postgres` CLI was
+blocked by chromadb's SIGSEGV class on the 271k-drawer source palace
+(`chromadb.PersistentClient.get(include=["metadatas"])` segfaults on
+long-lived palaces — see also `chroma-core/chroma#6949`), so the
+migration ran via a substrate-portable out-of-band pipeline instead:
+
+1. **Extract** — `extract_drawers.py` reads the source palace's raw
+   sqlite (`chroma.sqlite3`) directly, bypassing the chromadb client.
+2. **Embed** — `embed.py` runs `sentence-transformers/all-MiniLM-L6-v2`
+   on katana's 2080 Ti (~700 vectors/sec, 6m 22s for 271k vs the >7
+   hours `repair --mode from-sqlite` would have taken on disks' 2011 i5).
+3. **Load drawers** — `load_pgvector.py` bulk-loads via `INSERT … SELECT
+   … FROM unnest(…) ON CONFLICT (id) DO UPDATE`.
+4. **Load KG** — `load_age_kg.py` reads `knowledge_graph.sqlite3`
+   triples and replays them via the AGE Cypher path.
+
+This satisfies the spirit of Phases 4.1/4.2 (operator-driven migration
+producing a working Postgres palace) even though the canonical
+`mempalace migrate-to-postgres` runbook didn't survive contact with the
+source palace's chromadb state.
+
+### Incident: pgvector lazy-index race on first concurrent-writer load
+
+Within an hour of cutover, the daemon's `/mcp` endpoint wedged for
+28+ minutes. Three concurrent `CREATE INDEX … USING hnsw` queries
+held `ACCESS EXCLUSIVE` on `mempalace_drawers`, blocking every other
+write. Root cause is in this codebase — `_maybe_create_vector_index`
+at `mempalace/backends/postgres.py:683`:
+
+1. **Lookup-vs-create race.** No advisory lock, no `IF NOT EXISTS`.
+   Three writers tipping `VECTOR_INDEX_CHECK_INTERVAL_ROWS` in the same
+   window each did the same `SELECT 1 FROM pg_indexes WHERE indexname
+   = …`, all three saw empty, all three issued `CREATE INDEX`, all
+   three then serialized on `ACCESS EXCLUSIVE` and stacked.
+2. **Name-coupled existence check.** The check is by literal name
+   `{table_name}_vec_idx`. The out-of-band loader had created a
+   functionally identical HNSW on the same column under a different
+   name (`mempalace_drawers_embedding_hnsw`), so the check always
+   missed and the lazy-create fired on every threshold cross.
+
+Unwedged out-of-band: cancel duplicates via `pg_cancel_backend`, let
+the in-flight build finish, drop the legacy-named duplicate, preserve
+the new index under the expected name. `/mcp` round-trip 30 s timeout
+→ 12 ms.
+
+Filed as `techempower-org/mempalace#73` with a two-line minimal-
+hardening proposal (`pg_advisory_xact_lock` + `IF NOT EXISTS`), and
+posted an operator comment on the upstream `MemPalace/mempalace#665`
+PR (the canonical landing point for `PostgresBackend` — bug fixes
+belong in that PR, not a competing one).
+
+### Hook resilience hardening
+
+Independently, `palace-daemon`'s Stop/PreCompact hook (`clients/hook.py`)
+was made fork-detached so a wedged daemon can't block the harness.
+See palace-daemon `d2569ca` + `04f4ba2`. Detach must close stdout +
+stderr in the child as well as stdin — claude waits for the hook's
+pipes to close before clearing the event, so a child holding inherited
+pipes during a 30s urlopen blocks the harness even when the parent has
+exited. The second commit fixes that.
+
+### Open follow-ups
+
+- **`techempower-org/mempalace#73`** — apply the two-line hardening
+  locally after upstream signals direction on `MemPalace/mempalace#665`.
+  Don't pre-empt skuznetsov's review.
+- **`MemPalace/mempalace#665`** — awaiting maintainer response to our
+  2026-05-14 operator comment. Plan-B trigger (`pgvector-665-decision.md`)
+  is still 2026-06-08.
+- **mempalace plugin hooks.json** — the auto-update on 2026-05-12
+  reverted hooks.json briefly. Long-term, our `bash mempal-stop-hook.sh`
+  wrapper is now a thin `exec python3 …/hook.py` pass-through, so the
+  resolution-cache desync mostly self-heals on next restart.
 
 ---
 
