@@ -945,6 +945,7 @@ def tool_search(
     # contributed which drawer.
     if include_trace and isinstance(result, dict) and "results" in result:
         from collections import Counter as _Counter
+
         sources = _Counter(r.get("matched_via", "vector") for r in result["results"])
         result["trace"] = {
             "candidate_strategy": candidate_strategy,

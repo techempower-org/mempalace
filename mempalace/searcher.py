@@ -815,7 +815,7 @@ def _bm25_only_via_postgres(
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
             "BM25 postgres search requires psycopg2. "
-            "Install with: pip install \"mempalace[postgres]\""
+            'Install with: pip install "mempalace[postgres]"'
         ) from exc
 
     # Compose WHERE — wing/room optional. websearch_to_tsquery handles
@@ -865,6 +865,7 @@ def _bm25_only_via_postgres(
         # Metadata may be a dict (jsonb) or a JSON string; normalize.
         if isinstance(metadata, str):
             import json as _json
+
             try:
                 metadata = _json.loads(metadata)
             except Exception:
@@ -879,7 +880,8 @@ def _bm25_only_via_postgres(
             "wing": drawer_wing,
             "room": drawer_room,
             "source_file": full_source.rsplit("/", 1)[-1] if full_source else "?",
-            "created_at": (metadata or {}).get("added_at") or (metadata or {}).get("filed_at", "unknown"),
+            "created_at": (metadata or {}).get("added_at")
+            or (metadata or {}).get("filed_at", "unknown"),
             # No vector distance available in BM25-only mode.
             "similarity": None,
             "distance": None,
@@ -1140,6 +1142,7 @@ def _merge_bm25_union_candidates(
     dsn = None
     try:
         from .config import MempalaceConfig
+
         cfg = MempalaceConfig()
         use_postgres = getattr(cfg, "backend", None) == "postgres"
         if use_postgres:
@@ -1150,15 +1153,19 @@ def _merge_bm25_union_candidates(
     try:
         if use_postgres and dsn:
             bm25_extra = _bm25_only_via_postgres(
-                query, dsn,
-                wing=wing, room=room,
+                query,
+                dsn,
+                wing=wing,
+                room=room,
                 n_results=n_results * 3,
                 _include_internal=True,
             ).get("results", [])
         else:
             bm25_extra = _bm25_only_via_sqlite(
-                query, palace_path,
-                wing=wing, room=room,
+                query,
+                palace_path,
+                wing=wing,
+                room=room,
                 n_results=n_results * 3,
                 _include_internal=True,
             ).get("results", [])
@@ -1223,13 +1230,15 @@ def _merge_hybrid_candidates(
     """
     # Step 1: BM25 candidates (delegates to the existing merger which is
     # already backend-aware).
-    _merge_bm25_union_candidates(hits, query, palace_path, wing, room,
-                                 n_results, max_distance=max_distance)
+    _merge_bm25_union_candidates(
+        hits, query, palace_path, wing, room, n_results, max_distance=max_distance
+    )
 
     # Step 2 + 3: graph expansion requires postgres backend
     dsn = None
     try:
         from .config import MempalaceConfig
+
         cfg = MempalaceConfig()
         if getattr(cfg, "backend", None) == "postgres":
             dsn = getattr(cfg, "postgres_dsn", None) or os.environ.get("MEMPALACE_POSTGRES_DSN")
@@ -1269,6 +1278,7 @@ def _merge_hybrid_candidates(
 
     try:
         import psycopg2
+
         with psycopg2.connect(dsn) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1286,6 +1296,7 @@ def _merge_hybrid_candidates(
         return
 
     import json as _json
+
     for drawer_id, drawer_wing, drawer_room, document, metadata in rows:
         # Honor wing/room filters
         if wing and drawer_wing != wing:
@@ -1311,7 +1322,8 @@ def _merge_hybrid_candidates(
             "wing": drawer_wing,
             "room": drawer_room,
             "source_file": full_source.rsplit("/", 1)[-1] if full_source else "?",
-            "created_at": (metadata or {}).get("added_at") or (metadata or {}).get("filed_at", "unknown"),
+            "created_at": (metadata or {}).get("added_at")
+            or (metadata or {}).get("filed_at", "unknown"),
             "similarity": None,
             "distance": None,
             "effective_distance": None,
@@ -1331,7 +1343,7 @@ def _merge_hybrid_candidates(
 # register here.
 _CANDIDATE_MERGERS = {
     "vector": None,  # default no-op
-    "union":  _merge_bm25_union_candidates,
+    "union": _merge_bm25_union_candidates,
     "hybrid": _merge_hybrid_candidates,  # BM25 + graph (Phase 4)
 }
 
