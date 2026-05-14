@@ -13,9 +13,21 @@ import json
 import re
 from typing import Any, Optional
 
-import psycopg2
-
 from .config import sanitize_iso_temporal, sanitize_kg_value
+
+
+def _load_psycopg2():
+    """Lazy import so pure-Python helpers (e.g. _cypher_literal) don't
+    require the optional [postgres] extra. KnowledgeGraphAGE itself
+    obviously needs it; the import fires at __init__ time."""
+    try:
+        import psycopg2
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError(
+            "AGE knowledge-graph backend requires optional dependencies. "
+            'Install with: pip install "mempalace[postgres]"'
+        ) from exc
+    return psycopg2
 
 
 def _cypher_literal(value: Any) -> str:
@@ -73,6 +85,7 @@ class KnowledgeGraphAGE:
                 homelab already has the .so files baked in; bare-metal
                 Postgres requires source-build of AGE first.
         """
+        psycopg2 = _load_psycopg2()
         self._conn = psycopg2.connect(dsn)
         # KG writes need explicit commit semantics, not autocommit — keep
         # the same shape as the SQLite KG so the eventual unified write

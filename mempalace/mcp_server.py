@@ -473,7 +473,7 @@ def _get_client():
 def _get_collection(create=False):
     """Return the configured backend's collection, caching between calls.
 
-    Backend routing (Phase 2.4-style, mirroring ``_get_kg``):
+    Backend routing (mirrors ``_get_kg``):
 
     - ``_config.backend == "postgres"`` → ``_get_collection_postgres``
       (uses ``mempalace.backends.postgres.PostgresBackend``). Requires
