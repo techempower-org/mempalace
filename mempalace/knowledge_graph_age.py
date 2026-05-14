@@ -18,6 +18,33 @@ import psycopg2
 from .config import sanitize_iso_temporal, sanitize_kg_value
 
 
+def _cypher_literal(value: Any) -> str:
+    """Render a Python value as a Cypher literal for inline substitution.
+
+    Used by ``_run_cypher`` to inline parameters into the Cypher source
+    instead of using AGE's third-arg parameter form (which requires a
+    prepared-statement bind that psycopg2 can't produce — see the
+    ``_run_cypher`` docstring).
+
+    Sanitization happens upstream in ``add_triple``/``query_triples``;
+    this function handles formatting only.
+
+    - ``None`` → bare Cypher ``NULL``
+    - ``int``/``float`` → bare numeric literal
+    - ``bool`` → bare ``true``/``false``
+    - ``str`` → single-quoted with backslash-escaping
+    - anything else → ``json.dumps`` and treated as a string
+    """
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    s = value if isinstance(value, str) else json.dumps(value)
+    return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
 class KnowledgeGraphAGE:
     """Cypher-queryable KG using Apache AGE on a Postgres connection.
 
@@ -238,23 +265,41 @@ class KnowledgeGraphAGE:
         return aliases
 
     def _run_cypher(self, cypher: str, params: dict, fetch: bool = False) -> list:
-        """Run a Cypher statement via AGE with parameter binding.
+        """Run a Cypher statement via AGE.
 
-        AGE accepts Cypher as a SQL function call:
-            SELECT * FROM cypher('graph_name', $$ <cypher> $$, $1) AS (...)
-        Parameters are bound via the trailing JSON argument. Column types
-        are all ``agtype``; callers unwrap via ``_unwrap_agtype``.
+        Inlines parameters into the Cypher source. The conventional
+        ``cypher(graph, $$...$$, $1)`` AGE parameter form requires a real
+        prepared-statement bind that psycopg2's %s substitution does
+        not produce — AGE rejects with "third argument of cypher
+        function must be a parameter" (verified on AGE 1.6.0 + Postgres
+        16, 2026-05-14).
+
+        Inlining is safe because:
+        - subject/relation_type/object pass through ``sanitize_kg_value``
+          (rejects newlines, quotes, control chars) at the public-API
+          boundary in ``add_triple``/``query_triples``.
+        - source/valid_from/valid_to go through their respective
+          sanitize_* helpers.
+        - The AGE Cypher parser is the only consumer; no SQL injection
+          is reachable since the values land inside dollar-quoted
+          ``$$...$$``.
         """
         aliases = self._extract_return_aliases(cypher) if fetch else []
         cols_decl = ", ".join(f"{c} agtype" for c in aliases) if aliases else "ok agtype"
+
+        # Inline $-prefixed Cypher params with literal values. Sort
+        # longest-key-first so $valid_from is substituted before $valid.
+        cypher_inlined = cypher
+        for key in sorted(params.keys(), key=len, reverse=True):
+            cypher_inlined = cypher_inlined.replace(f"${key}", _cypher_literal(params[key]))
 
         rows: list = []
         with self._conn.cursor() as cur:
             cur.execute("LOAD 'age'")
             cur.execute('SET search_path = ag_catalog, "$user", public')
             cur.execute(
-                f"SELECT * FROM cypher(%s, $${cypher}$$, %s) AS ({cols_decl})",
-                (self.GRAPH_NAME, json.dumps(params)),
+                f"SELECT * FROM cypher(%s, $${cypher_inlined}$$) AS ({cols_decl})",
+                (self.GRAPH_NAME,),
             )
             if fetch:
                 rows = cur.fetchall()

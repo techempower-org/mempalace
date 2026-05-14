@@ -16,12 +16,71 @@ import os
 import pytest
 
 POSTGRES_DSN = os.environ.get("TEST_POSTGRES_DSN")
-pytestmark = pytest.mark.skipif(
+
+
+# ── _cypher_literal (no postgres required) ───────────────────────────
+
+
+def test_cypher_literal_none():
+    from mempalace.knowledge_graph_age import _cypher_literal
+
+    assert _cypher_literal(None) == "NULL"
+
+
+def test_cypher_literal_int():
+    from mempalace.knowledge_graph_age import _cypher_literal
+
+    assert _cypher_literal(42) == "42"
+    assert _cypher_literal(0) == "0"
+    assert _cypher_literal(-7) == "-7"
+
+
+def test_cypher_literal_float():
+    from mempalace.knowledge_graph_age import _cypher_literal
+
+    assert _cypher_literal(3.14) == "3.14"
+    assert _cypher_literal(1.0) == "1.0"
+
+
+def test_cypher_literal_bool():
+    """bool is rendered as Cypher true/false. Must be checked BEFORE int
+    in the implementation because bool is a subclass of int in Python."""
+    from mempalace.knowledge_graph_age import _cypher_literal
+
+    assert _cypher_literal(True) == "true"
+    assert _cypher_literal(False) == "false"
+
+
+def test_cypher_literal_simple_string():
+    from mempalace.knowledge_graph_age import _cypher_literal
+
+    assert _cypher_literal("hello") == "'hello'"
+
+
+def test_cypher_literal_escapes_single_quote():
+    """Single quotes get backslash-escaped so the closing quote isn't ambiguous."""
+    from mempalace.knowledge_graph_age import _cypher_literal
+
+    assert _cypher_literal("it's") == "'it\\'s'"
+
+
+def test_cypher_literal_escapes_backslash():
+    """Backslashes double up so AGE's parser doesn't consume them."""
+    from mempalace.knowledge_graph_age import _cypher_literal
+
+    assert _cypher_literal("a\\b") == "'a\\\\b'"
+
+
+# ── AGE-backed tests (gate on real postgres) ─────────────────────────
+
+
+pgmark = pytest.mark.skipif(
     POSTGRES_DSN is None,
     reason="set TEST_POSTGRES_DSN to run AGE knowledge-graph tests",
 )
 
 
+@pgmark
 def test_age_kg_instantiates():
     """KnowledgeGraphAGE opens a connection and exits cleanly."""
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
@@ -31,6 +90,7 @@ def test_age_kg_instantiates():
     kg.close()
 
 
+@pgmark
 def test_age_graph_created():
     """`mempalace_kg` graph is registered in AGE's catalog after init."""
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
@@ -49,6 +109,7 @@ def test_age_graph_created():
         kg.close()
 
 
+@pgmark
 def test_age_context_manager():
     """`with KnowledgeGraphAGE(...) as kg:` closes the conn on exit."""
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
@@ -60,6 +121,7 @@ def test_age_context_manager():
     assert kg._conn.closed
 
 
+@pgmark
 def test_age_add_triple_basic():
     """add_triple persists a triple that query_triples can read back."""
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
@@ -89,6 +151,7 @@ def test_age_add_triple_basic():
         kg.close()
 
 
+@pgmark
 def test_age_rejects_inverted_temporal_interval():
     """add_triple rejects valid_to < valid_from at write time."""
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
@@ -108,6 +171,7 @@ def test_age_rejects_inverted_temporal_interval():
         kg.close()
 
 
+@pgmark
 def test_age_query_triples_returns_empty_on_no_match():
     """query_triples returns [] when nothing matches the filter."""
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
@@ -122,6 +186,7 @@ def test_age_query_triples_returns_empty_on_no_match():
         kg.close()
 
 
+@pgmark
 def test_age_clear_drops_and_recreates_graph():
     """clear() removes existing triples and restores empty graph."""
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
@@ -137,6 +202,7 @@ def test_age_clear_drops_and_recreates_graph():
         kg.close()
 
 
+@pgmark
 def test_age_as_of_filter():
     """as_of filter returns only triples whose interval contains the date."""
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
@@ -182,6 +248,7 @@ def test_age_as_of_filter():
         kg.close()
 
 
+@pgmark
 def test_age_as_of_with_no_valid_from():
     """A triple with valid_from=None is active forever in the past."""
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE
