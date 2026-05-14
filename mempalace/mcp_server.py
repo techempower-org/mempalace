@@ -199,6 +199,7 @@ def _call_kg(op):
 
 _client_cache = None
 _collection_cache = None
+_postgres_backend_cache = None  # set when _config.backend == "postgres"
 _palace_db_inode = 0  # inode of chroma.sqlite3 at cache time
 _palace_db_mtime = 0.0  # mtime of chroma.sqlite3 at cache time
 
@@ -470,16 +471,85 @@ def _get_client():
 
 
 def _get_collection(create=False):
-    """Return the ChromaDB collection, caching the client between calls.
+    """Return the configured backend's collection, caching between calls.
 
-    On failure, log the exception and retry once after clearing the client
-    and collection caches. Tools were silently returning ``None`` when a
-    cached client/collection went stale — typically after the chromadb
-    rust bindings invalidated a handle following an out-of-band write —
-    leaving the LLM with no diagnostic and no recovery path. The retry
-    forces ``_get_client()`` to rebuild from scratch (which re-runs
-    ``quarantine_stale_hnsw`` per #1322), so the second attempt heals the
-    common stale-handle / stale-HNSW case automatically.
+    Backend routing (Phase 2.4-style, mirroring ``_get_kg``):
+
+    - ``_config.backend == "postgres"`` → ``_get_collection_postgres``
+      (uses ``mempalace.backends.postgres.PostgresBackend``). Requires
+      ``MEMPALACE_POSTGRES_DSN`` or equivalent config.
+    - ``_config.backend == "chroma"`` (default) → existing ChromaDB
+      path below. Preserved unchanged for legacy palaces still on
+      ChromaDB — the SIGSEGV recovery logic, HNSW preflight, stale-
+      handle retry, etc. all stay relevant for that backend and only
+      that backend.
+
+    Both paths return a ``BaseCollection``-conforming object; callers
+    interact with it via the same API surface (``count``, ``get``,
+    ``query``, ``add``, ``upsert``, ``delete``) and don't need to
+    branch.
+    """
+    if _config.backend == "postgres":
+        return _get_collection_postgres(create=create)
+    return _get_collection_chroma(create=create)
+
+
+def _get_collection_postgres(create=False):
+    """Postgres-backed branch of ``_get_collection``.
+
+    Caches a single PostgresBackend instance (lazily constructed on first
+    call) plus the resolved ``PostgresCollection`` in ``_collection_cache``.
+    The chromadb-specific ``_client_cache`` / ``_pin_hnsw_threads`` /
+    ``_quarantine_*`` machinery is bypassed entirely — none of it
+    applies to a postgres backend.
+
+    Failure semantics differ from the chroma branch's stale-handle
+    retry: postgres connection errors are surfaced clearly (no HNSW
+    staleness class to heal), so we log + return None rather than retry.
+    A future enhancement could add connection-pool retry for transient
+    network errors.
+    """
+    global _collection_cache, _postgres_backend_cache, _metadata_cache, _metadata_cache_time
+    try:
+        if _postgres_backend_cache is None:
+            from .backends.postgres import PostgresBackend
+
+            _postgres_backend_cache = PostgresBackend(dsn=_config.postgres_dsn)
+            # When backend changes underneath us, drop the chroma-shaped cache.
+            _collection_cache = None
+
+        if _collection_cache is None or create:
+            from .backends.base import PalaceRef
+
+            palace_ref = PalaceRef(
+                id=_config.palace_path,
+                local_path=_config.palace_path,
+            )
+            _collection_cache = _postgres_backend_cache.get_collection(
+                palace=palace_ref,
+                collection_name=_config.collection_name,
+                create=create,
+            )
+            _metadata_cache = None
+            _metadata_cache_time = 0
+        return _collection_cache
+    except Exception:
+        logger.exception(
+            "_get_collection_postgres failed (palace=%s, create=%s, dsn-set=%s)",
+            _config.palace_path,
+            create,
+            bool(_config.postgres_dsn),
+        )
+        return None
+
+
+def _get_collection_chroma(create=False):
+    """ChromaDB-backed branch of ``_get_collection``.
+
+    Preserved unchanged from the pre-routing implementation. Retry on
+    failure + cache reset is the right behavior for ChromaDB's stale-
+    handle and HNSW-corruption failure classes — see the original
+    inline comments below.
     """
     global _client_cache, _collection_cache, _metadata_cache, _metadata_cache_time
     for attempt in range(2):
