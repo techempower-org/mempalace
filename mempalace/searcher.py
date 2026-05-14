@@ -1065,7 +1065,9 @@ def _graph_expand_from_entities(
 _ENTITY_REGEX = re.compile(r"\b([A-Z][a-zA-Z0-9_]+(?:\s+[A-Z][a-zA-Z0-9_]+)*)\b")
 
 
-def _ner_from_query(query: str, known_entities: set[str] | None = None) -> list[str]:
+def _ner_from_query(query, known_entities=None):
+    # type: (str, Optional[set]) -> list
+    # Py3.9 compat: avoid `set[str] | None` PEP 604 union syntax.
     """Cheap NER for hybrid retrieval — capitalized multi-word phrases
     plus matches against a known-entity set (e.g. project names from the
     catalog).
