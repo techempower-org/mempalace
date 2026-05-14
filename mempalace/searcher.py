@@ -1214,9 +1214,20 @@ def _merge_hybrid_candidates(
     distance=None so the hybrid reranker scores them on their other
     signals only.
 
+    NOTE: explicitly ignores ``max_distance``. The union strategy honors
+    it (BM25 candidates have no vector distance, so injecting them
+    breaks the strict-bound guarantee). Hybrid is the opposite: we
+    *want* BM25 candidates regardless of vector-distance threshold —
+    that's the whole point of the strategy. The hybrid reranker scores
+    BM25 candidates on BM25-only contribution; if the caller asked for
+    a vector-distance bound, hybrid honors it for vector hits and
+    augments with BM25/graph candidates that bypass it.
+
     Steps:
-      1. Run the existing BM25 union merge (same as candidate_strategy
-         "union"); this adds BM25-only candidates with distance=None.
+      1. Inject BM25 candidates directly via _bm25_only_via_postgres
+         (sidesteps the max_distance short-circuit in
+         _merge_bm25_union_candidates which is correct for union but
+         wrong for hybrid).
       2. Take vector hits' drawer IDs as seeds; AGE-expand to find
          drawers about the same entities. Add as graph-source candidates.
       3. Run cheap NER on the query; AGE-expand any matched entities.
@@ -1231,9 +1242,13 @@ def _merge_hybrid_candidates(
     to BM25-only union for chroma.
     """
     # Step 1: BM25 candidates (delegates to the existing merger which is
-    # already backend-aware).
+    # already backend-aware). Pass max_distance=0.0 to *force* BM25
+    # injection regardless of the caller's vector-distance bound —
+    # hybrid retrieval explicitly wants BM25 candidates that vector
+    # missed, even when a strict vector threshold would normally filter
+    # them out.
     _merge_bm25_union_candidates(
-        hits, query, palace_path, wing, room, n_results, max_distance=max_distance
+        hits, query, palace_path, wing, room, n_results, max_distance=0.0
     )
 
     # Step 2 + 3: graph expansion requires postgres backend
