@@ -215,84 +215,97 @@ def _chunk_by_paragraph(content: str, min_chunk_size: int) -> list:
 # ROOM DETECTION — topic-based for conversations
 # =============================================================================
 
+# Canonical room taxonomy — emits one of the 7 canonical rooms enforced
+# by the mempalace_canonical_rooms FK on the postgres backend. Per the
+# 2026-05-14 hybrid-search/taxonomy spec:
+#   - 'technical' is dropped: code/data content routes to 'references',
+#     bug/error content routes to 'problems'.
+#   - 'general' fallback is replaced with 'discoveries' (the spec's
+#     catch-all canonical room).
+#   - 'sessions' is added for conversation/diary/checkpoint-flavored
+#     content so hook-triggered convos miner writes land in the
+#     canonical session room.
+#   - Per-installation overrides come from ~/.mempalace/config.yaml
+#     (room_rules section) — see _load_room_rules.
 TOPIC_KEYWORDS = {
-    "technical": [
-        "code",
-        "python",
-        "function",
-        "bug",
-        "error",
-        "api",
-        "database",
-        "server",
-        "deploy",
-        "git",
-        "test",
-        "debug",
-        "refactor",
+    "problems": [
+        "problem", "issue", "broken", "failed", "crash", "stuck",
+        "workaround", "fix", "solved", "resolved", "bug", "error",
+        "debug", "exception", "traceback",
     ],
     "architecture": [
-        "architecture",
-        "design",
-        "pattern",
-        "structure",
-        "schema",
-        "interface",
-        "module",
-        "component",
-        "service",
-        "layer",
+        "architecture", "design", "pattern", "structure", "schema",
+        "interface", "module", "component", "service", "layer",
     ],
     "planning": [
-        "plan",
-        "roadmap",
-        "milestone",
-        "deadline",
-        "priority",
-        "sprint",
-        "backlog",
-        "scope",
-        "requirement",
-        "spec",
+        "plan", "roadmap", "milestone", "deadline", "priority", "sprint",
+        "backlog", "scope", "requirement", "spec", "todo",
     ],
     "decisions": [
-        "decided",
-        "chose",
-        "picked",
-        "switched",
-        "migrated",
-        "replaced",
-        "trade-off",
-        "alternative",
-        "option",
-        "approach",
+        "decided", "chose", "picked", "switched", "migrated", "replaced",
+        "trade-off", "alternative", "option", "approach", "selected",
     ],
-    "problems": [
-        "problem",
-        "issue",
-        "broken",
-        "failed",
-        "crash",
-        "stuck",
-        "workaround",
-        "fix",
-        "solved",
-        "resolved",
+    "sessions": [
+        "session", "conversation", "chat", "diary", "checkpoint", "convo",
+    ],
+    "references": [
+        "code", "python", "function", "api", "database", "server",
+        "deploy", "git", "test", "refactor", "config", "documentation",
+    ],
+    "discoveries": [
+        "discovered", "found", "learned", "insight", "finding", "note",
+        "observed",
     ],
 }
 
+# Fallback when no keywords match. 'discoveries' is the spec's canonical
+# catch-all — same role 'general' served in the legacy pre-canonical
+# vocabulary, but FK-enforced and meaningful for the room taxonomy.
+DEFAULT_ROOM = "discoveries"
+
+
+def _load_room_rules():
+    """Per-installation overrides from ~/.mempalace/config.yaml if present.
+
+    Falls back to the baked-in TOPIC_KEYWORDS. The config file lets users
+    add new canonical rooms (also registered via `mempalace rooms add`)
+    and supply keyword rules without editing source.
+    """
+    try:
+        import yaml
+        from pathlib import Path
+
+        cfg_path = Path.home() / ".mempalace" / "config.yaml"
+        if not cfg_path.exists():
+            return TOPIC_KEYWORDS
+        with cfg_path.open() as f:
+            cfg = yaml.safe_load(f) or {}
+        overrides = cfg.get("room_rules")
+        if isinstance(overrides, dict) and overrides:
+            return overrides
+    except Exception:
+        pass
+    return TOPIC_KEYWORDS
+
 
 def detect_convo_room(content: str) -> str:
-    """Score conversation content against topic keywords."""
+    """Score conversation content against the canonical room keyword rules.
+
+    Returns one of the canonical 7 rooms (or whatever the per-installation
+    config.yaml has registered). FK-safe: never returns a non-canonical
+    room provided the config and DB lookup are in sync — which they are
+    by default since both ship with the same seed set.
+    """
+    rules = _load_room_rules()
     content_lower = content[:3000].lower()
     scores = {}
-    for room, keywords in TOPIC_KEYWORDS.items():
+    for room, keywords in rules.items():
         score = sum(1 for kw in keywords if kw in content_lower)
         if score > 0:
             scores[room] = score
     if scores:
         return max(scores, key=scores.get)
-    return "general"
+    return DEFAULT_ROOM
 
 
 # =============================================================================

@@ -98,9 +98,21 @@ class TestChunkExchanges:
 
 
 class TestDetectConvoRoom:
-    def test_technical_room(self):
+    # Tests updated 2026-05-14 (hybrid-search-taxonomy spec): detect_convo_room
+    # now emits only canonical rooms. 'technical' and 'general' were dropped
+    # in favor of 'references' (code/data) + 'problems' (bug/error) and
+    # 'discoveries' (catch-all). See familiar.realm.watch hybrid-search spec
+    # for the full taxonomy.
+
+    def test_bug_content_routes_to_problems(self):
+        # 'bug', 'error', 'debug', 'fix' all map to problems
         content = "Let me debug this python function and fix the code error in the api"
-        assert detect_convo_room(content) == "technical"
+        assert detect_convo_room(content) == "problems"
+
+    def test_code_content_routes_to_references(self):
+        # Code/data content without bug keywords lands in references
+        content = "The api uses a python function over the database server with git deploy"
+        assert detect_convo_room(content) == "references"
 
     def test_planning_room(self):
         content = "We need to plan the roadmap for the next sprint and set milestone deadlines"
@@ -114,9 +126,16 @@ class TestDetectConvoRoom:
         content = "We decided to switch and migrated to the new framework after we chose it"
         assert detect_convo_room(content) == "decisions"
 
-    def test_general_fallback(self):
+    def test_unmatched_content_falls_back_to_discoveries(self):
+        # Per spec, 'discoveries' is the canonical catch-all (replacing
+        # the legacy 'general' fallback).
         content = "Hello, how are you doing today? The weather is nice."
-        assert detect_convo_room(content) == "general"
+        assert detect_convo_room(content) == "discoveries"
+
+    def test_sessions_room(self):
+        # New canonical room — diary/checkpoint/conversation flavored content
+        content = "This conversation is a checkpoint of our chat session about the diary."
+        assert detect_convo_room(content) == "sessions"
 
 
 class TestScanConvos:
