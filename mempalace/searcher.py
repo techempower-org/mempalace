@@ -785,6 +785,125 @@ def _bm25_only_via_sqlite(
     }
 
 
+def _bm25_only_via_postgres(
+    query: str,
+    dsn: str,
+    wing: str = None,
+    room: str = None,
+    n_results: int = 5,
+    table_name: str = "mempalace_drawers",
+    _include_internal: bool = False,
+) -> dict:
+    """BM25-only search reading drawers directly from postgres tsvector.
+
+    Postgres backend equivalent of ``_bm25_only_via_sqlite``. Uses
+    ``websearch_to_tsquery`` for user-friendly query parsing (phrase
+    syntax, OR, negation) and ``ts_rank_cd`` for cover-density ranking.
+
+    The ``doc_tsv`` generated column auto-populates from ``document``
+    (truncated to 100KB to stay under tsvector's 1MB limit); the GIN
+    index makes lookup ~microseconds even at 100k+ rows.
+
+    Result shape matches ``_bm25_only_via_sqlite``: each hit has text,
+    wing, room, source_file, distance (None for BM25-only), bm25_score,
+    matched_via="bm25_postgres". When ``_include_internal=True``, the
+    ``_source_file_full`` + ``_chunk_index`` keys survive so the
+    candidate-union dedup logic can match the upstream pattern.
+    """
+    try:
+        import psycopg2
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError(
+            "BM25 postgres search requires psycopg2. "
+            "Install with: pip install \"mempalace[postgres]\""
+        ) from exc
+
+    # Compose WHERE — wing/room optional. websearch_to_tsquery handles
+    # empty / nonsense queries by returning empty tsquery; we treat that
+    # as no-match (return empty results) rather than scanning the table.
+    conditions = ["doc_tsv @@ q"]
+    params: list = [query]
+    if wing:
+        conditions.append("wing = %s")
+        params.append(wing)
+    if room:
+        conditions.append("room = %s")
+        params.append(room)
+    where = " AND ".join(conditions)
+
+    sql = f"""
+        SELECT id, wing, room, document, metadata,
+               ts_rank_cd(doc_tsv, q) AS rank
+        FROM {table_name}, websearch_to_tsquery('english', %s) q
+        WHERE {where}
+        ORDER BY rank DESC
+        LIMIT %s
+    """
+    # The query parameter is referenced twice (once for the q CTE, once
+    # for the WHERE). Reorder params to match SQL placeholder order.
+    sql_params = [query] + params[1:] + [n_results]
+
+    results = []
+    try:
+        with psycopg2.connect(dsn) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, sql_params)
+                rows = cur.fetchall()
+    except Exception:
+        logger.debug("_bm25_only_via_postgres failed", exc_info=True)
+        return {
+            "query": query,
+            "filters": {"wing": wing, "room": room},
+            "total_before_filter": 0,
+            "results": [],
+            "fallback": "bm25_only_via_postgres",
+            "error": "query failed; see daemon log",
+        }
+
+    for row in rows:
+        drawer_id, drawer_wing, drawer_room, document, metadata, rank = row
+        # Metadata may be a dict (jsonb) or a JSON string; normalize.
+        if isinstance(metadata, str):
+            import json as _json
+            try:
+                metadata = _json.loads(metadata)
+            except Exception:
+                metadata = {}
+        elif metadata is None:
+            metadata = {}
+
+        full_source = (metadata or {}).get("source_file", "") or ""
+        entry = {
+            "id": drawer_id,
+            "text": document,
+            "wing": drawer_wing,
+            "room": drawer_room,
+            "source_file": full_source.rsplit("/", 1)[-1] if full_source else "?",
+            "created_at": (metadata or {}).get("added_at") or (metadata or {}).get("filed_at", "unknown"),
+            # No vector distance available in BM25-only mode.
+            "similarity": None,
+            "distance": None,
+            "bm25_score": round(float(rank), 4),
+            "matched_via": "bm25_postgres",
+            # Internal — needed for candidate-union dedup. Stripped below
+            # when caller didn't request them.
+            "_source_file_full": full_source,
+            "_chunk_index": (metadata or {}).get("chunk_index"),
+        }
+        if not _include_internal:
+            entry.pop("_source_file_full", None)
+            entry.pop("_chunk_index", None)
+        results.append(entry)
+
+    return {
+        "query": query,
+        "filters": {"wing": wing, "room": room},
+        "total_before_filter": len(results),
+        "results": results,
+        "fallback": "bm25_only_via_postgres",
+    }
+
+
 def _merge_bm25_union_candidates(
     hits: list,
     query: str,
@@ -819,15 +938,37 @@ def _merge_bm25_union_candidates(
     if max_distance > 0.0:
         return
 
+    # Backend-aware dispatch: postgres backend uses tsvector/GIN via
+    # _bm25_only_via_postgres; default (chroma) path keeps the
+    # sqlite/FTS5 implementation. The decision is driven by env config
+    # rather than introspecting the live collection so the merger stays
+    # decoupled from the per-call collection object.
+    use_postgres = False
+    dsn = None
     try:
-        bm25_extra = _bm25_only_via_sqlite(
-            query,
-            palace_path,
-            wing=wing,
-            room=room,
-            n_results=n_results * 3,
-            _include_internal=True,
-        ).get("results", [])
+        from .config import MempalaceConfig
+        cfg = MempalaceConfig()
+        use_postgres = getattr(cfg, "backend", None) == "postgres"
+        if use_postgres:
+            dsn = getattr(cfg, "postgres_dsn", None) or os.environ.get("MEMPALACE_POSTGRES_DSN")
+    except Exception:
+        logger.debug("candidate_strategy=union: backend probe failed", exc_info=True)
+
+    try:
+        if use_postgres and dsn:
+            bm25_extra = _bm25_only_via_postgres(
+                query, dsn,
+                wing=wing, room=room,
+                n_results=n_results * 3,
+                _include_internal=True,
+            ).get("results", [])
+        else:
+            bm25_extra = _bm25_only_via_sqlite(
+                query, palace_path,
+                wing=wing, room=room,
+                n_results=n_results * 3,
+                _include_internal=True,
+            ).get("results", [])
     except Exception:
         logger.debug("candidate_strategy=union: BM25 fetch failed", exc_info=True)
         return
