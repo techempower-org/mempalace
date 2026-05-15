@@ -96,6 +96,30 @@ def _resolve_providers(device: str) -> tuple[list, str]:
     return (requested, device)
 
 
+# ── Note for anyone implementing a custom embedding function ──────────
+# A class that defines ``__call__(input)`` + ``name()`` looks like it
+# satisfies the chromadb EF protocol, and it does for ``Collection.upsert``
+# (which dispatches through ``__call__`` directly). It does NOT satisfy
+# ``Collection.query(query_texts=...)`` in chromadb 1.5+, which calls
+# ``embed_query`` on the EF. A bare class without ``embed_query`` raises
+# ``AttributeError`` at query time, mempalace's ``searcher`` catches it,
+# and the vector-search path silently degrades to BM25 fallback. The
+# search returns results but the encoder you thought you installed is
+# never actually exercised on queries.
+#
+# Subclassing ``chromadb.api.types.EmbeddingFunction`` (the Protocol base)
+# inherits a default ``embed_query`` that delegates to ``__call__``, which
+# is what most callers want. Override it for asymmetric encoders that
+# want a separate query path. Our internal EF below subclasses
+# ``ONNXMiniLM_L6_V2`` which already has both methods; the warning is for
+# downstream users who want to drop in a SentenceTransformer or similar
+# without going through ONNXMiniLM_L6_V2.
+#
+# Diagnosed 2026-05-15 against a SentenceTransformer adaptmem FT-Code
+# wrapper; see MemPalace/mempalace#1384 for the cross-encoder + RRF
+# discussion that surfaced this.
+
+
 def _build_ef_class():
     """Subclass ``ONNXMiniLM_L6_V2`` with name ``"default"``.
 
