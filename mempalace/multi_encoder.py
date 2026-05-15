@@ -173,9 +173,18 @@ def _build_default_encoder() -> Callable[[str], list[float]]:
     ef = get_embedding_function()
 
     def encode(text: str) -> list[float]:
+        # ChromaDB's ONNX EF returns a numpy ndarray of float32 (or a list
+        # of such). When we hand the raw shape to chromadb's
+        # ``query(query_embeddings=...)`` it rejects it: "Expected
+        # embeddings to be a list of floats or ints…". Normalize via
+        # tolist() so the dtype is plain Python float, regardless of
+        # whether the EF gave us an ndarray or list-of-ndarray.
         vecs = ef([text])
-        # ChromaDB EF returns list[list[float]] for batch input.
-        return list(vecs[0])
+        first = vecs[0]
+        try:
+            return first.tolist()  # numpy.ndarray
+        except AttributeError:
+            return [float(x) for x in first]
 
     return encode
 

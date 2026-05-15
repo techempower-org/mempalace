@@ -371,6 +371,37 @@ def test_invalid_env_overfetch_falls_back(monkeypatch):
     assert palace_a.calls[0]["n_results"] == 6
 
 
+# ── Encoder shape coercion ────────────────────────────────────────────
+
+
+def test_default_encoder_returns_plain_floats(monkeypatch):
+    """Regression: chromadb's ONNX EF returns numpy ndarray; we must coerce.
+
+    Without ``.tolist()`` chromadb rejects the query with "Expected
+    embeddings to be a list of floats or ints, a list of lists, a
+    numpy array, or a list of numpy arrays, got [[np.float32(…)…]"
+    — a *list of numpy scalars* is the one shape it doesn't handle.
+    """
+    import numpy as np
+
+    class _NumpyEF:
+        def __call__(self, texts):
+            # Mimic chromadb's ONNX EF output shape exactly.
+            return [np.array([0.1, 0.2, 0.3], dtype=np.float32)]
+
+    monkeypatch.setattr(
+        "mempalace.embedding.get_embedding_function", lambda device=None: _NumpyEF()
+    )
+    mc.reset_encoder_cache()
+    encoder = mc.get_encoder(mc.EncoderSpec("default", None, None))
+    vec = encoder("hello")
+    # All entries must be Python floats, not np.float32 scalars.
+    assert all(type(x) is float for x in vec), (
+        f"expected list[float], got types {[type(x).__name__ for x in vec[:3]]}"
+    )
+    assert len(vec) == 3
+
+
 # ── End-to-end via search_memories ────────────────────────────────────
 
 
