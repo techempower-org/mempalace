@@ -1594,7 +1594,14 @@ def tool_diary_write(
         wing = sanitize_name(wing)
     else:
         wing = f"wing_{agent_name.replace(' ', '_')}"
-    room = "diary"
+    # Phase 1D canonical-room FK (added 2026-05-14, mempalace_canonical_rooms
+    # lookup table) accepts only the 7 canonical rooms — "diary" is not one of
+    # them, so every post-migration diary_write was failing with a FK
+    # violation. Per the original 2026-05-14 CHANGELOG entry: "Room remains
+    # `diary` today because `tool_diary_write` hardcodes it; post-pgvector
+    # migration this becomes room=`sessions` per the canonical 7-room list."
+    # That migration happened; this is the matching tool-side rename.
+    room = "sessions"
     col = _get_collection(create=True)
     if not col:
         return _no_palace()
@@ -1676,10 +1683,12 @@ def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):
     if not col:
         return _no_palace()
 
-    # Build filter: always scope by agent + room=diary. Wing is optional —
-    # when empty, return entries across all wings for this agent (matches
-    # the #1097 empty-string-as-no-filter convention for LLM ergonomics).
-    conditions = [{"room": "diary"}, {"agent": agent_name}]
+    # Build filter: always scope by agent + room=sessions (canonical post
+    # 2026-05-14 Phase 1D migration; was room=diary historically). Wing is
+    # optional — when empty, return entries across all wings for this agent
+    # (matches the #1097 empty-string-as-no-filter convention for LLM
+    # ergonomics).
+    conditions = [{"room": "sessions"}, {"agent": agent_name}]
     if wing:
         conditions.insert(0, {"wing": wing})
 
