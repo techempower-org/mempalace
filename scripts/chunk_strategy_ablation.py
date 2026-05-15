@@ -460,6 +460,16 @@ def main(argv: List[str] | None = None) -> int:
         default="",
         help="Write JSON results to this path (in addition to stdout).",
     )
+    parser.add_argument(
+        "--probes",
+        default="",
+        help=(
+            "Path to a JSON probe set (see scripts/derive_probes_from_git.py). "
+            "Shape: {\"probes\": [{\"query\", \"expected\", \"why\"}, ...]}. "
+            "When supplied, replaces the hand-curated PROBES list — needed "
+            "for the n>=100 paired-bootstrap discussed in MemPalace/mempalace#1384."
+        ),
+    )
     args = parser.parse_args(argv)
 
     corpus = Path(args.corpus).resolve()
@@ -467,13 +477,24 @@ def main(argv: List[str] | None = None) -> int:
         print(f"corpus not found: {corpus}", file=sys.stderr)
         return 2
 
+    if args.probes:
+        with open(args.probes, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        active_probes = [
+            (p["query"], p["expected"], p.get("why", "")) for p in data["probes"]
+        ]
+        print(f"Probe set: {args.probes} (n={len(active_probes)})")
+    else:
+        active_probes = list(PROBES)
+        print(f"Probe set: hand-curated PROBES (n={len(active_probes)})")
+
     chunk_sizes = [int(s) for s in args.chunk_sizes.split(",") if s.strip()]
     strategies: List[Tuple[str, Callable]] = []
     for cs in chunk_sizes:
         strategies.extend(build_strategies(cs))
 
     print(f"Corpus:    {corpus}")
-    print(f"Probes:    {len(PROBES)}")
+    print(f"Probes:    {len(active_probes)}")
     print(f"Top-K:     {args.n_results}")
     print(f"chunk_sizes: {chunk_sizes}")
     print(f"Strategies: {', '.join(name for name, _ in strategies)}")
@@ -485,7 +506,7 @@ def main(argv: List[str] | None = None) -> int:
 
     summary = {
         "corpus": str(corpus),
-        "n_probes": len(PROBES),
+        "n_probes": len(active_probes),
         "n_results": args.n_results,
         "chunk_sizes": chunk_sizes,
         "strategies": {},
@@ -504,7 +525,7 @@ def main(argv: List[str] | None = None) -> int:
         recall_at_5 = 0
         recall_at_10 = 0
         per_probe = []
-        for query, expected, _why in PROBES:
+        for query, expected, _why in active_probes:
             hits = _query_palace(palace, query, n_results=args.n_results)
             rr, rank = _mrr_for_probe(hits, expected)
             r5 = _recall_at_k(hits, expected, 5)
@@ -522,8 +543,8 @@ def main(argv: List[str] | None = None) -> int:
                 }
             )
         mrr = sum(rrs) / len(rrs)
-        r5_pct = 100 * recall_at_5 / len(PROBES)
-        r10_pct = 100 * recall_at_10 / len(PROBES)
+        r5_pct = 100 * recall_at_5 / len(active_probes)
+        r10_pct = 100 * recall_at_10 / len(active_probes)
         print(f"  MRR: {mrr:.3f}  Recall@5: {r5_pct:.1f}%  Recall@10: {r10_pct:.1f}%")
         print()
         summary["strategies"][name] = {

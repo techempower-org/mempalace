@@ -1,0 +1,1009 @@
+{
+  "_meta": {
+    "generator": "scripts/derive_probes_from_git.py",
+    "since": "14 months ago",
+    "n_probes": 200
+  },
+  "probes": [
+    {
+      "query": "Post-mortem section in pgvector-cutover-runbook",
+      "expected": "pgvector-cutover-runbook.md",
+      "why": "bda430f docs(operators): post-mortem section in pgvector-cutover-runbook"
+    },
+    {
+      "query": "Mempalace search/recall/boost bench results — 2026-05-14 hybrid era",
+      "expected": "2026-05-14-search-bench-hybrid-cutover.json",
+      "why": "f98ce56 docs(bench): mempalace search/recall/boost bench results — 2026-05-14 hybrid era"
+    },
+    {
+      "query": "Trigram index + complete schema in _create_table + test isolation",
+      "expected": "postgres.py",
+      "why": "5f9d087 fix(migrate,backend): trigram index + complete schema in _create_table + test isolation"
+    },
+    {
+      "query": "Post-#995 API + canonical-room fixture + LIKE %% escape",
+      "expected": "migrate_to_postgres.py",
+      "why": "2f40880 fix(migrate_to_postgres): post-#995 API + canonical-room fixture + LIKE %% escape"
+    },
+    {
+      "query": "Plainto_tsquery + ILIKE fallback for underscore identifiers",
+      "expected": "searcher.py",
+      "why": "341b93e fix(searcher): plainto_tsquery + ILIKE fallback for underscore identifiers"
+    },
+    {
+      "query": "Mempalace rooms subcommand + example config.yaml",
+      "expected": "cli.py",
+      "why": "fa03f61 feat(cli): mempalace rooms subcommand + example config.yaml"
+    },
+    {
+      "query": "Add --mode session for per-session manifest drawers",
+      "expected": "cli.py",
+      "why": "b156ba9 feat(miner): add --mode session for per-session manifest drawers"
+    },
+    {
+      "query": "Hybrid merger must bypass max_distance, not honor it",
+      "expected": "searcher.py",
+      "why": "967315f fix(searcher): hybrid merger must bypass max_distance, not honor it"
+    },
+    {
+      "query": "Py3.9 compat — drop PEP 604 union in _ner_from_query",
+      "expected": "searcher.py",
+      "why": "b4f4f41 fix(searcher): py3.9 compat — drop PEP 604 union in _ner_from_query"
+    },
+    {
+      "query": "Hybrid candidate strategy with graph integration (Phases 3+4)",
+      "expected": "searcher.py",
+      "why": "f34597d feat(searcher,mcp): hybrid candidate strategy with graph integration (Phases 3+4)"
+    },
+    {
+      "query": "Postgres tsvector BM25 + backend-aware union dispatch (Phase 2)",
+      "expected": "searcher.py",
+      "why": "5399a5e feat(searcher): postgres tsvector BM25 + backend-aware union dispatch (Phase 2)"
+    },
+    {
+      "query": "Emit only canonical rooms per hybrid-search-taxonomy spec",
+      "expected": "convo_miner.py",
+      "why": "ef3643b feat(convo_miner): emit only canonical rooms per hybrid-search-taxonomy spec"
+    },
+    {
+      "query": "Unblock CI on 3.9/3.13 — jargon leak + eager psycopg2 import",
+      "expected": "knowledge_graph_age.py",
+      "why": "6f467d0 fix(tests): unblock CI on 3.9/3.13 — jargon leak + eager psycopg2 import"
+    },
+    {
+      "query": "Advisory-lock + IF NOT EXISTS guard for lazy HNSW index",
+      "expected": "postgres.py",
+      "why": "4566f8a fix(postgres): advisory-lock + IF NOT EXISTS guard for lazy HNSW index"
+    },
+    {
+      "query": "Pgvector migration 2026-05-14 status snapshot — Phases 4.1/4.2 executed",
+      "expected": "2026-05-10-pgvector-age-migration-impl.md",
+      "why": "459c122 docs(plan): pgvector migration 2026-05-14 status snapshot — Phases 4.1/4.2 executed"
+    },
+    {
+      "query": "Backend-route _get_collection — postgres path alongside chroma (Step 1 of cutover)",
+      "expected": "mcp_server.py",
+      "why": "b6b1740 feat(mcp): backend-route _get_collection — postgres path alongside chroma (Step 1 of cutover)"
+    },
+    {
+      "query": "Inline Cypher parameters instead of using AGE's $1 form",
+      "expected": "knowledge_graph_age.py",
+      "why": "74ddf6f fix(kg/age): inline Cypher parameters instead of using AGE's $1 form"
+    },
+    {
+      "query": "Make wrappers PALACE_DAEMON_HOOK_PY-overridable; rewrite tests (closes #68)",
+      "expected": "mempal-precompact-hook.sh",
+      "why": "5a705ba fix(hooks/tests): make wrappers PALACE_DAEMON_HOOK_PY-overridable; rewrite tests (closes #68)"
+    },
+    {
+      "query": "Preserve embeddings on rebuild — cherry-pick of upstream #1367 (embeddings portion only)",
+      "expected": "repair.py",
+      "why": "aa84fa4 feat(repair): preserve embeddings on rebuild — cherry-pick of upstream #1367 (embeddings portion only)"
+    },
+    {
+      "query": "Update runbook with daemon-state + repair-required findings",
+      "expected": "pgvector-cutover-runbook.md",
+      "why": "18606af docs(operators): update runbook with daemon-state + repair-required findings"
+    },
+    {
+      "query": "Call _prepare_palace_for_open before chromadb.PersistentClient",
+      "expected": "migrate_to_postgres.py",
+      "why": "d35cdfc fix(migrate): call _prepare_palace_for_open before chromadb.PersistentClient"
+    },
+    {
+      "query": "Phase_1_schema uses two connections (autocommit toggle is forbidden mid-flight)",
+      "expected": "migrate_to_postgres.py",
+      "why": "979fd33 fix(migrate): phase_1_schema uses two connections (autocommit toggle is forbidden mid-flight)"
+    },
+    {
+      "query": "Use pg_available_extensions.name (not extname) in preflight",
+      "expected": "migrate_to_postgres.py",
+      "why": "5617385 fix(migrate): use pg_available_extensions.name (not extname) in preflight"
+    },
+    {
+      "query": "Pgvector cutover runbook (Phases 4.1 + 4.2 wrap)",
+      "expected": "pgvector-cutover-runbook.md",
+      "why": "5405ff4 docs(operators): pgvector cutover runbook (Phases 4.1 + 4.2 wrap)"
+    },
+    {
+      "query": "Phase_6_verify + phase_7_done — Phases 3.5 + 3.6",
+      "expected": "migrate_to_postgres.py",
+      "why": "aec5903 feat(migrate): phase_6_verify + phase_7_done — Phases 3.5 + 3.6"
+    },
+    {
+      "query": "Phase_5_kg — sqlite triples → AGE (Phase 3.4.c)",
+      "expected": "migrate_to_postgres.py",
+      "why": "579063e feat(migrate): phase_5_kg — sqlite triples → AGE (Phase 3.4.c)"
+    },
+    {
+      "query": "Reconcile Phase 3.4 + mark plan-prescribed pause at 3.4.c",
+      "expected": "2026-05-10-pgvector-age-migration-impl.md",
+      "why": "516674c docs(plan): reconcile Phase 3.4 + mark plan-prescribed pause at 3.4.c"
+    },
+    {
+      "query": "Phase_2_drawers — batched chromadb→pgvector copy (Phase 3.3)",
+      "expected": "migrate_to_postgres.py",
+      "why": "8e31237 feat(migrate): phase_2_drawers — batched chromadb→pgvector copy (Phase 3.3)"
+    },
+    {
+      "query": "Phase_1_schema — extensions + checkpoint table (Phase 3.2)",
+      "expected": "migrate_to_postgres.py",
+      "why": "3f992d7 feat(migrate): phase_1_schema — extensions + checkpoint table (Phase 3.2)"
+    },
+    {
+      "query": "Scaffold migrate-to-postgres CLI + phase 0 preflight",
+      "expected": "cli.py",
+      "why": "16938fb feat(migrate): scaffold migrate-to-postgres CLI + phase 0 preflight"
+    },
+    {
+      "query": "MEMPALACE_KG_BACKEND routing — sqlite default, age opt-in (Phase 2.4)",
+      "expected": "config.py",
+      "why": "5770979 feat(kg,mcp): MEMPALACE_KG_BACKEND routing — sqlite default, age opt-in (Phase 2.4)"
+    },
+    {
+      "query": "As_of temporal filter on query_triples (Phase 2.3)",
+      "expected": "knowledge_graph_age.py",
+      "why": "ea52b40 feat(kg/age): as_of temporal filter on query_triples (Phase 2.3)"
+    },
+    {
+      "query": "Add_triple + query_triples + clear on KnowledgeGraphAGE",
+      "expected": "knowledge_graph_age.py",
+      "why": "5946bd6 feat(kg/age): add_triple + query_triples + clear on KnowledgeGraphAGE"
+    },
+    {
+      "query": "Reconcile pgvector plan with what shipped via PR #21",
+      "expected": "2026-05-10-pgvector-age-migration-impl.md",
+      "why": "e656fc5 docs(plan): reconcile pgvector plan with what shipped via PR #21"
+    },
+    {
+      "query": "Bump drawer count (160K → 183K) + link palace-taxonomy spec",
+      "expected": "CLAUDE.md",
+      "why": "47beae8 docs(claude): bump drawer count (160K → 183K) + link palace-taxonomy spec"
+    },
+    {
+      "query": "Inherit upstream Mission + Design Principles lede",
+      "expected": "CLAUDE.md",
+      "why": "090c604 docs(claude.md): inherit upstream Mission + Design Principles lede"
+    },
+    {
+      "query": "Make .sh wrappers route through palace-daemon (back-compat shim)",
+      "expected": "mempal-precompact-hook.sh",
+      "why": "eaf0e2c fix(hooks): make .sh wrappers route through palace-daemon (back-compat shim)"
+    },
+    {
+      "query": "Rebuild_index accepts progress callback; default prints ETA",
+      "expected": "repair.py",
+      "why": "251c5a0 feat(repair): rebuild_index accepts progress callback; default prints ETA"
+    },
+    {
+      "query": "Record #1459 + #1474 upstream merges; refresh open-PR queue",
+      "expected": "README.md",
+      "why": "76c5687 docs: record #1459 + #1474 upstream merges; refresh open-PR queue"
+    },
+    {
+      "query": "Wire MEMPALACE_DOCS_GA_ID into deploy and harden gtag snippet",
+      "expected": "deploy-docs.yml",
+      "why": "8cc1c7c feat(docs): wire MEMPALACE_DOCS_GA_ID into deploy and harden gtag snippet"
+    },
+    {
+      "query": "Bulk pre-fetch already-mined set instead of N WHERE queries",
+      "expected": "convo_miner.py",
+      "why": "74cd1c3 perf(convo_miner): bulk pre-fetch already-mined set instead of N WHERE queries"
+    },
+    {
+      "query": "Retire row inventory + companion check 5",
+      "expected": "CLAUDE.md",
+      "why": "cf0c49c docs(claude.md): retire row inventory + companion check 5"
+    },
+    {
+      "query": "Track f499814 chroma-chokepoint sanitizer + CLAUDE.md row 39",
+      "expected": "CLAUDE.md",
+      "why": "42815b8 docs: track f499814 chroma-chokepoint sanitizer + CLAUDE.md row 39"
+    },
+    {
+      "query": "Catch-all metadata sanitizer in add/upsert",
+      "expected": "chroma.py",
+      "why": "5d95656 fix(backends/chroma): catch-all metadata sanitizer in add/upsert"
+    },
+    {
+      "query": "Coerce empty metadata to sentinel in both rebuild paths",
+      "expected": "repair.py",
+      "why": "a26e465 fix(repair): coerce empty metadata to sentinel in both rebuild paths"
+    },
+    {
+      "query": "Backfill 6 YAML entries from stale PR #11 (work already on main)",
+      "expected": "fork-changes.yaml",
+      "why": "5386490 docs: backfill 6 YAML entries from stale PR #11 (work already on main)"
+    },
+    {
+      "query": "Track repair-empty-meta fix + post-merge hook-routing change",
+      "expected": "CLAUDE.md",
+      "why": "cdee4dc docs: track repair-empty-meta fix + post-merge hook-routing change"
+    },
+    {
+      "query": "Route Stop/PreCompact through palace-daemon/clients/hook.py",
+      "expected": "hooks.json",
+      "why": "42ded2e fix(hooks): route Stop/PreCompact through palace-daemon/clients/hook.py"
+    },
+    {
+      "query": "Post-AGE-skeleton housekeeping — YAML + FORK_CHANGELOG + row 37",
+      "expected": "CLAUDE.md",
+      "why": "f31c23e docs: post-AGE-skeleton housekeeping — YAML + FORK_CHANGELOG + row 37"
+    },
+    {
+      "query": "KnowledgeGraphAGE skeleton + graph bootstrap",
+      "expected": "knowledge_graph_age.py",
+      "why": "a3ee623 feat(kg): KnowledgeGraphAGE skeleton + graph bootstrap"
+    },
+    {
+      "query": "Post-pgvector-merge housekeeping — YAML + FORK_CHANGELOG + row inventory",
+      "expected": "CLAUDE.md",
+      "why": "9db1ea7 docs: post-pgvector-merge housekeeping — YAML + FORK_CHANGELOG + row inventory"
+    },
+    {
+      "query": "Pivot to four-layer model + Auto Dream vindication framing",
+      "expected": "README.md",
+      "why": "55b36ca docs(readme): pivot to four-layer model + Auto Dream vindication framing"
+    },
+    {
+      "query": "Record #665 composition stance for pgvector backend",
+      "expected": "pgvector-665-decision.md",
+      "why": "4dfdc43 docs(internal): record #665 composition stance for pgvector backend"
+    },
+    {
+      "query": "Accept None as \"use default collection\" in get_collection",
+      "expected": "palace.py",
+      "why": "5c7f234 fix(palace): accept None as \"use default collection\" in get_collection"
+    },
+    {
+      "query": "Add optional PostgreSQL backend",
+      "expected": "postgres.py",
+      "why": "5e90c72 feat(backends): add optional PostgreSQL backend"
+    },
+    {
+      "query": "Auto-pull embedding model when missing instead of silently scoring 0",
+      "expected": "orchestrator.py",
+      "why": "3fbe930 fix(benchmarks): auto-pull embedding model when missing instead of silently scoring 0"
+    },
+    {
+      "query": "Address copilot-pull-request-reviewer feedback on PR #1447",
+      "expected": "README.md",
+      "why": "42f52c8 fix(benchmarks): address copilot-pull-request-reviewer feedback on PR #1447"
+    },
+    {
+      "query": "Explicit invitation for backend + model contributions",
+      "expected": "README.md",
+      "why": "152fbb6 docs(benchmarks): explicit invitation for backend + model contributions"
+    },
+    {
+      "query": "Expand README into a full reproduction guide",
+      "expected": "README.md",
+      "why": "7d094f6 docs(benchmarks): expand README into a full reproduction guide"
+    },
+    {
+      "query": "Add modern-tier candidates that initial search missed",
+      "expected": "candidates.yaml",
+      "why": "fa90f26 feat(benchmarks): add modern-tier candidates that initial search missed"
+    },
+    {
+      "query": "Address gemini-code-assist review on PR #1447",
+      "expected": "metrics.py",
+      "why": "67f6fc6 fix(benchmarks): address gemini-code-assist review on PR #1447"
+    },
+    {
+      "query": "Refresh cloud lineup + document structured-outputs gotcha",
+      "expected": "candidates.yaml",
+      "why": "b7c40ca docs(benchmarks): refresh cloud lineup + document structured-outputs gotcha"
+    },
+    {
+      "query": "Pgvector + AGE migration implementation plan (4 phases, 92 steps)",
+      "expected": "2026-05-10-pgvector-age-migration-impl.md",
+      "why": "3e2fac8 docs(plan): pgvector + AGE migration implementation plan (4 phases, 92 steps)"
+    },
+    {
+      "query": "Postgres + pgvector + apache age substrate migration design",
+      "expected": "2026-05-10-pgvector-age-migration-design.md",
+      "why": "481f905 docs(spec): postgres + pgvector + apache age substrate migration design"
+    },
+    {
+      "query": "Add cloud-tier ceiling measurements",
+      "expected": "2026-05-10-analysis.md",
+      "why": "9775683 docs(benchmarks): add cloud-tier ceiling measurements"
+    },
+    {
+      "query": "Update analysis with reproducibility + hallucination findings",
+      "expected": "2026-05-10-analysis.md",
+      "why": "9f8523a docs(benchmarks): update analysis with reproducibility + hallucination findings"
+    },
+    {
+      "query": "Add cloud-tier candidates + cherry-pick real-format fixture",
+      "expected": "candidates.yaml",
+      "why": "4ee1839 feat(benchmarks): add cloud-tier candidates + cherry-pick real-format fixture"
+    },
+    {
+      "query": "Commit first matrix run + analysis report",
+      "expected": "2026-05-10-analysis.md",
+      "why": "8f3111f docs(benchmarks): commit first matrix run + analysis report"
+    },
+    {
+      "query": "Always pass think=False, drop reasoning candidate",
+      "expected": "candidates.yaml",
+      "why": "b90d270 fix(benchmarks): always pass think=False, drop reasoning candidate"
+    },
+    {
+      "query": "Add think parameter to classify()",
+      "expected": "llm_client.py",
+      "why": "608d4e6 feat(llm_client): add think parameter to classify()"
+    },
+    {
+      "query": "Add CSV-to-markdown report renderer",
+      "expected": "summarize.py",
+      "why": "5f2c554 feat(benchmarks): add CSV-to-markdown report renderer"
+    },
+    {
+      "query": "Use Ollama HTTP /api/ps for vram_resident_mb",
+      "expected": "metrics.py",
+      "why": "120e240 fix(benchmarks): use Ollama HTTP /api/ps for vram_resident_mb"
+    },
+    {
+      "query": "Add synthetic dataset for model evaluation harness",
+      "expected": "dataset.jsonl",
+      "why": "1c1e725 feat(benchmarks): add synthetic dataset for model evaluation harness"
+    },
+    {
+      "query": "Add small-model evaluation harness",
+      "expected": "README.md",
+      "why": "c0b23b0 feat(benchmarks): add small-model evaluation harness"
+    },
+    {
+      "query": "Symmetric source_file resolve + perf optimizations",
+      "expected": "sync.py",
+      "why": "0ff4121 fix(sync): symmetric source_file resolve + perf optimizations"
+    },
+    {
+      "query": "Add gitignore-aware drawer prune (#1252)",
+      "expected": "sync.py",
+      "why": "1d3eecb feat(sync): add gitignore-aware drawer prune (#1252)"
+    },
+    {
+      "query": "Tighten temporal handling and cleanup",
+      "expected": "config.py",
+      "why": "1fbcb73 fix(kg): tighten temporal handling and cleanup"
+    },
+    {
+      "query": "Close sqlite connections during cleanup",
+      "expected": "knowledge_graph.py",
+      "why": "29c0c80 fix(kg): close sqlite connections during cleanup"
+    },
+    {
+      "query": "Tighten canonical temporal datetime support",
+      "expected": "config.py",
+      "why": "db69d1f fix(kg): tighten canonical temporal datetime support"
+    },
+    {
+      "query": "Support Python 3.9 type annotations",
+      "expected": "knowledge_graph.py",
+      "why": "6694198 fix(kg): support Python 3.9 type annotations"
+    },
+    {
+      "query": "Canonicalize temporal datetime support",
+      "expected": "config.py",
+      "why": "4adc99f fix(kg): canonicalize temporal datetime support"
+    },
+    {
+      "query": "Accept ISO datetimes for temporal inputs",
+      "expected": "config.py",
+      "why": "eebf48e fix(kg): accept ISO datetimes for temporal inputs"
+    },
+    {
+      "query": "Use Optional[Path] for py39 compat",
+      "expected": "hooks_cli.py",
+      "why": "d4c476b fix(hooks): use Optional[Path] for py39 compat"
+    },
+    {
+      "query": "Per-target PID guard with atomic claim (#1212, #1206)",
+      "expected": "hooks_cli.py",
+      "why": "3a76360 fix(hooks): per-target PID guard with atomic claim (#1212, #1206)"
+    },
+    {
+      "query": "Address Copilot review on PATH visibility (PR #1414)",
+      "expected": "README.md",
+      "why": "c08ec00 fix: address Copilot review on PATH visibility (PR #1414)"
+    },
+    {
+      "query": "Recommend uv as the package manager",
+      "expected": "README.md",
+      "why": "c35686c docs(install): recommend uv as the package manager"
+    },
+    {
+      "query": "Reserve byte 0 as lock sentinel for Windows portability",
+      "expected": "palace.py",
+      "why": "d5ce97c fix(palace): reserve byte 0 as lock sentinel for Windows portability"
+    },
+    {
+      "query": "Identify lock holder + exit non-zero on contention",
+      "expected": "cli.py",
+      "why": "ef8d83c fix(mine): identify lock holder + exit non-zero on contention"
+    },
+    {
+      "query": "Detach Popen children so the hook can exit on Windows",
+      "expected": "hooks_cli.py",
+      "why": "71804c0 fix(hooks): detach Popen children so the hook can exit on Windows"
+    },
+    {
+      "query": "Record daemon-strict migration completion in fork-ahead table",
+      "expected": "README.md",
+      "why": "86c4785 docs(readme): record daemon-strict migration completion in fork-ahead table"
+    },
+    {
+      "query": "Backfill missing commit refs + retire moot row 15 hedge",
+      "expected": "CLAUDE.md",
+      "why": "1975207 docs(claude): backfill missing commit refs + retire moot row 15 hedge"
+    },
+    {
+      "query": "Update last-sync reference to 2026-05-07",
+      "expected": "CLAUDE.md",
+      "why": "dfb85cc docs(claude): update last-sync reference to 2026-05-07"
+    },
+    {
+      "query": "Use token-boundary matching in detect_room",
+      "expected": "miner.py",
+      "why": "ead2c5d fix(miner): use token-boundary matching in detect_room"
+    },
+    {
+      "query": "Record daemon-routing migration completion (rows 33+34)",
+      "expected": "CLAUDE.md",
+      "why": "848b1dc docs: record daemon-routing migration completion (rows 33+34)"
+    },
+    {
+      "query": "Daemon-route status, search, mine when PALACE_DAEMON_URL is set",
+      "expected": "cli.py",
+      "why": "22ef562 feat(cli): daemon-route status, search, mine when PALACE_DAEMON_URL is set"
+    },
+    {
+      "query": "Daemon-route mcp_server.py via handle_request chokepoint",
+      "expected": "mcp_server.py",
+      "why": "41359ba feat(mcp): daemon-route mcp_server.py via handle_request chokepoint"
+    },
+    {
+      "query": "Rebuild closets on hash change + backfill legacy state",
+      "expected": "diary_ingest.py",
+      "why": "2ff6283 fix(diary): rebuild closets on hash change + backfill legacy state"
+    },
+    {
+      "query": "Refuse symlinks at file targets and skip tests on Windows",
+      "expected": "exporter.py",
+      "why": "7545238 fix(exporter): refuse symlinks at file targets and skip tests on Windows"
+    },
+    {
+      "query": "Detect same-size edits via content hash",
+      "expected": "diary_ingest.py",
+      "why": "0d1c1fb fix(diary): detect same-size edits via content hash"
+    },
+    {
+      "query": "Refuse symlinks at export targets",
+      "expected": "exporter.py",
+      "why": "40e2c8b fix(exporter): refuse symlinks at export targets"
+    },
+    {
+      "query": "Retry _call_llm on JSONDecodeError instead of bailing",
+      "expected": "closet_llm.py",
+      "why": "2a0ed0c fix(closet_llm): retry _call_llm on JSONDecodeError instead of bailing"
+    },
+    {
+      "query": "Run SQLite integrity preflight before chromadb open",
+      "expected": "repair.py",
+      "why": "5134a63 fix(repair): run SQLite integrity preflight before chromadb open"
+    },
+    {
+      "query": "Use configured collection in recovery paths",
+      "expected": "config.py",
+      "why": "ec6d2dd fix: use configured collection in recovery paths"
+    },
+    {
+      "query": "Harden Windows mine against ONNX bad_alloc + silent partial exits",
+      "expected": "miner.py",
+      "why": "5488e7b fix(miner): harden Windows mine against ONNX bad_alloc + silent partial exits"
+    },
+    {
+      "query": "Quote ChromaBackend annotation for Python 3.9 compatibility",
+      "expected": "repair.py",
+      "why": "7cf9b17 fix(repair): quote ChromaBackend annotation for Python 3.9 compatibility"
+    },
+    {
+      "query": "Retry tool_search once on Chroma \"Error finding id\" transient (#1315)",
+      "expected": "mcp_server.py",
+      "why": "be95ea7 fix(mcp): retry tool_search once on Chroma \"Error finding id\" transient (#1315)"
+    },
+    {
+      "query": "Apply ruff format",
+      "expected": "render_jsonl.py",
+      "why": "7c679ba fix(tools/render_jsonl): apply ruff format"
+    },
+    {
+      "query": "Split chained statements per ruff 0.4.x",
+      "expected": "render_jsonl.py",
+      "why": "921ff5a fix(tools/render_jsonl): split chained statements per ruff 0.4.x"
+    },
+    {
+      "query": "Add 30-day expiry callout + ship 4 auto-save tools",
+      "expected": "save.md",
+      "why": "bddba59 docs: add 30-day expiry callout + ship 4 auto-save tools"
+    },
+    {
+      "query": "Clarify contributor git identity setup",
+      "expected": "CONTRIBUTING.md",
+      "why": "e28ac94 docs: clarify contributor git identity setup"
+    },
+    {
+      "query": "Run 2 results — heading-aware-md wins markdown probes",
+      "expected": "2026-05-06-chunking-strategy-ablation.md",
+      "why": "b2b4fb3 research(chunking): Run 2 results — heading-aware-md wins markdown probes"
+    },
+    {
+      "query": "Document A/B/C ablation findings + add markdown probes",
+      "expected": "2026-05-06-chunking-strategy-ablation.md",
+      "why": "9f3d2d7 research(chunking): document A/B/C ablation findings + add markdown probes"
+    },
+    {
+      "query": "Add chunk_strategy_ablation.py — A/B/C chunkers × chunk_size sweep",
+      "expected": "chunk_strategy_ablation.py",
+      "why": "6c89d9f research(scripts): add chunk_strategy_ablation.py — A/B/C chunkers × chunk_size sweep"
+    },
+    {
+      "query": "Record #1286 → #1377 outcome (closed → merged with co-author credit)",
+      "expected": "CLAUDE.md",
+      "why": "991eba8 docs(CLAUDE): record #1286 → #1377 outcome (closed → merged with co-author credit)"
+    },
+    {
+      "query": "Retry _get_collection once on transient failure (#1286)",
+      "expected": "mcp_server.py",
+      "why": "e334e25 fix(mcp): retry _get_collection once on transient failure (#1286)"
+    },
+    {
+      "query": "Address PR #1310 review feedback",
+      "expected": "repair.py",
+      "why": "d92c741 fix(repair): address PR #1310 review feedback"
+    },
+    {
+      "query": "Add --mode from-sqlite to recover palaces with corrupt HNSW (#1308)",
+      "expected": "repair.py",
+      "why": "a7c4ed2 fix(repair): add --mode from-sqlite to recover palaces with corrupt HNSW (#1308)"
+    },
+    {
+      "query": "Fix ruff bugbear and silent-except findings",
+      "expected": "convo_miner.py",
+      "why": "ca5899e refactor: fix ruff bugbear and silent-except findings"
+    },
+    {
+      "query": "Reject non-http(s) endpoints",
+      "expected": "closet_llm.py",
+      "why": "b68485d fix(closet_llm): reject non-http(s) endpoints"
+    },
+    {
+      "query": "Clamp similarity to [0,1] to avoid negative values",
+      "expected": "layers.py",
+      "why": "f2bed92 fix(layers): clamp similarity to [0,1] to avoid negative values"
+    },
+    {
+      "query": "Clamp similarity to [0,1] to avoid negative values",
+      "expected": "mcp_server.py",
+      "why": "eef053d fix(mcp_server): clamp similarity to [0,1] to avoid negative values"
+    },
+    {
+      "query": "MCP server JSON output ensure_ascii=False for non-ASCII support",
+      "expected": "mcp_server.py",
+      "why": "7b49478 fix: MCP server JSON output ensure_ascii=False for non-ASCII support"
+    },
+    {
+      "query": "Add validation for missing name parameter in tools/call requests",
+      "expected": "mcp_server.py",
+      "why": "a85d432 feat: add validation for missing name parameter in tools/call requests"
+    },
+    {
+      "query": "Include null id in JSON-RPC invalid request error responses and add validation tests",
+      "expected": "mcp_server.py",
+      "why": "55d79dc fix: include null id in JSON-RPC invalid request error responses and add validation tests"
+    },
+    {
+      "query": "Handle null JSON-RPC request payloads safely",
+      "expected": "mcp_server.py",
+      "why": "0fdb480 fix(mcp): handle null JSON-RPC request payloads safely"
+    },
+    {
+      "query": "Clamp effective_distance to valid cosine range [0, 2]",
+      "expected": "searcher.py",
+      "why": "5347c2c fix(searcher): clamp effective_distance to valid cosine range [0, 2]"
+    },
+    {
+      "query": "Guard against None metadata/doc in search result loops",
+      "expected": "searcher.py",
+      "why": "733e435 fix(searcher): guard against None metadata/doc in search result loops"
+    },
+    {
+      "query": "Record hook_verbatim_mode toggle (row 32)",
+      "expected": "fork-changes.yaml",
+      "why": "bb81d21 docs(fork-changes): record hook_verbatim_mode toggle (row 32)"
+    },
+    {
+      "query": "Add hook_verbatim_mode toggle for transcript ingest",
+      "expected": "normalize.py",
+      "why": "ef98961 feat(normalize): add hook_verbatim_mode toggle for transcript ingest"
+    },
+    {
+      "query": "Address Copilot review on PRs #6/#7/#8/#10 (#12)",
+      "expected": "cli.py",
+      "why": "1e79856 fix: address Copilot review on PRs #6/#7/#8/#10 (#12)"
+    },
+    {
+      "query": "Preserve dashed project names + route through normalize_wing_name (#10)",
+      "expected": "hooks_cli.py",
+      "why": "d76134d fix(hooks): preserve dashed project names + route through normalize_wing_name (#10)"
+    },
+    {
+      "query": "Drop wing_ prefix from transcript-derived wings (#9)",
+      "expected": "hooks_cli.py",
+      "why": "86d4700 fix(hooks): drop wing_ prefix from transcript-derived wings (#9)"
+    },
+    {
+      "query": "Retire mempalace_session_recovery collection + read tool (#8)",
+      "expected": "palace.py",
+      "why": "0b945e1 refactor(mcp): retire mempalace_session_recovery collection + read tool (#8)"
+    },
+    {
+      "query": "Mempalace mined + purge --source-file (#7)",
+      "expected": "cli.py",
+      "why": "2e6ced9 feat(cli): mempalace mined + purge --source-file (#7)"
+    },
+    {
+      "query": "Drop checkpoint write path (verbatim-only, part 1) (#6)",
+      "expected": "hooks_cli.py",
+      "why": "69768fc fix(hooks): drop checkpoint write path (verbatim-only, part 1) (#6)"
+    },
+    {
+      "query": "Route mining through daemon when PALACE_DAEMON_URL is set (#2)",
+      "expected": "hooks_cli.py",
+      "why": "09d2ca6 fix(hooks): route mining through daemon when PALACE_DAEMON_URL is set (#2)"
+    },
+    {
+      "query": "Preflight SQLite integrity before rebuild",
+      "expected": "repair.py",
+      "why": "6b04298 fix(repair): preflight SQLite integrity before rebuild"
+    },
+    {
+      "query": "Verify write roundtrip before bailout",
+      "expected": "migrate.py",
+      "why": "bb40a52 fix(migrate): verify write roundtrip before bailout"
+    },
+    {
+      "query": "Preflight poisoned max_seq_id",
+      "expected": "repair.py",
+      "why": "37e7d39 fix(repair): preflight poisoned max_seq_id"
+    },
+    {
+      "query": "Quarantine partial HNSW flush without metadata",
+      "expected": "chroma.py",
+      "why": "eff844b fix(storage): quarantine partial HNSW flush without metadata"
+    },
+    {
+      "query": "Fsync parent dir after rename for ext4 durability",
+      "expected": "entity_registry.py",
+      "why": "2e441d1 fix(entity_registry): fsync parent dir after rename for ext4 durability"
+    },
+    {
+      "query": "Atomic write to prevent partial corruption on crash",
+      "expected": "entity_registry.py",
+      "why": "4f36145 fix(entity_registry): atomic write to prevent partial corruption on crash"
+    },
+    {
+      "query": "Quarantine bloated HNSW link payloads",
+      "expected": "chroma.py",
+      "why": "f9d939a fix(storage): quarantine bloated HNSW link payloads"
+    },
+    {
+      "query": "Record cfg.init chunking-defaults fix",
+      "expected": "fork-changes.yaml",
+      "why": "5b8e867 docs(fork-changes): record cfg.init chunking-defaults fix"
+    },
+    {
+      "query": "Don't write chunking defaults in cfg.init()",
+      "expected": "config.py",
+      "why": "6ce37c0 fix(config): don't write chunking defaults in cfg.init()"
+    },
+    {
+      "query": "Apply #1262/#1289/#1303 pattern to recovery collection",
+      "expected": "mcp_server.py",
+      "why": "ace5a57 fix(mcp_server): apply #1262/#1289/#1303 pattern to recovery collection"
+    },
+    {
+      "query": "Extract Windows UTF-8 reconfigure into shared helper",
+      "expected": "_stdio.py",
+      "why": "285b3b4 refactor(stdio): extract Windows UTF-8 reconfigure into shared helper"
+    },
+    {
+      "query": "Retry KG handlers once on concurrent close race",
+      "expected": "mcp_server.py",
+      "why": "b8816e0 fix(mcp): retry KG handlers once on concurrent close race"
+    },
+    {
+      "query": "Post-sync update — row 15 merged via #1262/#1289/#1303",
+      "expected": "CLAUDE.md",
+      "why": "bf71759 docs(CLAUDE): post-sync update — row 15 merged via #1262/#1289/#1303"
+    },
+    {
+      "query": "Per-stream stdio errors policy on Windows",
+      "expected": "cli.py",
+      "why": "03643eb fix(cli, fact-checker): per-stream stdio errors policy on Windows"
+    },
+    {
+      "query": "Reconfigure stdio to UTF-8 on Windows",
+      "expected": "cli.py",
+      "why": "32f4dfa fix(cli): reconfigure stdio to UTF-8 on Windows"
+    },
+    {
+      "query": "Reconfigure stdio to UTF-8 on Windows",
+      "expected": "fact_checker.py",
+      "why": "7cee74c fix(fact-checker): reconfigure stdio to UTF-8 on Windows"
+    },
+    {
+      "query": "Release SQLite file lock on close_palace/close (#1067)",
+      "expected": "chroma.py",
+      "why": "45df1a2 fix(backends/chroma): release SQLite file lock on close_palace/close (#1067)"
+    },
+    {
+      "query": "Drain KG cache on tool_reconnect",
+      "expected": "mcp_server.py",
+      "why": "0a62658 fix(mcp): drain KG cache on tool_reconnect"
+    },
+    {
+      "query": "Replace eager _kg with lazy per-path cache (#1136)",
+      "expected": "mcp_server.py",
+      "why": "beac5d9 refactor(mcp): replace eager _kg with lazy per-path cache (#1136)"
+    },
+    {
+      "query": "Drop §5.5 from kg_add docstring/schema",
+      "expected": "mcp_server.py",
+      "why": "0e65c54 docs(mcp): drop §5.5 from kg_add docstring/schema"
+    },
+    {
+      "query": "Address Copilot review on #1306",
+      "expected": "searcher.py",
+      "why": "3eb7980 fix(searcher): address Copilot review on #1306"
+    },
+    {
+      "query": "Basename source_file in tool_get_drawer responses",
+      "expected": "mcp_server.py",
+      "why": "7fc260f fix(mcp): basename source_file in tool_get_drawer responses"
+    },
+    {
+      "query": "Omit palace_path from tool_status responses (+ docs)",
+      "expected": "mcp_server.py",
+      "why": "b2f259c fix(mcp): omit palace_path from tool_status responses (+ docs)"
+    },
+    {
+      "query": "Case-insensitive agent name in diary_write/diary_read (#1243)",
+      "expected": "mcp_server.py",
+      "why": "e9222b4 fix(mcp): case-insensitive agent name in diary_write/diary_read (#1243)"
+    },
+    {
+      "query": "Wire quarantine_stale_hnsw into _client() to prevent SIGSEGV on stale HNSW (#1121, #1132, #1263)",
+      "expected": "chroma.py",
+      "why": "10733f1 fix(backends/chroma): wire quarantine_stale_hnsw into _client() to prevent SIGSEGV on stale HNSW (#1121, #1132, #1263)"
+    },
+    {
+      "query": "Honor --palace flag in cmd_init (#1313)",
+      "expected": "cli.py",
+      "why": "01b3183 fix(cli): honor --palace flag in cmd_init (#1313)"
+    },
+    {
+      "query": "Forward valid_to and source params in kg_add/kg_invalidate (#1314)",
+      "expected": "mcp_server.py",
+      "why": "e4e25ed fix(mcp): forward valid_to and source params in kg_add/kg_invalidate (#1314)"
+    },
+    {
+      "query": "Write compress output to mempalace_closets so palace can read them (#1244)",
+      "expected": "cli.py",
+      "why": "cbd6e5d fix(cli): write compress output to mempalace_closets so palace can read them (#1244)"
+    },
+    {
+      "query": "Use is_dir() for palace root check (review feedback)",
+      "expected": "hooks_cli.py",
+      "why": "2d50b21 fix(hooks): use is_dir() for palace root check (review feedback)"
+    },
+    {
+      "query": "Treat absent ~/.mempalace as auto-save off",
+      "expected": "hooks_cli.py",
+      "why": "8472d55 fix(hooks): treat absent ~/.mempalace as auto-save off"
+    },
+    {
+      "query": "Quote CLAUDE_PLUGIN_ROOT / CODEX_PLUGIN_ROOT in hooks.json (#1076) (#1077)",
+      "expected": "hooks.json",
+      "why": "d07b730 fix(hooks): quote CLAUDE_PLUGIN_ROOT / CODEX_PLUGIN_ROOT in hooks.json (#1076) (#1077)"
+    },
+    {
+      "query": "Add candidate_strategy=\"union\" for vector∪BM25 reranking pool",
+      "expected": "searcher.py",
+      "why": "6509071 feat(searcher): add candidate_strategy=\"union\" for vector∪BM25 reranking pool"
+    },
+    {
+      "query": "Address copilot review on #1303",
+      "expected": "mcp_server.py",
+      "why": "cd98d66 fix(mcp_server): address copilot review on #1303"
+    },
+    {
+      "query": "Pass embedding_function= on collection reopen (#1299)",
+      "expected": "mcp_server.py",
+      "why": "ac6c2b6 fix(mcp_server): pass embedding_function= on collection reopen (#1299)"
+    },
+    {
+      "query": "Avoid false hnsw divergence fallback",
+      "expected": "chroma.py",
+      "why": "0e32b96 fix: avoid false hnsw divergence fallback"
+    },
+    {
+      "query": "Close active backend before rollback restore",
+      "expected": "repair.py",
+      "why": "f57f300 fix(repair): close active backend before rollback restore"
+    },
+    {
+      "query": "Restore backup on repair failure",
+      "expected": "cli.py",
+      "why": "2f509b4 fix(cli): restore backup on repair failure"
+    },
+    {
+      "query": "Rebuild collections through temp staging",
+      "expected": "repair.py",
+      "why": "7fa27bd fix(repair): rebuild collections through temp staging"
+    },
+    {
+      "query": "Harden HNSW startup preflight",
+      "expected": "chroma.py",
+      "why": "c3e1104 fix(chroma): harden HNSW startup preflight"
+    },
+    {
+      "query": "Split get_or_create_collection on reopen (follow-up to #1262)",
+      "expected": "mcp_server.py",
+      "why": "9dd56ec fix(mcp_server): split get_or_create_collection on reopen (follow-up to #1262)"
+    },
+    {
+      "query": "Decode BLOB embeddings.seq_id in max-seq-id heuristic (#1254)",
+      "expected": "repair.py",
+      "why": "3b5ebcc fix(repair): decode BLOB embeddings.seq_id in max-seq-id heuristic (#1254)"
+    },
+    {
+      "query": "Scale HNSW divergence floor with hnsw:sync_threshold",
+      "expected": "chroma.py",
+      "why": "4a0f330 fix(repair): scale HNSW divergence floor with hnsw:sync_threshold"
+    },
+    {
+      "query": "Upstream-PRs table — add #1262 + #1286, update sync status",
+      "expected": "CLAUDE.md",
+      "why": "1f53b39 docs(CLAUDE): upstream-PRs table — add #1262 + #1286, update sync status"
+    },
+    {
+      "query": "Row 15 — third try, matches actual call-graph trace",
+      "expected": "CLAUDE.md",
+      "why": "830586b docs(CLAUDE): row 15 — third try, matches actual call-graph trace"
+    },
+    {
+      "query": "Row 15 — correct \"stable metadata\" wording, audit four call sites",
+      "expected": "CLAUDE.md",
+      "why": "260e2a2 docs(CLAUDE): row 15 — correct \"stable metadata\" wording, audit four call sites"
+    },
+    {
+      "query": "Row 15 reclassified — get-then-create guard not in fork main",
+      "expected": "CLAUDE.md",
+      "why": "393ac89 docs(CLAUDE): row 15 reclassified — get-then-create guard not in fork main"
+    },
+    {
+      "query": "Reject partial ISO dates to avoid silent empty result sets",
+      "expected": "config.py",
+      "why": "abe8576 fix(kg): reject partial ISO dates to avoid silent empty result sets"
+    },
+    {
+      "query": "Validate ISO-8601 date formats at MCP boundary",
+      "expected": "config.py",
+      "why": "4d98b05 fix(kg): validate ISO-8601 date formats at MCP boundary"
+    },
+    {
+      "query": "Cite RFC 002 + in-flight adapter PRs (#23 OpenCode, #274/#232 Cursor, #169 Pi, #702 Cursor+factory.ai)",
+      "expected": "README.md",
+      "why": "710b196 docs(README): cite RFC 002 + in-flight adapter PRs (#23 OpenCode, #274/#232 Cursor, #169 Pi, #702 Cursor+factory.ai)"
+    },
+    {
+      "query": "Add multi-agent support roadmap (Claude Code, OpenCode, Cursor, Aider, Gemini CLI, Codex CLI, Warp)",
+      "expected": "README.md",
+      "why": "eeec6a7 docs(README): add multi-agent support roadmap (Claude Code, OpenCode, Cursor, Aider, Gemini CLI, Codex CLI, Warp)"
+    },
+    {
+      "query": "Close \"what this fork has learned\" with Karlton's two-hard-things; add InfoQ Grafana / pgvector-AGE / Plummer / Karlton to Sources",
+      "expected": "README.md",
+      "why": "c1d2989 docs(README): close \"what this fork has learned\" with Karlton's two-hard-things; add InfoQ Grafana / pgvector-AGE / Plummer / Karlton to Sources"
+    },
+    {
+      "query": "Note Grafana Loki + o11y-bench as adjacent verbatim-first / Cat 9 precedent; add agent-shaped CLI to What's next",
+      "expected": "README.md",
+      "why": "4d9ad6e docs(README): note Grafana Loki + o11y-bench as adjacent verbatim-first / Cat 9 precedent; add agent-shaped CLI to What's next"
+    },
+    {
+      "query": "Add substrate-exploration section (Postgres + pgvector + Apache AGE); update Cat 9 with E2E in-flight; note Postgres+AGE leverage on P4/P5",
+      "expected": "README.md",
+      "why": "9551a74 docs(README): add substrate-exploration section (Postgres + pgvector + Apache AGE); update Cat 9 with E2E in-flight; note Postgres+AGE leverage on P4/P5"
+    },
+    {
+      "query": "Flip principles to positive framing; promote verbatim-vs-derivative axis; add what-we've-learned + what's-next",
+      "expected": "README.md",
+      "why": "6a75e27 docs(README): flip principles to positive framing; promote verbatim-vs-derivative axis; add what-we've-learned + what's-next"
+    },
+    {
+      "query": "Paginate closet_llm col.get (#1073)",
+      "expected": "closet_llm.py",
+      "why": "db28bf1 fix: paginate closet_llm col.get (#1073)"
+    },
+    {
+      "query": "Address release review feedback",
+      "expected": "entity_detector.py",
+      "why": "4cfbd60 fix: address release review feedback"
+    },
+    {
+      "query": "Stop ChromaDB from crashing when reopening an existing palace",
+      "expected": "chroma.py",
+      "why": "d7f4638 fix(storage): stop ChromaDB from crashing when reopening an existing palace"
+    },
+    {
+      "query": "Discard user/gemini turns before session_metadata sentinel",
+      "expected": "normalize.py",
+      "why": "e7fe6ca fix(normalize): discard user/gemini turns before session_metadata sentinel"
+    },
+    {
+      "query": "Add Gemini CLI JSONL to module-level supported formats list",
+      "expected": "normalize.py",
+      "why": "a3e3691 docs(normalize): add Gemini CLI JSONL to module-level supported formats list"
+    },
+    {
+      "query": "Capture today's fork-ahead arc in CLAUDE.md + YAML",
+      "expected": "CLAUDE.md",
+      "why": "84c3135 docs: capture today's fork-ahead arc in CLAUDE.md + YAML"
+    },
+    {
+      "query": "Restore daemon routing on .mcp.json without embedded credential",
+      "expected": ".mcp.json",
+      "why": "9f91e18 fix(plugin): restore daemon routing on .mcp.json without embedded credential"
+    },
+    {
+      "query": "Scrub embedded API key + daemon URL from manifests",
+      "expected": ".mcp.json",
+      "why": "8119149 fix(plugin): scrub embedded API key + daemon URL from manifests"
+    },
+    {
+      "query": "Record VecRecall closet-boost ablation finding",
+      "expected": "searcher.py",
+      "why": "3cb03f3 docs(searcher): record VecRecall closet-boost ablation finding"
+    },
+    {
+      "query": "Hoist CLOSET_RANK_BOOSTS to module level for ablation",
+      "expected": "searcher.py",
+      "why": "f558d3c refactor(searcher): hoist CLOSET_RANK_BOOSTS to module level for ablation"
+    }
+  ]
+}
