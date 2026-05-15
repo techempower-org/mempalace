@@ -140,18 +140,24 @@ def _rrf_fuse(a_per, b_per, k=60):
         # effective top-1 position under RRF.
         best_rank = min(r for r in (ra, rb) if r is not None) if (ra or rb) else None
         rr = (1.0 / best_rank) if best_rank else 0.0
-        fused.append(
-            {"query": a["query"], "rank": best_rank, "rr": rr, "rrf_score": rrf_score}
-        )
+        fused.append({"query": a["query"], "rank": best_rank, "rr": rr, "rrf_score": rrf_score})
     mrr = sum(p["rr"] for p in fused) / len(fused)
     return mrr, fused
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-dir", required=True, help="Path to FT-Code-5000 SentenceTransformer dir.")
-    parser.add_argument("--probes", required=True, help="Path to probe set JSON (derive_probes_from_git.py output).")
-    parser.add_argument("--strategy", default="C_plus_ast_python__cs800", help="Strategy name to run. Default: C-AST cs800.")
+    parser.add_argument(
+        "--model-dir", required=True, help="Path to FT-Code-5000 SentenceTransformer dir."
+    )
+    parser.add_argument(
+        "--probes", required=True, help="Path to probe set JSON (derive_probes_from_git.py output)."
+    )
+    parser.add_argument(
+        "--strategy",
+        default="C_plus_ast_python__cs800",
+        help="Strategy name to run. Default: C-AST cs800.",
+    )
     parser.add_argument("--n-results", type=int, default=10)
     parser.add_argument("--out", default="", help="Optional path to write the full result JSON.")
     args = parser.parse_args(argv)
@@ -184,6 +190,7 @@ def main(argv=None):
     print()
 
     import mempalace.embedding as emb_mod
+
     original_get_ef = emb_mod.get_embedding_function
 
     try:
@@ -195,7 +202,9 @@ def main(argv=None):
         run_default = _run_strategy(
             args.strategy, strategy_fn, corpus, palace_a, probes, args.n_results
         )
-        print(f"  drawers: {run_default['drawer_count']}  MRR: {run_default['mrr']:.4f}  ({time.time()-t0:.1f}s)")
+        print(
+            f"  drawers: {run_default['drawer_count']}  MRR: {run_default['mrr']:.4f}  ({time.time()-t0:.1f}s)"
+        )
         print()
 
         # ── Run 2: FT-Code-5000 ──────────────────────────────────────
@@ -208,7 +217,9 @@ def main(argv=None):
         run_ftcode = _run_strategy(
             args.strategy, strategy_fn, corpus, palace_b, probes, args.n_results
         )
-        print(f"  drawers: {run_ftcode['drawer_count']}  MRR: {run_ftcode['mrr']:.4f}  ({time.time()-t0:.1f}s)")
+        print(
+            f"  drawers: {run_ftcode['drawer_count']}  MRR: {run_ftcode['mrr']:.4f}  ({time.time()-t0:.1f}s)"
+        )
         print()
     finally:
         _restore_encoder(original_get_ef)

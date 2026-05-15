@@ -112,6 +112,7 @@ def main(argv=None):
     print()
 
     import mempalace.embedding as emb_mod
+
     original_get_ef = emb_mod.get_embedding_function
 
     runs = []
@@ -154,16 +155,22 @@ def main(argv=None):
 
     # ── Fusion ──
     mrr_rrf3, fused3 = _rrf_fuse_n(runs)
-    mrr_rrf2_5k, _ = _rrf_fuse_n([runs[0], runs[2]])   # default + ft5000
-    mrr_rrf2_1k, _ = _rrf_fuse_n([runs[0], runs[1]])   # default + ft1000
+    mrr_rrf2_5k, _ = _rrf_fuse_n([runs[0], runs[2]])  # default + ft5000
+    mrr_rrf2_1k, _ = _rrf_fuse_n([runs[0], runs[1]])  # default + ft1000
 
     print("\n=== Headline ===")
     print(f"  MRR default         : {runs[0]['mrr']:.4f}")
     print(f"  MRR FT-Code-1000    : {runs[1]['mrr']:.4f}")
     print(f"  MRR FT-Code-5000    : {runs[2]['mrr']:.4f}")
-    print(f"  MRR RRF 2-way (5k)  : {mrr_rrf2_5k:.4f}  (Δ vs best solo: {mrr_rrf2_5k - max(runs[0]['mrr'], runs[2]['mrr']):+.4f})")
-    print(f"  MRR RRF 2-way (1k)  : {mrr_rrf2_1k:.4f}  (Δ vs best solo: {mrr_rrf2_1k - max(runs[0]['mrr'], runs[1]['mrr']):+.4f})")
-    print(f"  MRR RRF 3-way       : {mrr_rrf3:.4f}  (Δ vs best solo: {mrr_rrf3 - max(r['mrr'] for r in runs):+.4f})")
+    print(
+        f"  MRR RRF 2-way (5k)  : {mrr_rrf2_5k:.4f}  (Δ vs best solo: {mrr_rrf2_5k - max(runs[0]['mrr'], runs[2]['mrr']):+.4f})"
+    )
+    print(
+        f"  MRR RRF 2-way (1k)  : {mrr_rrf2_1k:.4f}  (Δ vs best solo: {mrr_rrf2_1k - max(runs[0]['mrr'], runs[1]['mrr']):+.4f})"
+    )
+    print(
+        f"  MRR RRF 3-way       : {mrr_rrf3:.4f}  (Δ vs best solo: {mrr_rrf3 - max(r['mrr'] for r in runs):+.4f})"
+    )
     print("\n  nakata-app reported +0.076 on 3-way fusion (n=20). We are n=200.")
 
     if args.out:
@@ -176,7 +183,7 @@ def main(argv=None):
                     "mrr_rrf3": mrr_rrf3,
                     "mrr_rrf2_default_ft5000": mrr_rrf2_5k,
                     "mrr_rrf2_default_ft1000": mrr_rrf2_1k,
-                    "delta_3way_vs_best_solo": mrr_rrf3 - max(r['mrr'] for r in runs),
+                    "delta_3way_vs_best_solo": mrr_rrf3 - max(r["mrr"] for r in runs),
                     "per_probe_fused3": fused3,
                 },
                 indent=2,
