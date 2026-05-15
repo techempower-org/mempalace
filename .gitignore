@@ -41,4 +41,10 @@ venv/
 # Private / shared artifacts that should never land in the public fork
 dashboards-bensig-*/
 
+# Per-session scratch — workspace state, one-shot scripts, transient
+# logs. Includes our recovery scripts, debug probes, HANDOFF.md.
+# Belongs in ~/.claude/projects/-home-jp/scratch/ for compaction
+# durability, not in the public repo.
+scratch/
+
 .envrc
