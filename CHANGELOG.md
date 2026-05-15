@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [Unreleased] — 2026-05-14 / 2026-05-15 — *postgres cutover, hybrid retrieval, encoder-axis evidence*
+
+Fork-side work that landed after the v3.3.5 release. Nothing upstreamed yet; some of it is operator-flavored and lives only on the fork.
+
+### Added
+
+- **Postgres + pgvector + Apache AGE backend is now the production default** on this fork. Cutover from chromadb-on-disk happened over 2026-05-13 / 14; `main` now serves live traffic against a 273K-drawer palace on `disks:5433` (PG16 + pgvector 0.8.2 + AGE 1.6.0). Composes upstream [#665](https://github.com/MemPalace/mempalace/pull/665) (skuznetsov's `PostgresBackend` on the RFC 001 contract) plus the pgvector lazy-index race fix below. The chromadb backend still works behind `MEMPALACE_BACKEND=chroma`. Operator narrative: [`docs/operators/pgvector-cutover-runbook.md`](docs/operators/pgvector-cutover-runbook.md).
+- **Hybrid retrieval** as `candidate_strategy="hybrid"` — vector candidates ∪ BM25 candidates (postgres `tsvector` + `pg_trgm` GIN for ILIKE identifier fallback) ∪ AGE graph-expanded candidates, hybrid-reranked. Exposed via [palace-daemon](https://github.com/techempower-org/palace-daemon)'s new `/search/keyword` and `/search/hybrid` HTTP endpoints. Search@5000 p50 125ms; recall@5 0.60 synthetic; filtered recall=1.00 on wing-scoped queries.
+- **`symbol_header_prefix` keyword-only kwarg on `mempalace.miner.chunk_text`** for representation-axis experiments (AST-lite, encoder-domain adaptation with explicit symbol disambiguation). Backward-compatible — default `None` preserves existing behavior. Companion to discussion [#1384](https://github.com/MemPalace/mempalace/discussions/1384).
+- **`scripts/derive_probes_from_git.py`** — deterministically derives n=200 retrieval probes from this repo's git log, filtering noise-prefix commits and picking a primary changed file per commit. Replaces the hand-curated n=20 set in [`scripts/chunk_strategy_ablation.py`](scripts/chunk_strategy_ablation.py) whose paired-bootstrap 95% CIs all overlapped zero. JSON snapshot at [`scripts/probes_v2_git_derived.json`](scripts/probes_v2_git_derived.json). `--probes <json>` flag added to the ablation harness so the larger set is wired in.
+- **`scripts/verify_rrf_ftcode5k.py` + `scripts/verify_rrf_3way.py`** — local RRF reproduction against [adaptmem](https://github.com/nakata-app/adaptmem) FT-Code SentenceTransformer checkpoints (300 / 1000 / 5000). 3-way RRF on the n=200 probe set: default ONNX 0.4260 / FT-Code-1000 0.4229 / FT-Code-5000 0.3972 / **3-way fused 0.5101** (+0.0841 MRR vs best solo). Reproduces nakata-app's #1384 §4 inversion at 10× sample size — the encoder with worst solo MRR contributes the largest 2-way fusion lift.
+- **`docs/benchmarks/2026-05-15-remaining-benches.json`** — captures 5 of 9 mempalace `tests/benchmarks/` suites that hadn't been re-run after the postgres cutover (`test_ingest_bench`, `test_knowledge_graph_bench`, `test_layers_bench`, `test_mcp_bench`, `test_memory_profile`). 64/64 passed in 1h 24m at `--bench-scale=small` against the production postgres palace. Companion to [`docs/benchmarks/2026-05-14-search-bench-hybrid-cutover.json`](docs/benchmarks/2026-05-14-search-bench-hybrid-cutover.json).
+
+### Fixed
+
+- **pgvector lazy-index race wedges the database** under concurrent writes. `PostgresBackend._maybe_create_vector_index` had a SELECT-then-`CREATE INDEX` race with a name-coupled existence check — three concurrent writers crossing the threshold held `ACCESS EXCLUSIVE` for 30+ minutes. Fixed at commit `4566f8a` with `pg_advisory_xact_lock(hashtext('vec_idx:<table>'))` + `CREATE INDEX IF NOT EXISTS`. Operator follow-up at upstream [#665](https://github.com/MemPalace/mempalace/pull/665) plus recovery procedure documented in the runbook.
+- **`docs/embedding.py`** doc comment warning custom-EF authors about the chromadb 1.5+ `EmbeddingFunction.embed_query` requirement. A bare class with `__call__` + `name()` passes `Collection.upsert` but raises `AttributeError` on `Collection.query(query_texts=...)` — mempalace's searcher catches that and silently falls back to BM25, making encoder swaps invisible. Subclassing `chromadb.api.types.EmbeddingFunction` inherits a default `embed_query` that delegates to `__call__`. We hit this debugging the RRF verifier; the comment is for downstream users implementing alternative encoders.
+
+### Cherry-picks from upstream PRs (in-flight, used early)
+
+- **[#1490](https://github.com/MemPalace/mempalace/pull/1490)** (open, @nakata-app) — `fix(benchmarks): honor --granularity across hybrid_v2/v3/v4; reject in palace/diary`. Three commits (`7ba6522`, `a8303ec`, `7766343`) cherry-picked. `build_palace_and_retrieve_hybrid_v{2,3,4}` accepted a `granularity` parameter but never branched on it, so `--granularity turn` and `--granularity session` produced bitwise-identical metrics. Per our fork-first convention; will deduplicate at upstream-merge time.
+
+### Documentation
+
+- Discussion [#1384](https://github.com/MemPalace/mempalace/discussions/1384) — chunking-strategy ablation × encoder thread with @nakata-app. Posted operator reproduction of their #1384 §4 RRF result on our n=200 probe set + flagged the EF.embed_query protocol gotcha.
+- PR [#665](https://github.com/MemPalace/mempalace/pull/665) — third operator follow-up with cutover state, bench results, and the EF protocol note for anyone implementing alternative `BaseBackend` encoders.
+
 ## [3.3.5] — 2026-05-09
 
 ### Bug Fixes
