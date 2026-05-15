@@ -1,0 +1,94 @@
+{
+  "search": {
+    "avg_latency_ms_at_500": 110.4,
+    "p50_ms_at_500": 86.0,
+    "p95_ms_at_500": 232.9,
+    "avg_latency_ms_at_1000": 51.6,
+    "p50_ms_at_1000": 55.2,
+    "p95_ms_at_1000": 61.3,
+    "avg_latency_ms_at_2500": 46.2,
+    "p50_ms_at_2500": 47.2,
+    "p95_ms_at_2500": 56.2,
+    "avg_latency_ms_at_5000": 121.0,
+    "p50_ms_at_5000": 125.0,
+    "p95_ms_at_5000": 164.8
+  },
+  "search_recall": {
+    "recall_at_5_at_500": 1.0,
+    "recall_at_10_at_500": 1.0,
+    "recall_at_5_at_1000": 0.8,
+    "recall_at_10_at_1000": 0.8,
+    "recall_at_5_at_2500": 0.5,
+    "recall_at_10_at_2500": 0.5,
+    "recall_at_5_at_5000": 0.6,
+    "recall_at_10_at_5000": 0.6
+  },
+  "search_filter": {
+    "avg_unfiltered_ms": 42.3,
+    "avg_filtered_ms": 56.6,
+    "latency_improvement_pct": -33.7,
+    "unfiltered_recall_at_5": 0.9,
+    "filtered_recall_at_5": 1.0
+  },
+  "concurrent_search": {
+    "p50_ms": 109.1,
+    "p95_ms": 169.9,
+    "p99_ms": 200.5,
+    "avg_ms": 117.2,
+    "error_count": 0,
+    "total_queries": 30,
+    "workers": 4
+  },
+  "search_n_results": {
+    "avg_ms_at_n_1": 52.0,
+    "avg_ms_at_n_5": 65.0,
+    "avg_ms_at_n_10": 73.2,
+    "avg_ms_at_n_25": 64.4,
+    "avg_ms_at_n_50": 52.5
+  },
+  "single_room_recall": {
+    "recall_at_5_at_250": 1.0,
+    "recall_at_10_at_250": 1.0,
+    "recall_at_5_at_500": 1.0,
+    "recall_at_10_at_500": 1.0,
+    "recall_at_5_at_1000": 0.9,
+    "recall_at_10_at_1000": 0.9,
+    "recall_at_5_at_2000": 0.6,
+    "recall_at_10_at_2000": 0.6,
+    "recall_at_5_at_3000": 0.4,
+    "recall_at_10_at_3000": 0.4,
+    "recall_at_5_at_5000": 0.6,
+    "recall_at_10_at_5000": 0.6
+  },
+  "single_room_unfiltered": {
+    "recall_at_5_at_250": 1.0,
+    "recall_at_10_at_250": 1.0,
+    "recall_at_5_at_500": 1.0,
+    "recall_at_10_at_500": 1.0,
+    "recall_at_5_at_1000": 1.0,
+    "recall_at_10_at_1000": 1.0,
+    "recall_at_5_at_2000": 0.8,
+    "recall_at_10_at_2000": 0.8,
+    "recall_at_5_at_3000": 0.6,
+    "recall_at_10_at_3000": 0.6,
+    "recall_at_5_at_5000": 0.5,
+    "recall_at_10_at_5000": 0.5
+  },
+  "palace_boost": {
+    "recall_unfiltered_at_1000": 1.0,
+    "recall_wing_filtered_at_1000": 1.0,
+    "recall_room_filtered_at_1000": 1.0,
+    "wing_boost_at_1000": 0.0,
+    "room_boost_at_1000": 0.0,
+    "recall_unfiltered_at_2500": 0.7,
+    "recall_wing_filtered_at_2500": 0.8,
+    "recall_room_filtered_at_2500": 1.0,
+    "wing_boost_at_2500": 0.1,
+    "room_boost_at_2500": 0.3,
+    "recall_unfiltered_at_5000": 0.3,
+    "recall_wing_filtered_at_5000": 0.4,
+    "recall_room_filtered_at_5000": 0.9,
+    "wing_boost_at_5000": 0.1,
+    "room_boost_at_5000": 0.6
+  }
+}
