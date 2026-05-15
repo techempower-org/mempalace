@@ -62,12 +62,22 @@ def _build_ft_code_ef(model_dir: str):
 
     Spoofs ``name() == "default"`` so chromadb's collection-identity
     check accepts the swap without re-creating the collection.
+
+    Subclasses ``chromadb.api.types.EmbeddingFunction`` so the inherited
+    ``embed_query`` method (which delegates to ``__call__``) is present.
+    Without that inheritance, ``collection.query(query_texts=...)`` raises
+    ``AttributeError: 'FTCodeEF' object has no attribute 'embed_query'``
+    and mempalace's searcher silently falls back to BM25 — making the
+    encoder swap invisible. The earlier 2-way result that showed
+    FT-Code-5000 MRR 0.0575 was the BM25 fallback, not the actual
+    SentenceTransformer embedding. Diagnosed 2026-05-15.
     """
     from sentence_transformers import SentenceTransformer
+    from chromadb.api.types import EmbeddingFunction
 
     model = SentenceTransformer(model_dir)
 
-    class FTCodeEF:
+    class FTCodeEF(EmbeddingFunction):
         @staticmethod
         def name() -> str:
             return "default"
