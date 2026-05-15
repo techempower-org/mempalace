@@ -62,12 +62,22 @@ def _build_ft_code_ef(model_dir: str):
 
     Spoofs ``name() == "default"`` so chromadb's collection-identity
     check accepts the swap without re-creating the collection.
+
+    Subclasses ``chromadb.api.types.EmbeddingFunction`` so the inherited
+    ``embed_query`` method (which delegates to ``__call__``) is present.
+    Without that inheritance, ``collection.query(query_texts=...)`` raises
+    ``AttributeError: 'FTCodeEF' object has no attribute 'embed_query'``
+    and mempalace's searcher silently falls back to BM25 — making the
+    encoder swap invisible. The earlier 2-way result that showed
+    FT-Code-5000 MRR 0.0575 was the BM25 fallback, not the actual
+    SentenceTransformer embedding. Diagnosed 2026-05-15.
     """
     from sentence_transformers import SentenceTransformer
+    from chromadb.api.types import EmbeddingFunction
 
     model = SentenceTransformer(model_dir)
 
-    class FTCodeEF:
+    class FTCodeEF(EmbeddingFunction):
         @staticmethod
         def name() -> str:
             return "default"
@@ -130,18 +140,24 @@ def _rrf_fuse(a_per, b_per, k=60):
         # effective top-1 position under RRF.
         best_rank = min(r for r in (ra, rb) if r is not None) if (ra or rb) else None
         rr = (1.0 / best_rank) if best_rank else 0.0
-        fused.append(
-            {"query": a["query"], "rank": best_rank, "rr": rr, "rrf_score": rrf_score}
-        )
+        fused.append({"query": a["query"], "rank": best_rank, "rr": rr, "rrf_score": rrf_score})
     mrr = sum(p["rr"] for p in fused) / len(fused)
     return mrr, fused
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model-dir", required=True, help="Path to FT-Code-5000 SentenceTransformer dir.")
-    parser.add_argument("--probes", required=True, help="Path to probe set JSON (derive_probes_from_git.py output).")
-    parser.add_argument("--strategy", default="C_plus_ast_python__cs800", help="Strategy name to run. Default: C-AST cs800.")
+    parser.add_argument(
+        "--model-dir", required=True, help="Path to FT-Code-5000 SentenceTransformer dir."
+    )
+    parser.add_argument(
+        "--probes", required=True, help="Path to probe set JSON (derive_probes_from_git.py output)."
+    )
+    parser.add_argument(
+        "--strategy",
+        default="C_plus_ast_python__cs800",
+        help="Strategy name to run. Default: C-AST cs800.",
+    )
     parser.add_argument("--n-results", type=int, default=10)
     parser.add_argument("--out", default="", help="Optional path to write the full result JSON.")
     args = parser.parse_args(argv)
@@ -174,6 +190,7 @@ def main(argv=None):
     print()
 
     import mempalace.embedding as emb_mod
+
     original_get_ef = emb_mod.get_embedding_function
 
     try:
@@ -185,7 +202,9 @@ def main(argv=None):
         run_default = _run_strategy(
             args.strategy, strategy_fn, corpus, palace_a, probes, args.n_results
         )
-        print(f"  drawers: {run_default['drawer_count']}  MRR: {run_default['mrr']:.4f}  ({time.time()-t0:.1f}s)")
+        print(
+            f"  drawers: {run_default['drawer_count']}  MRR: {run_default['mrr']:.4f}  ({time.time()-t0:.1f}s)"
+        )
         print()
 
         # ── Run 2: FT-Code-5000 ──────────────────────────────────────
@@ -198,7 +217,9 @@ def main(argv=None):
         run_ftcode = _run_strategy(
             args.strategy, strategy_fn, corpus, palace_b, probes, args.n_results
         )
-        print(f"  drawers: {run_ftcode['drawer_count']}  MRR: {run_ftcode['mrr']:.4f}  ({time.time()-t0:.1f}s)")
+        print(
+            f"  drawers: {run_ftcode['drawer_count']}  MRR: {run_ftcode['mrr']:.4f}  ({time.time()-t0:.1f}s)"
+        )
         print()
     finally:
         _restore_encoder(original_get_ef)
@@ -213,7 +234,7 @@ def main(argv=None):
     delta_solo_best = max(run_default["mrr"], run_ftcode["mrr"])
     print(f"  Δ vs best solo     : {mrr_rrf - delta_solo_best:+.4f}")
     print()
-    print(f"  nakata-app reported +0.076 on 3-way fusion; 2-way is a lower bound.")
+    print("  nakata-app reported +0.076 on 3-way fusion; 2-way is a lower bound.")
 
     if args.out:
         Path(args.out).write_text(

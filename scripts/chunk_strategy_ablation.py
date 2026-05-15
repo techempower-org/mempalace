@@ -465,7 +465,7 @@ def main(argv: List[str] | None = None) -> int:
         default="",
         help=(
             "Path to a JSON probe set (see scripts/derive_probes_from_git.py). "
-            "Shape: {\"probes\": [{\"query\", \"expected\", \"why\"}, ...]}. "
+            'Shape: {"probes": [{"query", "expected", "why"}, ...]}. '
             "When supplied, replaces the hand-curated PROBES list — needed "
             "for the n>=100 paired-bootstrap discussed in MemPalace/mempalace#1384."
         ),
@@ -480,9 +480,7 @@ def main(argv: List[str] | None = None) -> int:
     if args.probes:
         with open(args.probes, "r", encoding="utf-8") as f:
             data = json.load(f)
-        active_probes = [
-            (p["query"], p["expected"], p.get("why", "")) for p in data["probes"]
-        ]
+        active_probes = [(p["query"], p["expected"], p.get("why", "")) for p in data["probes"]]
         print(f"Probe set: {args.probes} (n={len(active_probes)})")
     else:
         active_probes = list(PROBES)
