@@ -1,0 +1,168 @@
+{
+  "ingest": {
+    "files_per_sec_at_20": 2.3,
+    "drawers_per_sec_at_20": 6.4,
+    "elapsed_sec_at_20": 8.69,
+    "drawers_created_at_20": 56,
+    "files_per_sec_at_50": 5.6,
+    "drawers_per_sec_at_50": 14.0,
+    "elapsed_sec_at_50": 8.87,
+    "drawers_created_at_50": 124,
+    "files_per_sec_at_100": 6.5,
+    "drawers_per_sec_at_100": 15.3,
+    "elapsed_sec_at_100": 15.4,
+    "drawers_created_at_100": 236,
+    "peak_rss_mb": 388.9,
+    "rss_delta_mb": 25.5
+  },
+  "chunking": {
+    "chunks_per_sec_at_1kb": 100000.0,
+    "kb_per_sec_at_1kb": 54150.4,
+    "chunks_per_sec_at_10kb": 950000.0,
+    "kb_per_sec_at_10kb": 512255.9,
+    "chunks_per_sec_at_100kb": 793516.5,
+    "kb_per_sec_at_100kb": 435182.4
+  },
+  "reingest": {
+    "skip_check_elapsed_sec": 0.07,
+    "files_checked": 50,
+    "skip_check_per_file_ms": 1.4
+  },
+  "kg_insert": {
+    "triples_per_sec_at_200": 278.1,
+    "elapsed_sec_at_200": 0.719,
+    "triples_per_sec_at_1000": 607.2,
+    "elapsed_sec_at_1000": 1.647,
+    "triples_per_sec_at_5000": 637.4,
+    "elapsed_sec_at_5000": 7.844
+  },
+  "kg_query": {
+    "avg_ms_with_160_rels": 0.49,
+    "total_relationships": 160
+  },
+  "kg_timeline": {
+    "avg_ms_at_200": 3.65,
+    "avg_ms_at_1000": 0.38,
+    "avg_ms_at_5000": 0.38
+  },
+  "kg_temporal": {
+    "march_query_results": 3,
+    "sept_query_results": 5
+  },
+  "kg_concurrent": {
+    "total_failures": 0,
+    "total_successes": 200,
+    "elapsed_sec": 0.56,
+    "threads": 4,
+    "triples_per_thread": 50
+  },
+  "kg_concurrent_rw": {
+    "read_errors": 0,
+    "write_errors": 0
+  },
+  "kg_stats": {
+    "avg_ms_at_200": 0.04,
+    "avg_ms_at_1000": 0.57,
+    "avg_ms_at_5000": 2.28
+  },
+  "layers_wakeup": {
+    "avg_ms_at_500": 39.5,
+    "avg_ms_at_1000": 120.7,
+    "avg_ms_at_2500": 123.6,
+    "avg_ms_at_5000": 238.0
+  },
+  "layer1": {
+    "latency_ms_at_500": 40.0,
+    "rss_delta_mb_at_500": 1.62,
+    "latency_ms_at_1000": 54.2,
+    "rss_delta_mb_at_1000": 1.97,
+    "latency_ms_at_2500": 260.1,
+    "rss_delta_mb_at_2500": 4.38,
+    "latency_ms_at_5000": 232.5,
+    "rss_delta_mb_at_5000": 1.34
+  },
+  "layer1_filter": {
+    "unfiltered_ms": 193.3,
+    "filtered_ms": 62.1,
+    "speedup_pct": 67.9
+  },
+  "wakeup_budget": {
+    "tokens_at_500": 793,
+    "chars_at_500": 3174,
+    "tokens_at_1000": 793,
+    "chars_at_1000": 3174,
+    "tokens_at_2500": 793,
+    "chars_at_2500": 3174,
+    "tokens_at_5000": 793,
+    "chars_at_5000": 3174
+  },
+  "layer2": {
+    "avg_retrieval_ms": 17.6
+  },
+  "layer3": {
+    "avg_search_ms": 75.1
+  },
+  "mcp_status": {
+    "rss_delta_mb_at_500": 3.66,
+    "rss_delta_mb_at_1000": 5.91,
+    "rss_delta_mb_at_2500": 8.79,
+    "rss_delta_mb_at_5000": 30.55,
+    "latency_ms_at_500": 55.6,
+    "latency_ms_at_1000": 51.0,
+    "latency_ms_at_2500": 137.5,
+    "latency_ms_at_5000": 329.3
+  },
+  "mcp_list_wings": {
+    "latency_ms_at_500": 76.1,
+    "latency_ms_at_1000": 65.4,
+    "latency_ms_at_2500": 291.6,
+    "latency_ms_at_5000": 312.4
+  },
+  "mcp_taxonomy": {
+    "latency_ms_at_500": 39.4,
+    "latency_ms_at_1000": 48.2,
+    "latency_ms_at_2500": 150.3,
+    "latency_ms_at_5000": 185.1
+  },
+  "client_reinstantiation": {
+    "uncached_total_ms": 863.3,
+    "cached_total_ms": 27.4,
+    "overhead_ratio": 31.53,
+    "n_calls": 50
+  },
+  "mcp_search": {
+    "avg_latency_ms_at_500": 72.9,
+    "avg_latency_ms_at_1000": 86.3,
+    "avg_latency_ms_at_2500": 198.7,
+    "avg_latency_ms_at_5000": 85.6
+  },
+  "mcp_duplicate_check": {
+    "latency_ms_at_500": 76.9,
+    "latency_ms_at_1000": 101.4,
+    "latency_ms_at_2500": 94.5
+  },
+  "memory_search": {
+    "rss_start_mb": 1088.42,
+    "rss_end_mb": 1088.51,
+    "rss_growth_mb": 0.09,
+    "n_calls": 200,
+    "growth_per_100_calls_mb": 0.05
+  },
+  "memory_tool_status": {
+    "rss_start_mb": 1099.46,
+    "rss_end_mb": 1124.23,
+    "rss_growth_mb": 24.77,
+    "n_calls": 50,
+    "palace_size": 2000
+  },
+  "memory_layer1": {
+    "rss_start_mb": 1112.82,
+    "rss_end_mb": 1121.93,
+    "rss_growth_mb": 9.11,
+    "n_calls": 30
+  },
+  "heap_search": {
+    "top_10_growth_kb": 28.5,
+    "n_searches": 100
+  }
+}
