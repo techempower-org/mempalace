@@ -35,7 +35,7 @@ from scripts.chunk_strategy_ablation import (  # noqa: E402
     _mrr_for_probe,
     build_strategies,
 )
-from scripts.verify_rrf_ftcode5k import _build_ft_code_ef, _install_encoder  # noqa: E402
+from scripts.verify_rrf_ftcode5k import _build_ft_code_ef  # noqa: E402
 
 
 def _run_one(name, strategy_fn, corpus, palace_dir, probes, n_results=10):
@@ -119,7 +119,8 @@ def main(argv=None):
         # Run 1: default
         print("=== Run 1: default ONNX MiniLM ===")
         t0 = time.time()
-        p = workdir / "default"; p.mkdir()
+        p = workdir / "default"
+        p.mkdir()
         r = _run_one("default", strategy_fn, corpus, p, probes, args.n_results)
         print(f"  drawers: {r['drawer_count']}  MRR: {r['mrr']:.4f}  ({time.time()-t0:.1f}s)")
         runs.append(r)
@@ -127,7 +128,8 @@ def main(argv=None):
         # Run 2: FT-Code-1000
         print("\n=== Run 2: FT-Code-1000 ===")
         t0 = time.time()
-        p = workdir / "ft1000"; p.mkdir()
+        p = workdir / "ft1000"
+        p.mkdir()
         ef = _build_ft_code_ef(args.ft1000_dir)
         emb_mod._EF_CACHE.clear()
         emb_mod.get_embedding_function = lambda device=None: ef
@@ -138,7 +140,8 @@ def main(argv=None):
         # Run 3: FT-Code-5000
         print("\n=== Run 3: FT-Code-5000 ===")
         t0 = time.time()
-        p = workdir / "ft5000"; p.mkdir()
+        p = workdir / "ft5000"
+        p.mkdir()
         ef = _build_ft_code_ef(args.ft5000_dir)
         emb_mod._EF_CACHE.clear()
         emb_mod.get_embedding_function = lambda device=None: ef
@@ -161,7 +164,7 @@ def main(argv=None):
     print(f"  MRR RRF 2-way (5k)  : {mrr_rrf2_5k:.4f}  (Δ vs best solo: {mrr_rrf2_5k - max(runs[0]['mrr'], runs[2]['mrr']):+.4f})")
     print(f"  MRR RRF 2-way (1k)  : {mrr_rrf2_1k:.4f}  (Δ vs best solo: {mrr_rrf2_1k - max(runs[0]['mrr'], runs[1]['mrr']):+.4f})")
     print(f"  MRR RRF 3-way       : {mrr_rrf3:.4f}  (Δ vs best solo: {mrr_rrf3 - max(r['mrr'] for r in runs):+.4f})")
-    print(f"\n  nakata-app reported +0.076 on 3-way fusion (n=20). We are n=200.")
+    print("\n  nakata-app reported +0.076 on 3-way fusion (n=20). We are n=200.")
 
     if args.out:
         Path(args.out).write_text(

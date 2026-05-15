@@ -223,7 +223,7 @@ def main(argv=None):
     delta_solo_best = max(run_default["mrr"], run_ftcode["mrr"])
     print(f"  Δ vs best solo     : {mrr_rrf - delta_solo_best:+.4f}")
     print()
-    print(f"  nakata-app reported +0.076 on 3-way fusion; 2-way is a lower bound.")
+    print("  nakata-app reported +0.076 on 3-way fusion; 2-way is a lower bound.")
 
     if args.out:
         Path(args.out).write_text(
