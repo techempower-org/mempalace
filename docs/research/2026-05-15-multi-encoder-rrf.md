@@ -22,17 +22,64 @@ Fusion**: query the same corpus through N different encoders, RRF-fuse
 the rank lists. No LLM call per query; lift comes from the orthogonal
 errors of N independent encoders.
 
-The 2026-05-15 reproduction at n=200 measured:
+The 2026-05-15 reproduction at n=200 (issue #82, raw-vector path
+via `scripts/verify_rrf_ftcode5k.py` + nakata-app's 3-way replication)
+measured:
 
 | Encoder | Solo MRR | Recall@10 |
 |---|---:|---:|
 | default ONNX MiniLM | 0.4260 | 49.5% |
 | FT-Code-1000 (adaptmem) | 0.4229 | 53.5% |
 | FT-Code-5000 (adaptmem) | 0.3972 | 50.0% |
-| **3-way RRF fusion** | **0.5101** | **59.5%** |
+| **3-way RRF fusion (raw vector)** | **0.5101** | **59.5%** |
 
-That's **+0.0841 MRR vs. best solo** — large, statistically grounded,
-and not subsumed by the existing hybrid (BM25 + graph) path.
+That's **+0.0841 MRR vs. best solo** at the raw chromadb-vector
+layer. This was the motivating result and the reason this code exists.
+
+## What we found in production
+
+Running the same 200-probe set through the full ``search_memories``
+pipeline — the path real callers hit, which has closet boost + hybrid
+BM25 rerank running on top of vector retrieval — gives a very
+different headline:
+
+| Path | MRR | Recall@5 | Recall@10 | qps |
+|---|---:|---:|---:|---:|
+| Single-encoder baseline (default) | 0.4042 | 46.5% | 49.0% | 3.85 |
+| 3-way RRF (default + ft-1k + ft-5k) | 0.4033 | 45.5% | 49.5% | 2.78 |
+| **Δ** | **−0.0008** | **−1.00 pp** | **+0.50 pp** | **0.72x** |
+
+Per-probe breakdown across 200 probes:
+
+* **2 rescued** — was a miss in top-10, now a hit
+* **1 regressed** — was a hit, now a miss
+* **5 improved rank** — still a hit, ranked better
+* **10 worsened rank** — still a hit, ranked worse
+* **82 tied hits** — same rank in both
+* **100 tied misses** — still not in top-10
+
+**The +0.0841 raw-vector lift does not survive the hybrid pipeline.**
+3-way RRF is statistically flat through ``search_memories`` and costs
+~3x query latency.
+
+The most likely explanation: the encoder-orthogonality signal that
+makes RRF work on raw vector retrieval is largely already captured
+by the production path's closet boost + BM25 rerank. Whatever the
+encoders *disagree* on, BM25 catches as "terminology that matches
+verbatim". So the lift available *over the production path* is much
+smaller than the lift available *over raw vector retrieval*.
+
+This is the same shape of finding as the HyDE diagnosis
+([familiar.realm.watch#6][hyde-issue]) — both techniques target
+vocabulary-bridging, and the existing hybrid path is already doing
+significant vocabulary-bridging work along the BM25 axis. Tools
+that improve raw vector retrieval don't automatically improve
+``search_memories`` retrieval.
+
+Implication: do *not* flip ``PALACE_USE_MULTI_ENCODER_RRF`` on in
+production. The code lands as a research artifact — reproducible,
+inspectable, gated — but the measured lift on real call paths
+doesn't justify the 3x latency or the Nx storage.
 
 ## What this PR ships
 
@@ -137,21 +184,31 @@ automatically); ONNX MiniLM is CPU-only in the current install.
 
 ## Open questions
 
-1. **Does the lift hold on user-style queries?** Issue #82 raises this
-   directly. The probe set is derived from commit subjects, which
-   look like docstring-shaped natural language; real user queries may
-   be more terse / question-shaped. A second eval against a
-   user-query probe set is the obvious follow-up.
-2. **2-way vs 3-way.** Issue #82 notes the largest 2-way fusion lift
-   comes from `default + FT-Code-5000` (+0.0631), not from adding
-   more encoders. If 2-way captures most of the lift, the
-   second/third-encoder cost is wasted. Eval harness supports
-   arbitrary roster size; collecting 2-way numbers alongside 3-way
-   is one script invocation.
-3. **Distillation.** Train a single encoder to mimic the ensemble's
+1. **Does the raw-vector lift survive a leaner pipeline?** The
+   +0.0841 raw-vector lift collapses to ~0 once closet boost +
+   hybrid BM25 rerank run on top. An eval that disables the closet
+   boost (and / or `candidate_strategy="vector"` strict) and reruns
+   would isolate which downstream layer is absorbing the
+   orthogonality signal. If it's the BM25 rerank, that's a
+   *positive* finding about the existing hybrid path.
+2. **Does the lift hold on user-style queries?** Issue #82 raises
+   this directly. The probe set is derived from commit subjects,
+   which look like docstring-shaped natural language; real user
+   queries may be more terse / question-shaped. A second eval
+   against a user-query probe set would resolve whether the flat
+   3-way RRF result here is corpus-specific.
+3. **2-way vs 3-way.** Issue #82 notes the largest 2-way fusion
+   lift on raw vector retrieval comes from `default + FT-Code-5000`
+   (+0.0631), not from adding more encoders. The eval harness
+   supports arbitrary roster size; collecting 2-way numbers
+   alongside 3-way is one script invocation. May be worth a
+   follow-up to confirm 2-way is also flat through hybrid.
+4. **Distillation.** Train a single encoder to mimic the ensemble's
    behavior on our corpus. Cuts query cost back to baseline at the
    price of training infrastructure. adaptmem's methodology is the
-   obvious starting point. Out of scope for this PR.
+   obvious starting point. Out of scope for this PR — and given
+   the through-hybrid result, lower-priority than it was before
+   this eval.
 
 ## Related
 
