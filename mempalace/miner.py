@@ -402,11 +402,32 @@ def detect_room(filepath: Path, content: str, rooms: list, project_path: Path) -
 # =============================================================================
 
 
-def chunk_text(content: str, source_file: str) -> list:
+def chunk_text(
+    content: str,
+    source_file: str,
+    *,
+    symbol_header_prefix=None,
+) -> list:
     """
     Split content into drawer-sized chunks.
     Tries to split on paragraph/line boundaries.
-    Returns list of {"content": str, "chunk_index": int}
+
+    Args:
+        content: text to chunk.
+        source_file: file path used for room/topic inference and (when
+            ``symbol_header_prefix`` is supplied) chunk enrichment.
+        symbol_header_prefix: optional callable
+            ``(chunk_text, source_file, chunk_index) -> str``. When
+            supplied, the returned header is prepended to each chunk
+            with a blank line separator before storage. Lets AST-lite
+            symbol enrichment (function names, class paths, imports)
+            and similar representation-axis experiments stack on this
+            code path without forking it. Default ``None`` preserves
+            original behavior exactly. Discussed in
+            MemPalace/mempalace#1384.
+
+    Returns:
+        list of ``{"content": str, "chunk_index": int}``.
     """
     # Clean up
     content = content.strip()
@@ -432,6 +453,10 @@ def chunk_text(content: str, source_file: str) -> list:
 
         chunk = content[start:end].strip()
         if len(chunk) >= MIN_CHUNK_SIZE:
+            if symbol_header_prefix is not None:
+                header = symbol_header_prefix(chunk, source_file, chunk_index)
+                if header:
+                    chunk = f"{header}\n\n{chunk}"
             chunks.append(
                 {
                     "content": chunk,
