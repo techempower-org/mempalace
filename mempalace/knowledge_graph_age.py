@@ -253,6 +253,76 @@ class KnowledgeGraphAGE:
             for r in rows
         ]
 
+    def stats(self) -> dict:
+        """Return aggregate counts mirroring the SQLite KG's ``stats()`` shape.
+
+        Result keys match ``mempalace/knowledge_graph.py::KnowledgeGraph.stats``
+        so callers (``tool_kg_stats``, palace-daemon's ``/graph`` panel) get
+        the same envelope regardless of backend:
+
+        - ``entities`` — total Entity nodes
+        - ``triples`` — total RELATION edges (active + expired)
+        - ``current_facts`` — RELATIONs with ``valid_to IS NULL`` (still active)
+        - ``expired_facts`` — triples − current_facts
+        - ``relationship_types`` — sorted distinct ``relation_type`` values
+
+        Three separate Cypher round-trips (entity count, triple counts +
+        current, distinct relation_types). Could be folded into one with
+        WITH-clause chaining, but AGE 1.6.0's parser is fussy about
+        ``count(*) WHERE``-style aggregates inside subqueries and three
+        small queries keep the implementation maintainable. Performance
+        is fine — AGE walks the graph once per Cypher run, all three
+        complete in <50ms on the production palace's graph size.
+
+        Implemented to close techempower-org/mempalace#96: ``tool_kg_stats``
+        was throwing ``AttributeError`` on AGE-backed daemons, breaking
+        palace-daemon's ``/graph`` KG panel.
+        """
+        entity_rows = self._run_cypher(
+            "MATCH (n:Entity) RETURN count(n) AS cnt",
+            {},
+            fetch=True,
+        )
+        entities = int(self._unwrap_agtype(entity_rows[0][0])) if entity_rows else 0
+
+        triple_rows = self._run_cypher(
+            """
+            MATCH ()-[r:RELATION]->()
+            RETURN count(r) AS total,
+                   sum(CASE WHEN r.valid_to IS NULL THEN 1 ELSE 0 END) AS current
+            """,
+            {},
+            fetch=True,
+        )
+        if triple_rows:
+            triples = int(self._unwrap_agtype(triple_rows[0][0]))
+            current = int(self._unwrap_agtype(triple_rows[0][1]) or 0)
+        else:
+            triples = 0
+            current = 0
+
+        type_rows = self._run_cypher(
+            """
+            MATCH ()-[r:RELATION]->()
+            RETURN DISTINCT r.relation_type AS rt
+            """,
+            {},
+            fetch=True,
+        )
+        # Some rows may have NULL relation_type if a write predates the
+        # property; drop those before sorting so callers see a clean list.
+        relationship_types = sorted(
+            v for v in (self._unwrap_agtype(r[0]) for r in type_rows) if isinstance(v, str)
+        )
+
+        return {
+            "entities": entities,
+            "triples": triples,
+            "current_facts": current,
+            "expired_facts": triples - current,
+            "relationship_types": relationship_types,
+        }
+
     # ── AGE plumbing ──────────────────────────────────────────────────
 
     _RETURN_RE = re.compile(r"\bRETURN\b(.*?)(\bORDER\b|\bLIMIT\b|$)", re.IGNORECASE | re.DOTALL)
