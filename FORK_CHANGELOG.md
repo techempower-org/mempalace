@@ -1008,10 +1008,17 @@ config-file readback. Suite total 1562 passed.
   and ``os.path.getmtime()`` to file-level (2 syscalls per file instead
   of 2N). Reported 10–30× mining speedup upstream. Fork-side resolution
   preserved fork's existing ``DRAWER_UPSERT_BATCH_SIZE=1000``; aliased
-  upstream's ``CHROMA_BATCH_LIMIT`` to it. Becomes a no-op when #1085
-  merges to develop and we next sync.
+  upstream's ``CHROMA_BATCH_LIMIT`` to it.
 
-  *Upstream:* [PR #1085](https://github.com/MemPalace/mempalace/pull/1085) (OPEN)
+  **2026-05-16 update:** upstream #1085 was closed 2026-05-05 by
+  @midweste, superseded by [#1185](https://github.com/MemPalace/mempalace/pull/1185)
+  ("perf(mining): batch per-chunk upserts + optional GPU acceleration")
+  which **merged to develop on 2026-04-24** (wider scope: same batch-
+  insert path plus optional GPU acceleration). Our cherry-pick is now
+  functionally redundant with develop; safe to drop on the next
+  upstream sync. See techempower-org/mempalace#36.
+
+  *Upstream:* [PR #1085](https://github.com/MemPalace/mempalace/pull/1085) (CLOSED) — superseded by [PR #1185](https://github.com/MemPalace/mempalace/pull/1185) (MERGED)
   *Files:* `mempalace/miner.py`
 
 
