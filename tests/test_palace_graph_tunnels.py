@@ -108,9 +108,7 @@ class TestExplicitTunnels:
         assert len(palace_graph.list_tunnels("wing_people")) == 2
         assert len(palace_graph.list_tunnels("wing_code")) == 1
 
-    def test_list_tunnels_include_passive_merges_graph_stats_tunnels(
-        self, tmp_path, monkeypatch
-    ):
+    def test_list_tunnels_include_passive_merges_graph_stats_tunnels(self, tmp_path, monkeypatch):
         """include_passive=True surfaces graph_stats-discovered tunnels (#75).
 
         Before the fix, list_tunnels returned only explicit (file-backed)
@@ -126,9 +124,7 @@ class TestExplicitTunnels:
         # passive tunnel matching the "room appears in 2 wings" shape.
         def fake_stats(col=None, config=None):
             return {
-                "top_tunnels": [
-                    {"room": "deploy", "wings": ["wing_ops", "wing_code"], "count": 2}
-                ]
+                "top_tunnels": [{"room": "deploy", "wings": ["wing_ops", "wing_code"], "count": 2}]
             }
 
         monkeypatch.setattr(palace_graph, "graph_stats", fake_stats)
