@@ -1567,15 +1567,34 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     # Over-fetch 3× the requested limit so re-ranking with closet boosts
     # has enough candidates to reorder.
     pull_size = n_results * 3
+
+    # RESEARCH FEATURE — multi-encoder RRF, gated by
+    # PALACE_USE_MULTI_ENCODER_RRF. When enabled, fan the query out to
+    # N encoder-bound palaces and RRF-fuse the rank lists in place of
+    # the single chromadb query below. See mempalace.multi_encoder and
+    # techempower-org/mempalace#82. Default off; storage cost is Nx so
+    # this is not a flip-the-default candidate without further work.
+    from . import multi_encoder as _mc
+
+    use_multi_encoder = _mc.is_enabled()
+
     try:
-        dkwargs = {
-            "query_texts": [query],
-            "n_results": pull_size,
-            "include": ["documents", "metadatas", "distances"],
-        }
-        if where:
-            dkwargs["where"] = where
-        drawer_results = drawers_col.query(**dkwargs)
+        if use_multi_encoder:
+            drawer_results = _mc.fused_query(
+                query=query,
+                palace_path=palace_path,
+                n_results=pull_size,
+                where=where or None,
+            )
+        else:
+            dkwargs = {
+                "query_texts": [query],
+                "n_results": pull_size,
+                "include": ["documents", "metadatas", "distances"],
+            }
+            if where:
+                dkwargs["where"] = where
+            drawer_results = drawers_col.query(**dkwargs)
     except Exception as e:
         # Don't hard-fail: degrade to sqlite fallback below so callers still
         # get the drawers that match the scope, with a warning explaining why
