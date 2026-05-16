@@ -61,19 +61,19 @@ class DaemonError(RuntimeError):
 
 
 def _daemon_strict() -> bool:
-    """True when ``PALACE_DAEMON_URL`` is set and strict mode is enabled.
+    """True when daemon routing is on and strict mode is enabled.
 
-    Set ``PALACE_DAEMON_STRICT=0`` to opt out and force the local-palace
-    path even when the daemon URL is configured.
+    Resolution: ``MempalaceConfig.daemon_strict`` — env var
+    ``PALACE_DAEMON_URL`` wins as the source of the URL, with
+    ``~/.mempalace/config.json`` key ``"daemon_url"`` as fallback (see
+    issue #49). Set ``PALACE_DAEMON_STRICT=0`` or
+    ``"daemon_strict": false`` in config to force the local path.
     """
-    return (
-        os.environ.get("PALACE_DAEMON_URL", "").strip() != ""
-        and os.environ.get("PALACE_DAEMON_STRICT", "1") != "0"
-    )
+    return MempalaceConfig().daemon_strict
 
 
 def _daemon_url() -> str:
-    return os.environ.get("PALACE_DAEMON_URL", "").strip().rstrip("/")
+    return MempalaceConfig().daemon_url or ""
 
 
 def _daemon_timeout() -> int:
@@ -2287,6 +2287,34 @@ def main():
         "status": cmd_status,
         "mined": cmd_mined,
     }
+
+    # Issue #49: announce the routing decision to stderr when daemon_url is
+    # set, regardless of strict mode. Silent on the pure-local default (no
+    # URL configured anywhere) since that's upstream's expected behavior
+    # and announcing it on every CLI invocation would be noise. Surfaces:
+    #   - daemon-strict on   → "routing → daemon @ URL (source: env|config)"
+    #   - daemon-strict off  → "routing → local (PALACE_DAEMON_STRICT=0 overrides
+    #                            daemon_url=URL)"
+    # Diagnoses the silent split-brain failure mode the issue documents.
+    try:
+        _cfg = MempalaceConfig()
+        if _cfg.daemon_url and args.command not in (None, "--help"):
+            _src = "env" if os.environ.get("PALACE_DAEMON_URL", "").strip() else "config"
+            if _cfg.daemon_strict:
+                print(
+                    f"mempalace: routing → daemon @ {_cfg.daemon_url} (source: {_src})",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"mempalace: routing → local (PALACE_DAEMON_STRICT=0 overrides "
+                    f"daemon_url={_cfg.daemon_url} from {_src})",
+                    file=sys.stderr,
+                )
+    except Exception:
+        # Never let routing-announce crash a CLI invocation.
+        pass
+
     dispatch[args.command](args)
 
 
