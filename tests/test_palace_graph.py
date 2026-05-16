@@ -558,8 +558,6 @@ class TestPostgresFastPath:
     def test_postgres_fast_path_caches_when_nonempty(self):
         """A non-empty postgres result populates the module-level cache so
         subsequent build_graph calls hit it without re-querying."""
-        from mempalace import palace_graph as pg
-
         invalidate_graph_cache()
         col = MagicMock()
         col.dsn = "postgresql://test@example/test"
