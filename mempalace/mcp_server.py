@@ -1107,13 +1107,22 @@ def tool_create_tunnel(
     )
 
 
-def tool_list_tunnels(wing: str = None):
-    """List all explicit cross-wing tunnels, optionally filtered by wing."""
+def tool_list_tunnels(wing: str = None, include_passive: bool = False):
+    """List cross-wing tunnels, optionally filtered by wing.
+
+    Default returns only explicit (agent-created) tunnels stored at
+    ``~/.mempalace/tunnels.json``. Pass ``include_passive=True`` to also
+    include passive tunnels (rooms appearing in 2+ wings, computed from
+    ``graph_stats``). Each result is tagged with ``kind: 'explicit'|'passive'``.
+    See techempower-org/mempalace#75 for the asymmetry that motivated the
+    merged-result form.
+    """
     try:
         wing = _sanitize_optional_name(wing, "wing")
     except ValueError as e:
         return {"error": str(e)}
-    return list_tunnels(wing)
+    col = _get_collection() if include_passive else None
+    return list_tunnels(wing, include_passive=include_passive, col=col)
 
 
 def tool_delete_tunnel(tunnel_id: str):
@@ -2121,13 +2130,28 @@ TOOLS = {
         "handler": tool_create_tunnel,
     },
     "mempalace_list_tunnels": {
-        "description": "List all explicit cross-wing tunnels. Optionally filter by wing.",
+        "description": (
+            "List cross-wing tunnels. Default returns only explicit "
+            "(agent-created) tunnels stored at ~/.mempalace/tunnels.json. "
+            "Pass include_passive=true to also include passive tunnels "
+            "(rooms appearing in 2+ wings, computed from graph_stats). "
+            "Each result is tagged with kind: 'explicit'|'passive'."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "wing": {
                     "type": "string",
                     "description": "Filter tunnels by wing (shows tunnels where wing is source or target)",
+                },
+                "include_passive": {
+                    "type": "boolean",
+                    "description": (
+                        "When true, include passive tunnels — rooms appearing "
+                        "in 2+ wings, discovered from the palace graph. "
+                        "Default false."
+                    ),
+                    "default": False,
                 },
             },
         },

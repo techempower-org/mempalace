@@ -500,21 +500,53 @@ def create_tunnel(
     return tunnel
 
 
-def list_tunnels(wing: str = None):
-    """List all explicit tunnels, optionally filtered by wing.
+def list_tunnels(wing: str = None, include_passive: bool = False, col=None, config=None):
+    """List cross-wing tunnels, optionally filtered by wing.
+
+    Two kinds of tunnels exist in mempalace:
+
+    - **Explicit tunnels** are agent-created cross-wing links persisted at
+      ``~/.mempalace/tunnels.json``. Each is a directed pair of (wing, room)
+      with optional drawer IDs, intentionally placed by something noticing
+      "these two specific spots in different wings refer to the same thing".
+
+    - **Passive tunnels** are emergent structure: rooms that appear in two or
+      more wings. ``graph_stats(col)`` discovers these by inspecting the
+      palace itself; no JSON file involved.
+
+    Default behavior returns only explicit tunnels — the file-backed list.
+    Pass ``include_passive=True`` to also include passive tunnels computed
+    from ``graph_stats(col, config).top_tunnels``. Each result in the merged
+    list is tagged with a ``kind`` key (``"explicit"`` or ``"passive"``) so
+    consumers can render them differently.
 
     Returns tunnels where ``wing`` appears as either source or target
-    (tunnels are symmetric, so either endpoint is a valid filter match).
+    (explicit tunnels are symmetric; passive tunnels are filtered by whether
+    ``wing`` appears in their ``wings`` list). See techempower-org/mempalace#75
+    for why this asymmetry mattered to downstream consumers.
     """
     norm_wing = _normalize_wing(wing)
-    tunnels = _load_tunnels()
+    explicit = _load_tunnels()
     if norm_wing:
-        tunnels = [
+        explicit = [
             t
-            for t in tunnels
+            for t in explicit
             if t["source"]["wing"] == norm_wing or t["target"]["wing"] == norm_wing
         ]
-    return tunnels
+    # Tunnels stored on disk already carry a kind field (set by create_tunnel
+    # or compute_topic_tunnels — e.g. "explicit", "topic"). Don't clobber it;
+    # only fill in "explicit" when missing for legacy rows written before kind
+    # was introduced.
+    explicit_tagged = [{"kind": "explicit", **t} for t in explicit]
+    if not include_passive:
+        return explicit_tagged
+
+    passive_raw = graph_stats(col=col, config=config).get("top_tunnels", []) or []
+    if norm_wing:
+        passive_raw = [t for t in passive_raw if norm_wing in t.get("wings", [])]
+    # Passive tunnels never go through the file-backed store, so always tag.
+    passive_tagged = [{**t, "kind": "passive"} for t in passive_raw]
+    return explicit_tagged + passive_tagged
 
 
 def delete_tunnel(tunnel_id: str):
