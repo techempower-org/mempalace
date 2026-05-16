@@ -82,6 +82,101 @@ def _get_collection(config=None):
         return None
 
 
+def _build_graph_postgres(col, config=None) -> tuple[dict, list]:
+    """Postgres-direct aggregate path for build_graph.
+
+    Replaces the chroma walk-and-accumulate pattern with a single SQL
+    aggregate. The chroma path paginates ``col.get(limit=1000, offset=...)``
+    and builds a per-room dict in memory — on the production 271k-drawer
+    palace (techempower-org/mempalace#95) this OOM-killed palace-daemon
+    because the dict accumulates a per-room set of wings/halls/dates
+    that grows unbounded across the full walk.
+
+    Postgres can do the same grouping in one query and hand back ~300
+    rows (one per room) instead of ~270k rows of metadata. Memory drops
+    from O(N drawers × per-row overhead) to O(N rooms × per-room arrays).
+
+    Returns ``(nodes, edges)`` matching the chroma path's contract. The
+    dates field carries at most 5 sorted dates per room (matches the
+    chroma path's ``sorted(set)[-5:]`` spec).
+    """
+    psycopg2 = None
+    try:
+        # mempalace.backends.postgres imports psycopg2 lazily.
+        from .backends.postgres import _load_psycopg2
+
+        psycopg2, _ = _load_psycopg2()
+    except Exception as e:
+        logger.warning(
+            "palace_graph: postgres aggregate path unavailable (%s); falling back to walk.",
+            e,
+        )
+        return None  # caller handles fallthrough
+
+    table_name = getattr(col, "table_name", None) or "mempalace_drawers"
+    dsn = getattr(col, "dsn", None)
+    if not dsn:
+        logger.warning("palace_graph: col has no dsn attribute; skipping postgres aggregate path.")
+        return None
+
+    # One scan, group by room. Filter out the noise floor the chroma
+    # path also drops (empty wing, empty room, room == 'general').
+    # array_agg(DISTINCT wing ORDER BY wing) keeps wings sorted to match
+    # the chroma path's ``sorted(data["wings"])`` spec.
+    sql = f"""
+        SELECT
+            room,
+            array_agg(DISTINCT wing ORDER BY wing) AS wings,
+            array_agg(DISTINCT NULLIF(metadata->>'hall', '')) FILTER (
+                WHERE NULLIF(metadata->>'hall', '') IS NOT NULL
+            ) AS halls,
+            COUNT(*) AS cnt,
+            (array_agg(DISTINCT NULLIF(metadata->>'date', '')) FILTER (
+                WHERE NULLIF(metadata->>'date', '') IS NOT NULL
+            ))[1:5] AS dates_sample
+        FROM "{table_name}"
+        WHERE wing IS NOT NULL AND wing <> ''
+          AND room IS NOT NULL AND room <> '' AND room <> 'general'
+        GROUP BY room
+    """
+    conn = psycopg2.connect(dsn)
+    nodes: dict = {}
+    edges: list = []
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                for room, wings, halls, cnt, dates in cur.fetchall():
+                    wings = list(wings or [])
+                    halls_list = sorted(halls or [])
+                    dates_list = sorted(dates or [])[-5:]
+                    nodes[room] = {
+                        "wings": wings,
+                        "halls": halls_list,
+                        "count": int(cnt),
+                        "dates": dates_list,
+                    }
+                    if len(wings) >= 2:
+                        # Edges: one per (wing_a, wing_b) cross × hall, same
+                        # cartesian shape the chroma path emits.
+                        edge_halls = halls_list or [""]
+                        for i, wa in enumerate(wings):
+                            for wb in wings[i + 1 :]:
+                                for hall in edge_halls:
+                                    edges.append(
+                                        {
+                                            "room": room,
+                                            "wing_a": wa,
+                                            "wing_b": wb,
+                                            "hall": hall,
+                                            "count": int(cnt),
+                                        }
+                                    )
+    finally:
+        conn.close()
+    return nodes, edges
+
+
 def build_graph(col=None, config=None):
     """
     Build the palace graph from ChromaDB metadata.
@@ -93,9 +188,16 @@ def build_graph(col=None, config=None):
     intentional for the MCP server's single-palace use case. Callers
     switching collections should call ``invalidate_graph_cache()`` first.
 
+    On postgres backends the implementation dispatches to
+    ``_build_graph_postgres`` which does the grouping in one SQL
+    aggregate — avoids the O(N) Python-dict accumulation that
+    OOM-killed palace-daemon on the 271k-drawer palace
+    (techempower-org/mempalace#95). The chroma walk path stays for
+    chroma backends (and as a fallback if the postgres path errors).
+
     Returns:
-        nodes: dict of {room: {wings: set, halls: set, count: int}}
-        edges: list of {room, wing_a, wing_b, hall} — one per tunnel crossing
+        nodes: dict of {room: {wings: list, halls: list, count: int, dates: list}}
+        edges: list of {room, wing_a, wing_b, hall, count} — one per tunnel crossing
     """
     global _graph_cache_nodes, _graph_cache_edges, _graph_cache_time
     now = time.time()
@@ -109,6 +211,33 @@ def build_graph(col=None, config=None):
         col = _get_collection(config)
     if not col:
         return {}, []
+
+    # Postgres fast path. Identifies postgres collections via duck-typing
+    # on `dsn` *and* `table_name` (both set by PostgresCollection.__init__);
+    # chroma collections don't have either, and MagicMock collections in
+    # tests don't have string-typed values. Isinstance check on the dsn
+    # being a real str avoids the test-mock false positive (MagicMock
+    # makes hasattr() match everything). Falling through to the walk path
+    # on any postgres-path failure means the worst case is the prior
+    # behavior, not a hard error.
+    pg_dsn = getattr(col, "dsn", None)
+    if isinstance(pg_dsn, str) and pg_dsn and hasattr(col, "table_name"):
+        try:
+            pg_result = _build_graph_postgres(col, config)
+        except Exception as e:
+            logger.warning(
+                "palace_graph: postgres aggregate path failed (%s); " "falling back to row walk.",
+                e,
+            )
+            pg_result = None
+        if pg_result is not None:
+            pg_nodes, pg_edges = pg_result
+            if pg_nodes:
+                with _graph_cache_lock:
+                    _graph_cache_nodes = pg_nodes
+                    _graph_cache_edges = pg_edges
+                    _graph_cache_time = time.time()
+            return pg_nodes, pg_edges
 
     total = col.count()
     room_data = defaultdict(lambda: {"wings": set(), "halls": set(), "count": 0, "dates": set()})
