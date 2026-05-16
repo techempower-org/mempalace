@@ -431,3 +431,164 @@ class TestPostgresFastPath:
         # Walk path returns the same shape.
         assert "shared" in nodes
         assert sorted(nodes["shared"]["wings"]) == ["wing_a", "wing_b"]
+
+    def test_postgres_fast_path_shapes_results_correctly(self):
+        """Unit-level coverage for _build_graph_postgres without real postgres.
+
+        Postgres-CI exercises this end-to-end against a service container,
+        but the no-postgres CI job lost test coverage when the function
+        landed (79.34% vs 80% threshold). This test mocks psycopg2.connect
+        so the function's result-shaping (room nodes + tunnel edges with
+        cartesian wing×hall expansion) is verified without a real DB.
+        """
+        from mempalace import palace_graph as pg
+
+        # Fake postgres collection — has dsn + table_name to trigger the
+        # fast-path dispatch.
+        col = MagicMock()
+        col.dsn = "postgresql://test@example/test"
+        col.table_name = "mempalace_drawers"
+
+        # Mock cursor.fetchall returns rows shaped like the aggregate query.
+        # Order: room, wings[], halls[], cnt, dates_sample[]
+        fake_rows = [
+            ("shared_room", ["wing_a", "wing_b"], ["h1", "h2"], 4, ["2026-01-01", "2026-02-01"]),
+            ("solo_room", ["wing_a"], None, 2, None),
+            ("triple_room", ["wing_x", "wing_y", "wing_z"], ["h_only"], 3, None),
+        ]
+        fake_cursor = MagicMock()
+        fake_cursor.fetchall.return_value = fake_rows
+        fake_cursor.__enter__ = lambda s: s
+        fake_cursor.__exit__ = lambda s, *a: None
+
+        fake_conn = MagicMock()
+        fake_conn.cursor.return_value = fake_cursor
+        fake_conn.__enter__ = lambda s: s
+        fake_conn.__exit__ = lambda s, *a: None
+
+        # Patch psycopg2 inside _load_psycopg2's return so connect → our mock.
+        fake_psycopg2 = MagicMock()
+        fake_psycopg2.connect.return_value = fake_conn
+
+        with patch(
+            "mempalace.backends.postgres._load_psycopg2", return_value=(fake_psycopg2, None)
+        ):
+            invalidate_graph_cache()
+            nodes, edges = pg._build_graph_postgres(col)
+
+        # Multi-wing room: appears in nodes with sorted wings, halls, count, dates.
+        assert "shared_room" in nodes
+        assert nodes["shared_room"]["wings"] == ["wing_a", "wing_b"]
+        assert nodes["shared_room"]["halls"] == ["h1", "h2"]
+        assert nodes["shared_room"]["count"] == 4
+        assert sorted(nodes["shared_room"]["dates"]) == ["2026-01-01", "2026-02-01"]
+
+        # Solo room: halls None handled, empty list returned.
+        assert nodes["solo_room"]["halls"] == []
+        assert nodes["solo_room"]["dates"] == []
+
+        # Edges: cartesian wing-cross × halls. shared_room has C(2,2)=1
+        # wing pair × 2 halls = 2 edges. triple_room has C(3,2)=3 wing
+        # pairs × 1 hall = 3 edges. solo_room has 0 (single wing).
+        shared_edges = [e for e in edges if e["room"] == "shared_room"]
+        triple_edges = [e for e in edges if e["room"] == "triple_room"]
+        solo_edges = [e for e in edges if e["room"] == "solo_room"]
+        assert len(shared_edges) == 2
+        assert len(triple_edges) == 3
+        assert solo_edges == []
+        # Each shared_room edge connects the two wings.
+        for e in shared_edges:
+            assert e["wing_a"] == "wing_a"
+            assert e["wing_b"] == "wing_b"
+            assert e["hall"] in {"h1", "h2"}
+
+    def test_postgres_fast_path_handles_missing_psycopg2(self):
+        """If psycopg2 isn't importable, the fast path returns None and the
+        caller falls through to the chroma walk. Verifies the import-error
+        early-return branch is covered."""
+        from mempalace import palace_graph as pg
+
+        col = MagicMock()
+        col.dsn = "postgresql://test@example/test"
+        col.table_name = "mempalace_drawers"
+
+        with patch(
+            "mempalace.backends.postgres._load_psycopg2",
+            side_effect=RuntimeError("psycopg2 missing"),
+        ):
+            result = pg._build_graph_postgres(col)
+        assert result is None
+
+    def test_postgres_fast_path_handles_missing_dsn(self):
+        """If col has no dsn attribute (or dsn is empty), fast path skips
+        and returns None to fall through to the walk."""
+        from mempalace import palace_graph as pg
+
+        col = MagicMock(spec=[])  # no attributes at all
+        result = pg._build_graph_postgres(col)
+        assert result is None
+
+    def test_build_graph_falls_back_to_walk_on_postgres_failure(self):
+        """If the postgres fast path raises mid-execution (network blip,
+        schema drift, etc.) build_graph catches and falls through to the
+        walk path. Worst case == prior behavior."""
+        invalidate_graph_cache()
+        # A walk-compatible col with a real string dsn so the fast-path
+        # dispatch fires, then we make psycopg2.connect raise so the
+        # try/except catches and falls through.
+        col = _make_fake_collection(
+            [{"wing": "wing_a", "room": "fallback_room", "hall": "h1", "date": "2026-01-01"}]
+        )
+        col.dsn = "postgresql://nope@nowhere/x"
+        col.table_name = "mempalace_drawers"
+
+        fake_psycopg2 = MagicMock()
+        fake_psycopg2.connect.side_effect = RuntimeError("connection refused")
+
+        with patch(
+            "mempalace.backends.postgres._load_psycopg2",
+            return_value=(fake_psycopg2, None),
+        ):
+            nodes, _ = build_graph(col=col)
+
+        # Walk path took over — fallback_room is present.
+        assert "fallback_room" in nodes
+        assert nodes["fallback_room"]["wings"] == ["wing_a"]
+
+    def test_postgres_fast_path_caches_when_nonempty(self):
+        """A non-empty postgres result populates the module-level cache so
+        subsequent build_graph calls hit it without re-querying."""
+        from mempalace import palace_graph as pg
+
+        invalidate_graph_cache()
+        col = MagicMock()
+        col.dsn = "postgresql://test@example/test"
+        col.table_name = "mempalace_drawers"
+
+        fake_cursor = MagicMock()
+        fake_cursor.fetchall.return_value = [
+            ("cached_room", ["wing_q", "wing_r"], None, 2, None),
+        ]
+        fake_cursor.__enter__ = lambda s: s
+        fake_cursor.__exit__ = lambda s, *a: None
+        fake_conn = MagicMock()
+        fake_conn.cursor.return_value = fake_cursor
+        fake_conn.__enter__ = lambda s: s
+        fake_conn.__exit__ = lambda s, *a: None
+        fake_psycopg2 = MagicMock()
+        fake_psycopg2.connect.return_value = fake_conn
+
+        with patch(
+            "mempalace.backends.postgres._load_psycopg2",
+            return_value=(fake_psycopg2, None),
+        ):
+            # First call: hits postgres path, populates cache.
+            nodes1, _ = build_graph(col=col)
+            assert "cached_room" in nodes1
+            # Second call: cache hit; psycopg2.connect should NOT fire again.
+            fake_psycopg2.connect.reset_mock()
+            # Make connect raise so any non-cached run would fail loudly.
+            fake_psycopg2.connect.side_effect = RuntimeError("would only fire on cache miss")
+            nodes2, _ = build_graph(col=col)
+            assert nodes1 == nodes2
+            fake_psycopg2.connect.assert_not_called()
