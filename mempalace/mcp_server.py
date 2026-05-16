@@ -1719,12 +1719,17 @@ def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):
     if not col:
         return _no_palace()
 
-    # Build filter: always scope by agent + room=sessions (canonical post
-    # 2026-05-14 Phase 1D migration; was room=diary historically). Wing is
-    # optional — when empty, return entries across all wings for this agent
-    # (matches the #1097 empty-string-as-no-filter convention for LLM
-    # ergonomics).
-    conditions = [{"room": "sessions"}, {"agent": agent_name}]
+    # Build filter: always scope by agent + room=diary. PR #83 had moved
+    # diary writes to room=sessions to satisfy the then-FK-enforced
+    # canonical taxonomy, but PR #87 dropped the FK (soft-warn instead)
+    # and restored diary writes to room=diary so the diary feature stayed
+    # semantically distinct from generic session checkpoints. The read
+    # side wasn't updated then — this filter still said "sessions" until
+    # the test suite caught it. Round-trip is back in sync: write →
+    # room=diary, read → room=diary. Wing is optional — when empty,
+    # return entries across all wings this agent has written to
+    # (matches the #1097 empty-string-as-no-filter convention).
+    conditions = [{"room": "diary"}, {"agent": agent_name}]
     if wing:
         conditions.insert(0, {"wing": wing})
 
