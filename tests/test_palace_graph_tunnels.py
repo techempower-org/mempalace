@@ -108,6 +108,41 @@ class TestExplicitTunnels:
         assert len(palace_graph.list_tunnels("wing_people")) == 2
         assert len(palace_graph.list_tunnels("wing_code")) == 1
 
+    def test_list_tunnels_include_passive_merges_graph_stats_tunnels(self, tmp_path, monkeypatch):
+        """include_passive=True surfaces graph_stats-discovered tunnels (#75).
+
+        Before the fix, list_tunnels returned only explicit (file-backed)
+        tunnels. Passive tunnels — rooms appearing in 2+ wings, discovered
+        from the palace graph — were invisible to the MCP surface. Consumers
+        had to reach into graph_stats themselves (which palace-daemon's
+        /graph workaround did and SME's MCP fallback couldn't).
+        """
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        palace_graph.create_tunnel("wing_code", "auth", "wing_people", "users", label="A")
+
+        # Stub graph_stats so we don't need a real collection. Returns one
+        # passive tunnel matching the "room appears in 2 wings" shape.
+        def fake_stats(col=None, config=None):
+            return {
+                "top_tunnels": [{"room": "deploy", "wings": ["wing_ops", "wing_code"], "count": 2}]
+            }
+
+        monkeypatch.setattr(palace_graph, "graph_stats", fake_stats)
+
+        default = palace_graph.list_tunnels()
+        assert len(default) == 1
+        assert default[0]["kind"] == "explicit"
+
+        merged = palace_graph.list_tunnels(include_passive=True)
+        kinds = sorted(t["kind"] for t in merged)
+        assert kinds == ["explicit", "passive"]
+
+        # Wing filter applies to both kinds. wing_ops only owns the passive
+        # tunnel; the explicit one is between wing_code ↔ wing_people.
+        ops_only = palace_graph.list_tunnels("wing_ops", include_passive=True)
+        assert len(ops_only) == 1
+        assert ops_only[0]["kind"] == "passive"
+
     def test_delete_tunnel_removes_saved_tunnel(self, tmp_path, monkeypatch):
         _use_tmp_tunnel_file(monkeypatch, tmp_path)
 
