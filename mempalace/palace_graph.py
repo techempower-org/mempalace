@@ -541,6 +541,32 @@ def list_tunnels(wing: str = None, include_passive: bool = False, col=None, conf
     if not include_passive:
         return explicit_tagged
 
+    # Safety guard for large palaces (#75 followup): graph_stats(col) walks
+    # every drawer's metadata via 1k-row batches and accumulates a per-room
+    # dict in memory. On the production 271k-drawer palace this OOM-killed
+    # the daemon process (observed live 2026-05-16). Until the underlying
+    # graph_stats memory bloat is fixed (separate issue), don't synthesize
+    # passive tunnels on palaces above this threshold — return only the
+    # explicit list with a structured warning so consumers know what they
+    # lost. 100k was picked to cover all currently-deployed palaces; tune
+    # downward if the breakage point comes in lower on weaker hosts.
+    LARGE_PALACE_PASSIVE_THRESHOLD = 100_000
+    try:
+        passive_col = col if col is not None else _get_collection(config)
+        if passive_col is not None and passive_col.count() > LARGE_PALACE_PASSIVE_THRESHOLD:
+            return explicit_tagged + [
+                {
+                    "kind": "passive_skipped",
+                    "reason": "palace too large for in-process graph_stats walk",
+                    "threshold": LARGE_PALACE_PASSIVE_THRESHOLD,
+                }
+            ]
+    except Exception:
+        # Couldn't determine size — fall through to the graph_stats call.
+        # Better to risk the OOM than to silently drop passive tunnels on
+        # palaces small enough not to need the guard.
+        pass
+
     passive_raw = graph_stats(col=col, config=config).get("top_tunnels", []) or []
     if norm_wing:
         passive_raw = [t for t in passive_raw if norm_wing in t.get("wings", [])]
