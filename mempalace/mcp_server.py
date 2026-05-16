@@ -311,16 +311,16 @@ _DAEMON_FORWARD_TIMEOUT_DEFAULT = 120  # seconds
 
 
 def _daemon_strict() -> bool:
-    """True when ``PALACE_DAEMON_URL`` is set and strict mode is enabled.
+    """True when daemon routing is on and strict mode is enabled.
 
-    Set ``PALACE_DAEMON_STRICT=0`` to opt out and force the local-palace
-    path even when the daemon URL is configured (useful when running
-    the test suite or doing offline development).
+    Resolution: ``MempalaceConfig.daemon_strict`` — env var
+    ``PALACE_DAEMON_URL`` wins as the source of the URL, with
+    ``~/.mempalace/config.json`` key ``"daemon_url"`` as fallback (see
+    issue #49). Set ``PALACE_DAEMON_STRICT=0`` or
+    ``"daemon_strict": false`` in config to force the local path
+    (useful when running the test suite or doing offline development).
     """
-    return (
-        os.environ.get("PALACE_DAEMON_URL", "").strip() != ""
-        and os.environ.get("PALACE_DAEMON_STRICT", "1") != "0"
-    )
+    return MempalaceConfig().daemon_strict
 
 
 def _forward_to_daemon(request: dict) -> dict:
@@ -331,7 +331,8 @@ def _forward_to_daemon(request: dict) -> dict:
     back to local, since that would re-introduce the split-brain that
     daemon-strict was created to prevent.
     """
-    daemon_url = os.environ.get("PALACE_DAEMON_URL", "").strip().rstrip("/")
+    # Resolve via MempalaceConfig so config.json fallback applies — issue #49.
+    daemon_url = MempalaceConfig().daemon_url or ""
     req_id = request.get("id")
     try:
         import urllib.request
@@ -2599,13 +2600,22 @@ def main():
             except (AttributeError, OSError):
                 pass
     logger.info("MemPalace MCP Server starting...")
+    # Issue #49: always log the routing decision at startup. Previously only
+    # the daemon-strict path logged, so an unset/unpropagated env var
+    # silently fell back to local — the exact failure mode that wedged
+    # familiar.realm.watch on 2026-05-10 (writes succeeded locally, daemon
+    # view showed nothing). Now both paths announce themselves audibly.
+    _cfg = MempalaceConfig()
     if _daemon_strict():
+        _src = "env" if os.environ.get("PALACE_DAEMON_URL", "").strip() else "config"
         logger.info(
-            "PALACE_DAEMON_URL=%s — routing all MCP traffic via daemon /mcp; "
+            "mempalace-mcp: routing → daemon @ %s (source: %s); "
             "skipping local-palace startup probes.",
-            os.environ.get("PALACE_DAEMON_URL", "").strip(),
+            _cfg.daemon_url,
+            _src,
         )
     else:
+        logger.info("mempalace-mcp: routing → local palace @ %s", _cfg.palace_path)
         # Pre-flight: probe HNSW capacity before any tool call so the warning
         # is visible at startup rather than on first use (#1222). Pure
         # filesystem read; never opens a chromadb client. Skipped in

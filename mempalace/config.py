@@ -279,6 +279,46 @@ class MempalaceConfig:
                 self._file_config = {}
 
     @property
+    def daemon_url(self):
+        """Optional palace-daemon URL. When set, mempalace's CLI and MCP
+        server route through palace-daemon's /mcp proxy instead of opening
+        a local chromadb client.
+
+        Resolution mirrors palace_path: env (``PALACE_DAEMON_URL``) wins,
+        ``config.json`` key ``"daemon_url"`` as fallback, ``None`` means
+        run locally (current default).
+
+        See techempower-org/mempalace#49 — the env-only signal silently
+        failed when Claude Code's MCP spawn context didn't propagate the
+        env var, routing writes to a local palace while status read green.
+        Config-file fallback closes that gap for our multi-host deployment.
+        """
+        env_val = os.environ.get("PALACE_DAEMON_URL", "").strip()
+        if env_val:
+            return env_val.rstrip("/")
+        cfg_val = (self._file_config.get("daemon_url") or "").strip()
+        return cfg_val.rstrip("/") if cfg_val else None
+
+    @property
+    def daemon_strict(self) -> bool:
+        """True when daemon-strict routing is active.
+
+        Defaults True when ``daemon_url`` is set (env or config). Disable
+        explicitly via ``PALACE_DAEMON_STRICT=0`` env or ``"daemon_strict":
+        false`` in config.json — useful for test suites and offline
+        development where the daemon isn't reachable.
+        """
+        if not self.daemon_url:
+            return False
+        env_val = os.environ.get("PALACE_DAEMON_STRICT")
+        if env_val is not None:
+            return env_val.strip() != "0"
+        cfg_val = self._file_config.get("daemon_strict")
+        if cfg_val is False:
+            return False
+        return True
+
+    @property
     def palace_path(self):
         """Path to the memory palace data directory."""
         env_val = os.environ.get("MEMPALACE_PALACE_PATH") or os.environ.get("MEMPAL_PALACE_PATH")

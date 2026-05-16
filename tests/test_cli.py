@@ -31,6 +31,7 @@ from mempalace.cli import (
 @patch("mempalace.cli.MempalaceConfig")
 def test_cmd_status_default_palace(mock_config_cls):
     mock_config_cls.return_value.palace_path = "/fake/palace"
+    mock_config_cls.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
     args = argparse.Namespace(palace=None)
     mock_miner = MagicMock()
     with patch.dict("sys.modules", {"mempalace.miner": mock_miner}):
@@ -322,6 +323,7 @@ def test_cmd_mined_filter_by_wing(tmp_path, capsys):
 @patch("mempalace.cli.MempalaceConfig")
 def test_cmd_search_calls_search(mock_config_cls):
     mock_config_cls.return_value.palace_path = "/fake/palace"
+    mock_config_cls.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
     args = argparse.Namespace(
         palace=None, query="test query", wing="mywing", room="myroom", results=3
     )
@@ -339,6 +341,7 @@ def test_cmd_search_calls_search(mock_config_cls):
 @patch("mempalace.cli.MempalaceConfig")
 def test_cmd_search_error_exits(mock_config_cls):
     mock_config_cls.return_value.palace_path = "/fake/palace"
+    mock_config_cls.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
     args = argparse.Namespace(palace=None, query="q", wing=None, room=None, results=5)
     from mempalace.searcher import SearchError
 
@@ -746,6 +749,7 @@ def test_maybe_run_mine_estimate_appears_before_prompt(tmp_path, capsys):
 @patch("mempalace.cli.MempalaceConfig")
 def test_cmd_mine_projects_mode(mock_config_cls):
     mock_config_cls.return_value.palace_path = "/fake/palace"
+    mock_config_cls.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
     args = argparse.Namespace(
         dir="/src",
         palace=None,
@@ -775,6 +779,7 @@ def test_cmd_mine_projects_mode(mock_config_cls):
 @patch("mempalace.cli.MempalaceConfig")
 def test_cmd_mine_convos_mode(mock_config_cls):
     mock_config_cls.return_value.palace_path = "/fake/palace"
+    mock_config_cls.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
     args = argparse.Namespace(
         dir="/chats",
         palace=None,
@@ -803,6 +808,7 @@ def test_cmd_mine_convos_mode(mock_config_cls):
 @patch("mempalace.cli.MempalaceConfig")
 def test_cmd_mine_include_ignored_comma_split(mock_config_cls):
     mock_config_cls.return_value.palace_path = "/fake/palace"
+    mock_config_cls.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
     args = argparse.Namespace(
         dir="/src",
         palace=None,
@@ -835,6 +841,7 @@ def test_cmd_mine_exits_nonzero_on_lock_holder(mock_config_cls, capsys):
     from mempalace.palace import MineAlreadyRunning
 
     mock_config_cls.return_value.palace_path = "/fake/palace"
+    mock_config_cls.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
     args = argparse.Namespace(
         dir="/src",
         palace=None,

@@ -252,6 +252,13 @@ def _stub_cfg(palace_dir: Path):
     cfg = MagicMock()
     cfg.palace_path = str(palace_dir)
     cfg.entity_languages = ["en"]
+    # #49: cli._daemon_strict() now reads MempalaceConfig().daemon_strict.
+    # Without an explicit default, MagicMock attribute access returns a
+    # truthy Mock — routing tests through the daemon path with garbage
+    # URLs. Pin to False/None so these mining-integration tests stay on
+    # the local-palace path (which is what they're actually exercising).
+    cfg.daemon_strict = False
+    cfg.daemon_url = None
     return cfg
 
 
