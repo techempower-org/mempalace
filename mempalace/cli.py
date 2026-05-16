@@ -1188,8 +1188,12 @@ def cmd_purge(args):
     where = clauses[0] if len(clauses) == 1 else {"$and": clauses}
 
     backend = ChromaBackend()
+    from .backends.base import PalaceRef
     try:
-        col = backend.get_collection(palace_path, "mempalace_drawers")
+        col = backend.get_collection(
+            palace=PalaceRef(id=palace_path, local_path=palace_path),
+            collection_name="mempalace_drawers",
+        )
     except Exception as e:
         print(f"\n  Error reading palace: {e}")
         return
@@ -1278,8 +1282,12 @@ def cmd_mined(args):
         return
 
     backend = ChromaBackend()
+    from .backends.base import PalaceRef
     try:
-        col = backend.get_collection(palace_path, "mempalace_drawers")
+        col = backend.get_collection(
+            palace=PalaceRef(id=palace_path, local_path=palace_path),
+            collection_name="mempalace_drawers",
+        )
     except Exception as e:
         print(f"\n  Error reading palace: {e}")
         return
@@ -1486,10 +1494,14 @@ def cmd_repair(args):
     print(f"  Palace: {palace_path}")
 
     backend = ChromaBackend()
+    from .backends.base import PalaceRef
 
     # Try to read existing drawers
     try:
-        col = backend.get_collection(palace_path, collection_name)
+        col = backend.get_collection(
+            palace=PalaceRef(id=palace_path, local_path=palace_path),
+            collection_name=collection_name,
+        )
         total = col.count()
         print(f"  Drawers found: {total}")
     except Exception as e:
@@ -1641,8 +1653,12 @@ def cmd_compress(args):
 
     # Connect to palace
     backend = ChromaBackend()
+    from .backends.base import PalaceRef
     try:
-        col = backend.get_collection(palace_path, "mempalace_drawers")
+        col = backend.get_collection(
+            palace=PalaceRef(id=palace_path, local_path=palace_path),
+            collection_name="mempalace_drawers",
+        )
     except Exception:
         print(f"\n  No palace found at {palace_path}")
         print("  Run: mempalace init <dir> then mempalace mine <dir>")
