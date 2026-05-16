@@ -143,6 +143,38 @@ class TestExplicitTunnels:
         assert len(ops_only) == 1
         assert ops_only[0]["kind"] == "passive"
 
+    def test_list_tunnels_skips_passive_on_large_palace(self, tmp_path, monkeypatch):
+        """On palaces above the size threshold, passive synthesis is skipped.
+
+        Production observation 2026-05-16: graph_stats(col) walks every drawer
+        and accumulates a per-room dict in memory. On the 271k-drawer palace
+        it OOM-killed palace-daemon. The guard returns the explicit list plus
+        a structured "passive_skipped" marker so consumers can either render
+        the partial result or fall back to /graph for the precomputed stats.
+        """
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+
+        # Big collection: count() returns above the 100k threshold.
+        big_col = MagicMock()
+        big_col.count.return_value = 200_000
+
+        # Patch _get_collection so list_tunnels with col=None sees a pretend-huge
+        # collection.
+        monkeypatch.setattr(palace_graph, "_get_collection", lambda *_a, **_kw: big_col)
+
+        # graph_stats should NOT be called — the guard short-circuits.
+        def fail_stats(*a, **kw):
+            raise AssertionError("graph_stats called despite large-palace guard")
+
+        monkeypatch.setattr(palace_graph, "graph_stats", fail_stats)
+
+        result = palace_graph.list_tunnels(include_passive=True)
+        # No explicit tunnels in fresh tmp file → only the skip marker.
+        kinds = [t["kind"] for t in result]
+        assert kinds == ["passive_skipped"]
+        assert result[0]["threshold"] == 100_000
+        assert "too large" in result[0]["reason"]
+
     def test_delete_tunnel_removes_saved_tunnel(self, tmp_path, monkeypatch):
         _use_tmp_tunnel_file(monkeypatch, tmp_path)
 
