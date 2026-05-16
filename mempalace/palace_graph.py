@@ -670,19 +670,30 @@ def list_tunnels(wing: str = None, include_passive: bool = False, col=None, conf
     if not include_passive:
         return explicit_tagged
 
-    # Safety guard for large palaces (#75 followup): graph_stats(col) walks
-    # every drawer's metadata via 1k-row batches and accumulates a per-room
-    # dict in memory. On the production 271k-drawer palace this OOM-killed
-    # the daemon process (observed live 2026-05-16). Until the underlying
-    # graph_stats memory bloat is fixed (separate issue), don't synthesize
-    # passive tunnels on palaces above this threshold — return only the
-    # explicit list with a structured warning so consumers know what they
-    # lost. 100k was picked to cover all currently-deployed palaces; tune
-    # downward if the breakage point comes in lower on weaker hosts.
+    # Safety guard for large palaces — keeps the chroma walk path from
+    # OOMing on six-figure palaces. #98 made build_graph fast on postgres
+    # backends (single SQL aggregate instead of per-row metadata walk),
+    # so postgres collections skip the guard and go straight to the fast
+    # path. Chroma backends still walk-and-accumulate; the 100k threshold
+    # is what was empirically safe before the cascade. Tune downward if
+    # the breakage point comes in lower on weaker hosts.
     LARGE_PALACE_PASSIVE_THRESHOLD = 100_000
     try:
         passive_col = col if col is not None else _get_collection(config)
-        if passive_col is not None and passive_col.count() > LARGE_PALACE_PASSIVE_THRESHOLD:
+        # Duck-type the postgres fast path: PostgresCollection has both
+        # `dsn` (str) and `table_name`. Chroma collections have neither.
+        # MagicMock collections in tests don't pass the str-typed check.
+        is_postgres = (
+            passive_col is not None
+            and isinstance(getattr(passive_col, "dsn", None), str)
+            and getattr(passive_col, "dsn", None)
+            and hasattr(passive_col, "table_name")
+        )
+        if (
+            passive_col is not None
+            and not is_postgres
+            and passive_col.count() > LARGE_PALACE_PASSIVE_THRESHOLD
+        ):
             return explicit_tagged + [
                 {
                     "kind": "passive_skipped",
