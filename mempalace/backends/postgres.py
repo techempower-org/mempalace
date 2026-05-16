@@ -743,6 +743,51 @@ class PostgresCollection(BaseCollection):
                         "SELECT pg_advisory_xact_lock(hashtext(%s))",
                         (f"vec_idx:{self.table_name}",),
                     )
+                    # Structure-based existence check (#73 priority 1).
+                    # Earlier versions queried by literal index name —
+                    # which missed out-of-band indexes created by
+                    # migration tooling or operators under different
+                    # names. The race got us once already: the
+                    # canonical name `{table}_vec_idx` didn't match
+                    # the migration's `{table}_embedding_hnsw`, so
+                    # every threshold crossing fell through to CREATE
+                    # INDEX and stacked duplicate full HNSW builds
+                    # holding ACCESS EXCLUSIVE for 30+ min.
+                    #
+                    # The new check asks pg_index: "is there *any*
+                    # valid `{index_am}` index covering the embedding
+                    # column on this table?". Catches any name and
+                    # filters out half-built / invalid indexes.
+                    #
+                    # The legacy name lookup remains as belt-and-
+                    # suspenders below — covers edge cases where the
+                    # structural check might be ambiguous (e.g. a
+                    # partial-build that recorded indisvalid=true
+                    # against the wrong amname after a backend
+                    # upgrade).
+                    cur.execute(
+                        """
+                        SELECT 1
+                        FROM pg_class ix
+                        JOIN pg_index idx ON idx.indexrelid = ix.oid
+                        JOIN pg_class t ON t.oid = idx.indrelid
+                        JOIN pg_namespace n ON n.oid = t.relnamespace
+                        JOIN pg_am am ON am.oid = ix.relam
+                        JOIN pg_attribute a
+                            ON a.attrelid = t.oid AND a.attnum = ANY(idx.indkey)
+                        WHERE n.nspname = current_schema()
+                          AND t.relname = %s
+                          AND a.attname = 'embedding'
+                          AND am.amname = %s
+                          AND idx.indisvalid
+                        LIMIT 1
+                        """,
+                        (self.table_name, self._index_am),
+                    )
+                    if cur.fetchone():
+                        self._vector_index_ready = True
+                        return
+                    # Legacy name lookup retained as belt-and-suspenders.
                     cur.execute(
                         "SELECT 1 FROM pg_indexes WHERE indexname = %s",
                         (index_name,),

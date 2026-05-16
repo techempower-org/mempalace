@@ -114,3 +114,89 @@ def test_postgres_vector_distance_query():
     assert qres["ids"][0][1] == "far"
 
     col.delete(ids=["near", "far"])
+
+
+def test_maybe_create_vector_index_recognizes_offname_hnsw():
+    """A pre-existing HNSW index under a non-canonical name is recognized.
+
+    Regression test for techempower-org/mempalace#73 priority 1. Before the
+    structure-based check, _maybe_create_vector_index queried only by literal
+    name (`{table}_vec_idx`). An HNSW index created out-of-band by the
+    migration tool under e.g. `{table}_embedding_hnsw` was invisible to it,
+    so every threshold crossing fell through to CREATE INDEX and stacked
+    duplicate full HNSW builds holding ACCESS EXCLUSIVE.
+    """
+    import psycopg2
+
+    backend = get_backend("postgres")
+    palace = _palace_ref("smoke_test_palace")
+    collection_name = "smoke_test_offname_idx"
+
+    col = backend.get_collection(
+        palace=palace,
+        collection_name=collection_name,
+        create=True,
+        options={"dsn": POSTGRES_DSN},
+    )
+
+    # Wipe any prior state on this table (idempotent re-runs).
+    conn = psycopg2.connect(POSTGRES_DSN)
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX IF EXISTS "{col.table_name}_vec_idx"')
+            cur.execute(f'DROP INDEX IF EXISTS "{col.table_name}_offname_hnsw"')
+
+        # Need at least one row so HNSW build succeeds.
+        try:
+            col.delete(ids=["seed"])
+        except Exception:
+            pass
+        col.add(
+            ids=["seed"],
+            documents=["just to keep the table non-empty"],
+            embeddings=[[0.0] * 384],
+            metadatas=[{"wing": "test"}],
+        )
+
+        # Create the HNSW index under a non-canonical name (mimics migration
+        # tool / operator pre-creating it). Same column + amname + ops as
+        # _maybe_create_vector_index would have used.
+        offname = f"{col.table_name}_offname_hnsw"
+        with conn.cursor() as cur:
+            cur.execute(
+                f'CREATE INDEX "{offname}" '
+                f'ON "{col.table_name}" USING hnsw (embedding vector_cosine_ops)'
+            )
+
+        # Force the helper past its row-budget gate without needing 5k rows.
+        # (The structural check we're exercising runs BEFORE _estimated_count.)
+        col._rows_since_index_check = 10_000
+        col._vector_index_ready = False
+        col._maybe_create_vector_index(inserted_rows=0)
+
+        # After the call: ready flag flips True and no second index appears.
+        assert col._vector_index_ready, "structural check should mark index ready"
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT count(*) FROM pg_index idx
+                JOIN pg_class ix ON ix.oid = idx.indexrelid
+                JOIN pg_class t ON t.oid = idx.indrelid
+                JOIN pg_am am ON am.oid = ix.relam
+                WHERE t.relname = %s AND am.amname = 'hnsw' AND idx.indisvalid
+                """,
+                (col.table_name,),
+            )
+            count = cur.fetchone()[0]
+        assert count == 1, (
+            f"expected exactly 1 HNSW index after structural-recognition path, "
+            f"got {count} — duplicate-build regression?"
+        )
+
+        # Cleanup
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX IF EXISTS "{offname}"')
+        col.delete(ids=["seed"])
+    finally:
+        conn.close()
