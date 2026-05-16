@@ -183,6 +183,7 @@ class TestCmdStatusDaemon:
         with patch.dict("os.environ", {}, clear=True):
             with patch("mempalace.cli.MempalaceConfig") as mock_cfg:
                 mock_cfg.return_value.palace_path = "/local/palace"
+                mock_cfg.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
                 args = argparse.Namespace(palace=None)
                 mock_miner = MagicMock()
                 with patch.dict("sys.modules", {"mempalace.miner": mock_miner}):
@@ -242,6 +243,7 @@ class TestCmdSearchDaemon:
         with patch.dict("os.environ", {}, clear=True):
             with patch("mempalace.cli.MempalaceConfig") as mock_cfg:
                 mock_cfg.return_value.palace_path = "/local/palace"
+                mock_cfg.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
                 args = argparse.Namespace(query="x", wing=None, room=None, results=5, palace=None)
                 with patch("mempalace.searcher.search") as mock_search:
                     cli.cmd_search(args)

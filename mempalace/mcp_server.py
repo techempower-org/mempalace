@@ -2587,7 +2587,8 @@ def main():
         logger.info(
             "mempalace-mcp: routing → daemon @ %s (source: %s); "
             "skipping local-palace startup probes.",
-            _cfg.daemon_url, _src,
+            _cfg.daemon_url,
+            _src,
         )
     else:
         logger.info("mempalace-mcp: routing → local palace @ %s", _cfg.palace_path)
