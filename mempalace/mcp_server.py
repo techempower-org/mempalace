@@ -1169,11 +1169,23 @@ def tool_add_drawer(
         },
     )
 
+    # Per #86 — non-canonical rooms are accepted with a soft warning
+    # rather than rejected by an FK. Compute warnings up-front so they
+    # ride out on both the new-insert and already-exists paths.
+    from .room_taxonomy import validate_room
+
+    warnings = validate_room(room)
+
     # Idempotency: if the deterministic ID already exists, return success as a no-op.
     try:
         existing = col.get(ids=[drawer_id], include=[])
         if existing.ids:
-            return {"success": True, "reason": "already_exists", "drawer_id": drawer_id}
+            return {
+                "success": True,
+                "reason": "already_exists",
+                "drawer_id": drawer_id,
+                "warnings": warnings,
+            }
     except Exception:
         logger.debug("Idempotency pre-check failed for %s", drawer_id, exc_info=True)
 
@@ -1200,9 +1212,17 @@ def tool_add_drawer(
             )
         _metadata_cache = None
         logger.info(f"Filed drawer: {drawer_id} → {wing}/{room}")
-        return {"success": True, "drawer_id": drawer_id, "wing": wing, "room": room}
+        for _w in warnings:
+            logger.warning("room taxonomy: %s (drawer=%s)", _w, drawer_id)
+        return {
+            "success": True,
+            "drawer_id": drawer_id,
+            "wing": wing,
+            "room": room,
+            "warnings": warnings,
+        }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": str(e), "warnings": warnings}
 
 
 def tool_delete_drawer(drawer_id: str):
@@ -1418,12 +1438,23 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
 
         _metadata_cache = None
 
+        # Per #86 — if the caller reassigned the room to a non-canonical
+        # value, surface the warning. When room wasn't touched we don't
+        # warn (the drawer keeps its existing room; this update isn't
+        # responsible for whatever taxonomy it was filed under).
+        from .room_taxonomy import validate_room
+
+        warnings = validate_room(new_meta.get("room", "")) if room is not None else []
+
         logger.info(f"Updated drawer: {drawer_id}")
+        for _w in warnings:
+            logger.warning("room taxonomy: %s (drawer=%s)", _w, drawer_id)
         return {
             "success": True,
             "drawer_id": drawer_id,
             "wing": new_meta.get("wing", ""),
             "room": new_meta.get("room", ""),
+            "warnings": warnings,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -1594,14 +1625,16 @@ def tool_diary_write(
         wing = sanitize_name(wing)
     else:
         wing = f"wing_{agent_name.replace(' ', '_')}"
-    # Phase 1D canonical-room FK (added 2026-05-14, mempalace_canonical_rooms
-    # lookup table) accepts only the 7 canonical rooms — "diary" is not one of
-    # them, so every post-migration diary_write was failing with a FK
-    # violation. Per the original 2026-05-14 CHANGELOG entry: "Room remains
-    # `diary` today because `tool_diary_write` hardcodes it; post-pgvector
-    # migration this becomes room=`sessions` per the canonical 7-room list."
-    # That migration happened; this is the matching tool-side rename.
-    room = "sessions"
+    # NB: ``diary`` is not in the canonical 7-room taxonomy. Per #86 it
+    # is accepted as-is and the soft-warn lands in the response's
+    # ``warnings`` field. Pre-#86 this room name triggered an FK
+    # rejection on the postgres backend (see 12a25d7); the FK has been
+    # dropped. ``tool_diary_read`` filters on the same ``room="diary"``
+    # so the round-trip stays consistent for historical entries.
+    room = "diary"
+    from .room_taxonomy import validate_room
+
+    warnings = validate_room(room)
     col = _get_collection(create=True)
     if not col:
         return _no_palace()
@@ -1645,15 +1678,18 @@ def tool_diary_write(
             metadatas=[meta],
         )
         logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic}")
+        for _w in warnings:
+            logger.warning("room taxonomy: %s (entry=%s)", _w, entry_id)
         return {
             "success": True,
             "entry_id": entry_id,
             "agent": agent_name,
             "topic": topic,
             "timestamp": now.isoformat(),
+            "warnings": warnings,
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": str(e), "warnings": warnings}
 
 
 def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):

@@ -840,14 +840,23 @@ def _build_drawer(
 def add_drawer(
     collection, wing: str, room: str, content: str, source_file: str, chunk_index: int, agent: str
 ):
-    """Add one drawer to the palace."""
+    """Add one drawer to the palace.
+
+    Returns a dict ``{"id": drawer_id, "warnings": [...]}``. ``warnings``
+    is a list of human-readable strings — empty when the room is one of
+    the canonical 7 (see ``mempalace.room_taxonomy``). Per #86 a non-
+    canonical room is accepted and surfaced via the warning instead of
+    rejected at the backend.
+    """
+    from .room_taxonomy import validate_room
+
     drawer_id, doc, metadata = _build_drawer(wing, room, source_file, chunk_index, agent, content)
     collection.upsert(
         documents=[doc],
         ids=[drawer_id],
         metadatas=[metadata],
     )
-    return True
+    return {"id": drawer_id, "warnings": validate_room(room)}
 
 
 def add_drawers(collection, wing, room, chunks, source_file, agent):
@@ -857,8 +866,15 @@ def add_drawers(collection, wing, room, chunks, source_file, agent):
     ``DRAWER_UPSERT_BATCH_SIZE`` (alias of ``CHROMA_BATCH_LIMIT``, kept
     so existing fork tests that ``monkeypatch.setattr(miner,
     "DRAWER_UPSERT_BATCH_SIZE", N)`` still drive the sub-batch loop).
-    Returns ``(drawers_added, batch_ids)``.
+    Returns ``(drawers_added, batch_ids, warnings)`` where ``warnings``
+    is a list of room-taxonomy warning strings (empty when ``room`` is
+    canonical; see ``mempalace.room_taxonomy``). The room is shared
+    across every chunk in a batch, so a single warning per call is
+    sufficient — no per-drawer fan-out.
     """
+    from .room_taxonomy import validate_room
+
+    warnings = validate_room(room)
     now = datetime.now().isoformat()
     try:
         source_mtime = os.path.getmtime(source_file)
@@ -885,7 +901,7 @@ def add_drawers(collection, wing, room, chunks, source_file, agent):
         batch_metas.append(metadata)
 
     if not batch_docs:
-        return 0, []
+        return 0, [], warnings
 
     # Sub-batch to stay under ChromaDB's max batch size (5461).
     # DRAWER_UPSERT_BATCH_SIZE is kept as the public knob (fork-only,
@@ -900,7 +916,7 @@ def add_drawers(collection, wing, room, chunks, source_file, agent):
         )
         drawers_added += len(batch_docs[i : i + DRAWER_UPSERT_BATCH_SIZE])
 
-    return drawers_added, batch_ids
+    return drawers_added, batch_ids, warnings
 
 
 # =============================================================================
@@ -972,7 +988,7 @@ def process_file(
         # Chroma/SQLite request for pathological files. A bad chunk fails
         # its sub-batch; that is the deliberate trade-off for amortizing
         # embedding overhead. (Upstream PR #1085, cherry-picked.)
-        drawers_added, batch_ids = add_drawers(
+        drawers_added, batch_ids, room_warnings = add_drawers(
             collection,
             wing,
             room,
@@ -980,6 +996,12 @@ def process_file(
             source_file,
             agent,
         )
+        # Per #86, non-canonical rooms produce a soft warning instead of
+        # an FK rejection. Surface it to the miner log so operators see
+        # taxonomy drift; callers that wrap mine() can read this via the
+        # logger output.
+        for _w in room_warnings:
+            logger.warning("room taxonomy: %s (source=%s)", _w, source_file)
 
         # Build closet — the searchable index pointing to these drawers.
         # Purge first: a re-mine (mtime change or normalize_version bump) must

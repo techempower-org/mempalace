@@ -816,7 +816,11 @@ def test_add_drawer_stamps_normalize_version(tmp_path):
             chunk_index=0,
             agent="unit",
         )
-        assert added is True
+        # add_drawer now returns a dict carrying the drawer id + any
+        # soft-warn taxonomy messages (#86). "notes" is non-canonical
+        # so we expect a warning, but the write still lands.
+        assert added["id"].startswith("drawer_test_notes_")
+        assert added["warnings"], "non-canonical 'notes' should warn"
         stored = col.get(limit=1)
         meta = stored["metadatas"][0]
         assert meta["normalize_version"] == NORMALIZE_VERSION
