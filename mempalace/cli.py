@@ -1189,6 +1189,7 @@ def cmd_purge(args):
 
     backend = ChromaBackend()
     from .backends.base import PalaceRef
+
     try:
         col = backend.get_collection(
             palace=PalaceRef(id=palace_path, local_path=palace_path),
@@ -1283,6 +1284,7 @@ def cmd_mined(args):
 
     backend = ChromaBackend()
     from .backends.base import PalaceRef
+
     try:
         col = backend.get_collection(
             palace=PalaceRef(id=palace_path, local_path=palace_path),
@@ -1654,6 +1656,7 @@ def cmd_compress(args):
     # Connect to palace
     backend = ChromaBackend()
     from .backends.base import PalaceRef
+
     try:
         col = backend.get_collection(
             palace=PalaceRef(id=palace_path, local_path=palace_path),

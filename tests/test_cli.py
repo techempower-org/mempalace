@@ -1198,6 +1198,7 @@ def test_cmd_repair_uses_configured_collection(mock_config_cls, tmp_path, capsys
     # Migrated to kwargs-only PalaceRef form in #37 — the assertion checks
     # call shape, so it has to track the new signature.
     from mempalace.backends.base import PalaceRef as _PalaceRef
+
     mock_backend.get_collection.assert_called_once_with(
         palace=_PalaceRef(id=str(palace_dir), local_path=str(palace_dir)),
         collection_name="custom_drawers",
