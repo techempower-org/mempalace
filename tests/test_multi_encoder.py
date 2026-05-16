@@ -395,10 +395,12 @@ def test_default_encoder_returns_plain_floats(monkeypatch):
     mc.reset_encoder_cache()
     encoder = mc.get_encoder(mc.EncoderSpec("default", None, None))
     vec = encoder("hello")
-    # All entries must be Python floats, not np.float32 scalars.
-    assert all(type(x) is float for x in vec), (
-        f"expected list[float], got types {[type(x).__name__ for x in vec[:3]]}"
-    )
+    # All entries must be Python floats, not np.float32 scalars. The
+    # `type(x) is float` check is deliberate — `isinstance` would
+    # accept np.float32 because numpy scalars subclass float, defeating
+    # the entire point of the coercion test. Suppress E721 here.
+    types_seen = {type(x).__name__ for x in vec}
+    assert types_seen == {"float"}, f"expected list[float], got types {types_seen}"
     assert len(vec) == 3
 
 
