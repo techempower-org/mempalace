@@ -1,0 +1,33 @@
+# Gemini Code Assist config for techempower-org/mempalace
+# Docs: https://developers.google.com/gemini-code-assist/docs/customize-gemini-behavior-github
+#
+# Tuned for an active research fork: substantive issues only, ignore
+# noise from auto-generated docs + benchmark artifacts.
+
+have_fun: false  # no emoji in review comments
+
+code_review:
+  disable: false
+  comment_severity_threshold: MEDIUM
+  max_review_comments: -1
+  pull_request_opened:
+    help: false
+    summary: true
+    code_review: true
+
+ignore_patterns:
+  # Fork-side benchmark + research artifacts (not for review)
+  - "benchmarks/results_*.json"
+  - "benchmarks/results_*.jsonl"
+  - "benchmarks/v33*/**"
+  - "benchmarks/data/**"
+  - "dashboards-bensig-*/**"
+  # Generated docs (yaml is source of truth)
+  - "FORK_CHANGELOG.md"
+  # Standard ignores
+  - "*.lock"
+  - "uv.lock"
+  - "**/__pycache__/**"
+  - "**/.venv/**"
+  - "**/dist/**"
+  - "**/*.egg-info/**"
