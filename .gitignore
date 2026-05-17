@@ -52,3 +52,7 @@ scratch/
 # Local benchmark artifacts (large jsonl dumps, per-question stdout)
 benchmarks/c_beta/*.jsonl
 benchmarks/c_beta/*.stdout
+
+# LongMemEval benchmark data (large — download per environment)
+# See benchmarks/longmemeval_bench.py for the data shape.
+benchmarks/data/
