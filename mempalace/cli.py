@@ -851,6 +851,10 @@ def cmd_sync(args):
     if not os.path.isdir(palace_path):
         print(f"\n  No palace found at {palace_path}")
         return
+    if not os.path.isfile(os.path.join(palace_path, "chroma.sqlite3")):
+        print(f"\n  Palace dir at {palace_path} exists but has no chroma.sqlite3 yet.")
+        print("  Run: mempalace mine <dir>")
+        return
 
     project_dirs = []
     if args.dir:
@@ -1634,8 +1638,8 @@ def cmd_mcp(args):
 
 def cmd_compress(args):
     """Compress drawers in a wing using AAAK Dialect."""
-    from .backends.chroma import ChromaBackend
     from .dialect import Dialect
+    from .palace import get_closets_collection
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
 
@@ -1653,18 +1657,13 @@ def cmd_compress(args):
     else:
         dialect = Dialect()
 
-    # Connect to palace
-    backend = ChromaBackend()
-    from .backends.base import PalaceRef
+    # State-aware open: distinguish "no palace" from "initialized but empty"
+    # from "corrupt" via the shared helper (#1498). MCP and library callers
+    # catch the backend exceptions directly; CLI gets the friendly print.
+    from .palace import _open_collection_or_explain
 
-    try:
-        col = backend.get_collection(
-            palace=PalaceRef(id=palace_path, local_path=palace_path),
-            collection_name="mempalace_drawers",
-        )
-    except Exception:
-        print(f"\n  No palace found at {palace_path}")
-        print("  Run: mempalace init <dir> then mempalace mine <dir>")
+    col = _open_collection_or_explain(palace_path, collection_name="mempalace_drawers")
+    if col is None:
         sys.exit(1)
 
     # Query drawers in batches to avoid SQLite variable limit (~999)
@@ -1736,7 +1735,10 @@ def cmd_compress(args):
     # Store compressed versions (unless dry-run)
     if not args.dry_run:
         try:
-            comp_col = backend.get_or_create_collection(palace_path, "mempalace_closets")
+            # Route through palace.get_closets_collection so the shared
+            # _DEFAULT_BACKEND is reused (avoids a redundant ChromaBackend
+            # instance and its potential WAL-lock contention on Windows).
+            comp_col = get_closets_collection(palace_path, create=True)
             for doc_id, compressed, meta, stats in compressed_entries:
                 comp_meta = dict(meta)
                 comp_meta["compression_ratio"] = round(stats["size_ratio"], 1)
@@ -1780,6 +1782,21 @@ def _reconfigure_stdio_utf8_on_windows():
 
 
 def main():
+    """CLI entry point for the ``mempalace`` console script.
+
+    Side effect: pops ``PYTHONPATH`` from ``os.environ`` (see #1423) so
+    any subprocess this CLI spawns inherits a clean env. Host applications
+    that call ``main()`` programmatically should be aware that the parent
+    process loses ``PYTHONPATH`` as well. Library imports
+    (``import mempalace.searcher`` from a host app) do NOT trigger this
+    side effect; only the CLI/MCP entry points pop the env var.
+    """
+    # Drop leaked PYTHONPATH so any subprocess the CLI spawns (mine workers,
+    # repair tooling) starts with a clean env. The sys.path filter in
+    # mempalace/__init__.py already protects this process from the same
+    # ABI mismatch; here we extend the protection to children.
+    os.environ.pop("PYTHONPATH", None)
+
     _reconfigure_stdio_utf8_on_windows()
 
     version_label = f"MemPalace {__version__}"

@@ -13,7 +13,15 @@ import sys
 import threading
 from typing import Optional
 
-from .backends import PalaceRef, get_backend, resolve_backend_for_palace
+from .backends import (
+    BackendClosedError,
+    CollectionNotInitializedError,
+    PalaceNotFoundError,
+    PalaceRef,
+    get_backend,
+    resolve_backend_for_palace,
+)
+from .backends.chroma import ChromaBackend
 from .config import DEFAULT_COLLECTION_NAME, MempalaceConfig
 
 logger = logging.getLogger("mempalace_mcp")
@@ -110,6 +118,72 @@ def get_collection(
 def get_closets_collection(palace_path: str, create: bool = True):
     """Get the closets collection — the searchable index layer."""
     return get_collection(palace_path, collection_name="mempalace_closets", create=create)
+
+
+def _open_collection_or_explain(
+    palace_path: str,
+    *,
+    collection_name: Optional[str] = None,
+    out=None,
+):
+    """Open the palace collection or print a state-specific message and return ``None``.
+
+    For CLI and repair commands that want consistent, actionable user-facing
+    messages distinguishing four "not-healthy" states from one another. MCP
+    and library callers should catch
+    :class:`mempalace.backends.PalaceNotFoundError` /
+    :class:`mempalace.backends.CollectionNotInitializedError` directly.
+
+    The MCP server (``mcp_server.tool_status``) deliberately does NOT use
+    this helper: it uses ``_get_collection(create=db_exists)`` so a valid
+    palace whose collection was never bootstrapped lazily gets one on the
+    first status call, and a corruption-detection sqlite-only probe fires
+    first when the vector path is disabled (see PR #831 / issue #830).
+
+    State A: palace dir is absent.
+    State B: dir is present but ``chroma.sqlite3`` is absent. The helper
+        short-circuits to a message before reaching the backend, because
+        ``chromadb.PersistentClient`` lazily creates the DB file on first
+        open — calling the backend on this state would silently mutate
+        the filesystem for what should be a read-only inspection.
+    State C: DB is present but the ``mempalace_drawers`` collection has
+        never been bootstrapped (``init`` ran, ``mine`` has not).
+    State D: healthy — returns the opened collection.
+    State E: an unexpected error opens the backend — message points the
+        user at ``repair-status`` for further diagnosis.
+
+    ``out`` is the message sink; defaults to the builtin ``print``. Pass a
+    callable (e.g. a repair progress emitter) to route messages through it.
+    """
+    emit = out if out is not None else print
+
+    if not os.path.isdir(palace_path):
+        emit(f"\n  No palace found at {palace_path}")
+        emit("  Run: mempalace init <dir> then mempalace mine <dir>")
+        return None
+    if not os.path.isfile(os.path.join(palace_path, "chroma.sqlite3")):
+        emit(f"\n  Palace dir at {palace_path} exists but has no chroma.sqlite3 yet.")
+        emit("  Run: mempalace mine <dir>")
+        return None
+    try:
+        return get_collection(palace_path, collection_name=collection_name, create=False)
+    except CollectionNotInitializedError:
+        emit(f"\n  Palace at {palace_path} is initialized but empty (no drawers yet).")
+        emit("  Run: mempalace mine <dir>")
+        return None
+    except PalaceNotFoundError:
+        emit(f"\n  No palace found at {palace_path}")
+        emit("  Run: mempalace init <dir> then mempalace mine <dir>")
+        return None
+    except BackendClosedError:
+        # Surface this as a programmer error, not a palace-state UX message:
+        # a closed backend means the caller violated the backend lifecycle,
+        # not that the palace on disk is in a recoverable state.
+        raise
+    except Exception as e:  # noqa: BLE001 — backend exceptions vary (chromadb, OSError, lock errors)
+        emit(f"\n  Error opening palace at {palace_path}: {e!r}")
+        emit("  Try: mempalace repair-status --palace <path>")
+        return None
 
 
 CLOSET_CHAR_LIMIT = 1500  # fill closet until ~1500 chars, then start a new one

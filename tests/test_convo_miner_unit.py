@@ -1,6 +1,9 @@
 """Unit tests for convo_miner pure functions (no chromadb needed)."""
 
 import contextlib
+import sys
+
+import pytest
 
 import pytest
 
@@ -168,6 +171,75 @@ class TestScanConvos:
     def test_scan_empty_dir(self, tmp_path):
         files = scan_convos(str(tmp_path))
         assert files == []
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="symlink creation requires elevated privileges on Windows",
+    )
+    def test_scan_convos_logs_skipped_symlinks(self, tmp_path, capsys):
+        real_target = tmp_path / "outside" / "real.jsonl"
+        real_target.parent.mkdir()
+        real_target.write_text('{"role":"user","content":"hi"}\n', encoding="utf-8")
+        link_root = tmp_path / "link_root"
+        link_root.mkdir()
+        (link_root / "link.jsonl").symlink_to(real_target)
+        (link_root / "regular.jsonl").write_text(
+            '{"role":"user","content":"hello"}\n', encoding="utf-8"
+        )
+
+        files = scan_convos(str(link_root))
+
+        names = {f.name for f in files}
+        assert "link.jsonl" not in names
+        assert "regular.jsonl" in names
+        err = capsys.readouterr().err
+        assert err.count("SKIP:") == 1
+        assert "  SKIP:" in err
+        assert "link.jsonl" in err
+        assert "(symlink)" in err
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="symlink creation requires elevated privileges on Windows",
+    )
+    def test_scan_convos_logs_dangling_symlink(self, tmp_path, capsys):
+        real_target = tmp_path / "outside" / "ghost.jsonl"
+        real_target.parent.mkdir()
+        real_target.touch()
+        link_root = tmp_path / "link_root"
+        link_root.mkdir()
+        (link_root / "dangling.jsonl").symlink_to(real_target)
+        real_target.unlink()  # target deleted, link dangles
+
+        files = scan_convos(str(link_root))
+
+        assert files == []
+        err = capsys.readouterr().err
+        assert err.count("SKIP:") == 1
+        assert "dangling.jsonl" in err
+        assert "(symlink)" in err
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="symlink creation requires elevated privileges on Windows",
+    )
+    def test_scan_convos_logs_nested_symlink_with_relative_path(self, tmp_path, capsys):
+        real_target = tmp_path / "outside" / "real.jsonl"
+        real_target.parent.mkdir()
+        real_target.write_text('{"x":1}\n', encoding="utf-8")
+        link_root = tmp_path / "link_root"
+        subdir = link_root / "deep" / "subdir"
+        subdir.mkdir(parents=True)
+        (subdir / "nested.jsonl").symlink_to(real_target)
+
+        files = scan_convos(str(link_root))
+
+        assert files == []
+        err = capsys.readouterr().err
+        # Forward slash even on Windows (as_posix) and full relative path,
+        # not just the leaf — proves relative_to(convo_path) over .name.
+        assert "deep/subdir/nested.jsonl" in err
+        assert "(symlink)" in err
 
 
 class TestFileChunksLocked:

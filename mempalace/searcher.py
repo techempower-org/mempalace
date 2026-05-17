@@ -17,6 +17,7 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
+from .backends import CollectionNotInitializedError, PalaceNotFoundError
 from .palace import get_closets_collection, get_collection
 
 # Closet pointer line format: "topic|entities|→drawer_id_a,drawer_id_b"
@@ -350,6 +351,37 @@ def search(
     Delegates to ``search_memories`` so CLI and MCP callers share the same
     hybrid ranking, sqlite-BM25 fallback, and scope-aware warnings.
     """
+    # Filesystem-first checks distinguish State A / State B before reaching
+    # chromadb (upstream #1498). PersistentClient lazily creates
+    # chroma.sqlite3 on first open of an empty palace dir, so without these
+    # checks State B collapses into the "initialized but empty" State C
+    # message and mutates the dir as a side effect of a read-only search.
+    # Fork then delegates to ``search_memories`` so CLI and MCP callers share
+    # the same hybrid-rerank + BM25-sqlite fallback + legacy-metric warnings.
+    if not os.path.isdir(palace_path):
+        print(f"\n  No palace found at {palace_path}")
+        print("  Run: mempalace init <dir> then mempalace mine <dir>")
+        raise SearchError(f"No palace found at {palace_path}")
+    if not os.path.isfile(os.path.join(palace_path, "chroma.sqlite3")):
+        print(f"\n  Palace dir at {palace_path} exists but has no chroma.sqlite3 yet.")
+        print("  Run: mempalace mine <dir>")
+        raise SearchError(f"No palace database at {palace_path}")
+    try:
+        # Probe-only call — distinguishes State C (initialized but empty) from
+        # State D (corrupt) before search_memories blurs them into a generic
+        # "No palace found".
+        get_collection(palace_path, create=False)
+    except CollectionNotInitializedError as e:
+        print(f"\n  Palace at {palace_path} is initialized but empty (no drawers yet).")
+        print("  Run: mempalace mine <dir>")
+        raise SearchError(f"Palace at {palace_path} is initialized but empty") from e
+    except PalaceNotFoundError as e:
+        # Backend filesystem-race fallback: dir was deleted between our
+        # check above and the backend call. Same message as State A.
+        print(f"\n  No palace found at {palace_path}")
+        print("  Run: mempalace init <dir> then mempalace mine <dir>")
+        raise SearchError(f"No palace found at {palace_path}") from e
+
     result = search_memories(query, palace_path, wing=wing, room=room, n_results=n_results)
     if "error" in result and not result.get("results"):
         # Preserve the palace path in the printed error so the user sees
