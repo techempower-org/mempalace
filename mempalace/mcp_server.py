@@ -1054,6 +1054,157 @@ def tool_traverse_graph(start_room: str, max_hops: int = 2):
     return traverse(start_room, col=col, max_hops=max_hops)
 
 
+def tool_walk_palace(
+    start_wing: str = None,
+    start_room: str = None,
+    start_entity: str = None,
+    depth: int = 2,
+    limit: int = 50,
+):
+    """Agent-facing palace walk via AGE Cypher traversal.
+
+    Phase 6 of the AGE-integration goal. Exposes the "agent walks into the
+    palace" metaphor as a single tool: pass a starting node (wing OR room
+    OR entity) and a depth, get back the navigable subgraph it touches.
+
+    Three traversal modes by starting node:
+
+    - **start_wing="memorypalace"**: enumerate rooms in this wing
+      (depth=1), plus drawers in those rooms (depth=2), plus mentioned
+      entities (depth=3). The "walking into a wing" pattern.
+    - **start_room="problems"**: enumerate drawers in this room across
+      all wings (depth=1), plus their mentioned entities (depth=2). The
+      "walking into a specific room" pattern.
+    - **start_entity="pgvector"**: enumerate drawers mentioning this
+      entity (depth=1), plus the rooms+wings containing them (depth=2).
+      The "find where in the palace X is discussed" pattern (inverse
+      walk — entity → drawer → room → wing).
+
+    Exactly one of (start_wing, start_room, start_entity) must be given.
+
+    Returns a structured walk result with:
+      - ``start``: the input anchor
+      - ``walk``: list of {wing, room, drawer, entity} rows, one per
+        leaf reached
+      - ``stats``: {wings_touched, rooms_touched, drawers_touched,
+        entities_touched}
+
+    Requires MEMPALACE_BACKEND=postgres and the AGE graph populated via
+    kg_writethrough or backfill_age.
+    """
+    # Validate inputs
+    anchors_set = sum(bool(x) for x in (start_wing, start_room, start_entity))
+    if anchors_set != 1:
+        return {
+            "error": "exactly one of start_wing, start_room, start_entity must be provided",
+            "got": {"start_wing": start_wing, "start_room": start_room, "start_entity": start_entity},
+        }
+    depth = max(1, min(depth, 5))
+    limit = max(1, min(limit, 500))
+
+    # Require postgres + AGE
+    if _config.backend != "postgres":
+        return {"error": "tool_walk_palace requires MEMPALACE_BACKEND=postgres"}
+    dsn = _config.postgres_dsn
+    if not dsn:
+        return {"error": "MEMPALACE_POSTGRES_DSN not set"}
+
+    try:
+        from .knowledge_graph_age import KnowledgeGraphAGE
+        kg = KnowledgeGraphAGE(dsn)
+    except Exception as e:
+        return {"error": f"could not connect to AGE: {e}"}
+
+    walk_rows: list[dict] = []
+    # Map result-column-name → stats-key-name so 'entity' goes to 'entities_touched'
+    # (not 'entitys_touched' if we naively pluralized).
+    col_to_stat = {
+        "wing": "wings_touched",
+        "room": "rooms_touched",
+        "drawer": "drawers_touched",
+        "entity": "entities_touched",
+    }
+    stats = {v: set() for v in col_to_stat.values()}
+
+    try:
+        if start_wing:
+            # Wing → Room → Drawer → MENTIONS → Entity
+            cypher_by_depth = {
+                1: """
+                    MATCH (w:Wing {name: $anchor})-[:CONTAINS]->(r:Room)
+                    RETURN w.name AS wing, r.name AS room LIMIT $limit
+                """,
+                2: """
+                    MATCH (w:Wing {name: $anchor})-[:CONTAINS]->(r:Room)-[:CONTAINS]->(d:Drawer)
+                    RETURN w.name AS wing, r.name AS room, d.id AS drawer LIMIT $limit
+                """,
+                3: """
+                    MATCH (w:Wing {name: $anchor})-[:CONTAINS]->(r:Room)-[:CONTAINS]->(d:Drawer)
+                    OPTIONAL MATCH (d)-[m:MENTIONS]->(e:Entity)
+                    RETURN w.name AS wing, r.name AS room, d.id AS drawer, e.name AS entity LIMIT $limit
+                """,
+            }
+            anchor = start_wing
+        elif start_room:
+            # Room (across wings) → Drawer → MENTIONS → Entity
+            cypher_by_depth = {
+                1: """
+                    MATCH (w:Wing)-[:CONTAINS]->(r:Room {name: $anchor})-[:CONTAINS]->(d:Drawer)
+                    RETURN w.name AS wing, r.name AS room, d.id AS drawer LIMIT $limit
+                """,
+                2: """
+                    MATCH (w:Wing)-[:CONTAINS]->(r:Room {name: $anchor})-[:CONTAINS]->(d:Drawer)
+                    OPTIONAL MATCH (d)-[m:MENTIONS]->(e:Entity)
+                    RETURN w.name AS wing, r.name AS room, d.id AS drawer, e.name AS entity LIMIT $limit
+                """,
+            }
+            anchor = start_room
+        else:  # start_entity
+            # Inverse walk: Entity → Drawer → Room → Wing
+            cypher_by_depth = {
+                1: """
+                    MATCH (e:Entity {name: $anchor})<-[m:MENTIONS]-(d:Drawer)
+                    RETURN d.id AS drawer, e.name AS entity LIMIT $limit
+                """,
+                2: """
+                    MATCH (e:Entity {name: $anchor})<-[m:MENTIONS]-(d:Drawer)
+                    OPTIONAL MATCH (w:Wing)-[:CONTAINS]->(r:Room)-[:CONTAINS]->(d)
+                    RETURN w.name AS wing, r.name AS room, d.id AS drawer, e.name AS entity LIMIT $limit
+                """,
+            }
+            anchor = start_entity
+
+        effective_depth = min(depth, max(cypher_by_depth.keys()))
+        cypher = cypher_by_depth[effective_depth]
+
+        rows = kg._run_cypher(cypher, {"anchor": anchor, "limit": limit}, fetch=True)
+        for r in rows:
+            entry: dict = {}
+            # Map columns based on what the chosen cypher returned.
+            # Use aliases from the RETURN clause: wing, room, drawer, entity.
+            # The order matches: wing first, then room, then drawer, then entity
+            # (skipping any not present in the result).
+            for i, key in enumerate(("wing", "room", "drawer", "entity")):
+                if i >= len(r):
+                    break
+                v = kg._unwrap_agtype(r[i])
+                if v is not None:
+                    entry[key] = v
+                    stat_key = col_to_stat.get(key)
+                    if stat_key:
+                        stats[stat_key].add(v)
+            walk_rows.append(entry)
+    finally:
+        kg.close()
+
+    return {
+        "start": {"wing": start_wing, "room": start_room, "entity": start_entity},
+        "depth": depth,
+        "walk": walk_rows,
+        "stats": {k: len(v) for k, v in stats.items()},
+    }
+
+
 def tool_find_tunnels(wing_a: str = None, wing_b: str = None):
     """Find rooms that bridge two wings — the hallways connecting domains."""
     try:
@@ -2090,6 +2241,28 @@ TOOLS = {
             "required": ["start_room"],
         },
         "handler": tool_traverse_graph,
+    },
+    "mempalace_walk_palace": {
+        "description": (
+            "Walk the palace via AGE Cypher traversal — the 'agent walks into the palace' "
+            "primitive. Start at exactly one of {wing, room, entity} and enumerate the "
+            "navigable subgraph at the given depth. "
+            "start_wing='memorypalace' → rooms (d=1), drawers (d=2), entities (d=3). "
+            "start_room='problems' → drawers across wings (d=1), entities (d=2). "
+            "start_entity='pgvector' → drawers mentioning it (d=1), rooms+wings containing them (d=2 — inverse walk). "
+            "Requires MEMPALACE_BACKEND=postgres + the AGE knowledge graph populated via kg_writethrough or backfill_age."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_wing": {"type": "string", "description": "Wing name to walk from (mutually exclusive with start_room/start_entity)"},
+                "start_room": {"type": "string", "description": "Room name to walk from"},
+                "start_entity": {"type": "string", "description": "Entity name to walk from (inverse walk)"},
+                "depth": {"type": "integer", "description": "Walk depth (1..5, default 2)"},
+                "limit": {"type": "integer", "description": "Max rows to return (1..500, default 50)"},
+            },
+        },
+        "handler": tool_walk_palace,
     },
     "mempalace_find_tunnels": {
         "description": "Find rooms that bridge two wings — the hallways connecting different domains. E.g. what topics connect wing_code to wing_team?",
