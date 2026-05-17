@@ -51,6 +51,24 @@ from typing import Optional
 from .knowledge_graph_age import KnowledgeGraphAGE
 from .palace_graph_age import populate_from_postgres
 
+# Postgres identifier whitelist: ``[A-Za-z_][A-Za-z0-9_]*`` is the
+# unquoted-identifier shape and is the only thing we accept for table
+# names that get interpolated into SQL. We do *not* fall back to
+# ``psycopg2.sql.Identifier`` because the drawer-scan query is
+# performance-hot and this validator makes the contract obvious to
+# auditors (Gemini PR #101 review, 2026-05-17).
+import re as _re
+_PG_IDENT_RE = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _validate_pg_identifier(name: str, field: str = "table_name") -> str:
+    if not isinstance(name, str) or not _PG_IDENT_RE.match(name):
+        raise ValueError(
+            f"invalid postgres identifier for {field}: {name!r}; "
+            f"must match [A-Za-z_][A-Za-z0-9_]*"
+        )
+    return name
+
 logger = logging.getLogger("mempalace.backfill_age")
 
 CHECKPOINT_TABLE = "mempalace_kg_backfill_state"
@@ -125,6 +143,7 @@ def backfill(
     confidence: float = 0.5,
     restart: bool = False,
     log_every: int = 500,
+    commit_every: int = 100,
 ) -> dict:
     """Backfill AGE graph from an existing drawer table.
 
@@ -146,6 +165,11 @@ def backfill(
         restart: Clear the checkpoint table before starting (forces a
             full re-backfill).
         log_every: How often to emit progress logs.
+        commit_every: Flush pending KG writes + checkpoint marks every
+            N drawers. Bigger batches amortize commit overhead but lose
+            more progress on crash. Default 100 (~4× faster than per-
+            drawer commit on the production palace per `techempower-org/mempalace#101`
+            review). Set to 1 to restore the old per-drawer semantics.
 
     Returns counters dict tracking what was processed.
     """
@@ -191,6 +215,10 @@ def backfill(
     if not skip_entities:
         extractor = _get_extractor(extractor_name)
 
+        # ``table_name`` is interpolated into SQL below (Postgres doesn't
+        # accept parameters for relation names). Reject anything outside
+        # the unquoted-identifier shape before the f-string.
+        table_name = _validate_pg_identifier(table_name, "table_name")
         sql_drawers = f"""
             SELECT id, document, wing, room FROM "{table_name}"
             WHERE document IS NOT NULL
@@ -204,6 +232,29 @@ def backfill(
         # Stream via named cursor so we don't load all drawers at once.
         scan_conn = psycopg2.connect(dsn)
         scan_conn.autocommit = False
+
+        # Batch buffer of drawer_ids whose KG writes are pending in the
+        # KG connection's transaction. On batch flush we commit the KG
+        # transaction first, then mark each drawer in the checkpoint
+        # table. If the KG commit fails, the whole batch rolls back and
+        # nothing gets marked — the next run reprocesses them.
+        pending_marks: list[str] = []
+
+        def _flush_batch() -> None:
+            if not pending_marks:
+                return
+            try:
+                kg.commit()
+            except Exception as e:  # noqa: BLE001
+                counters["errors"] += 1
+                logger.warning("kg.commit failed on batch of %d: %s", len(pending_marks), e)
+                kg._conn.rollback()
+                pending_marks.clear()
+                return
+            for did in pending_marks:
+                _checkpoint_mark(checkpoint_conn, "drawer", did)
+            pending_marks.clear()
+
         try:
             with scan_conn.cursor(name="drawer_scan_cur") as cur:
                 cur.itersize = 1000
@@ -220,6 +271,7 @@ def backfill(
                         kg._run_cypher(
                             "MERGE (d:Drawer {id: $id})",
                             {"id": drawer_id},
+                            commit=False,
                         )
                         if room and room.strip():
                             kg._run_cypher(
@@ -228,10 +280,13 @@ def backfill(
                                 MERGE (r)-[:CONTAINS]->(d)
                                 """,
                                 {"room": room, "id": drawer_id},
+                                commit=False,
                             )
                     except Exception as e:  # noqa: BLE001
                         counters["errors"] += 1
                         logger.debug("drawer-node failed for %s: %s", drawer_id, e)
+                        kg._conn.rollback()
+                        pending_marks.clear()
                         continue
 
                     # Extract + add MENTIONS edges (Drawer)-[:MENTIONS]->(Entity).
@@ -249,6 +304,7 @@ def backfill(
                                 entity_type=getattr(ent, "type", "unknown"),
                                 count=getattr(ent, "count", 1),
                                 confidence=confidence,
+                                commit=False,
                             )
                             counters["entities_added"] += 1
                         except Exception as e:  # noqa: BLE001
@@ -258,7 +314,10 @@ def backfill(
                                 drawer_id, ent.name, e,
                             )
 
-                    _checkpoint_mark(checkpoint_conn, "drawer", drawer_id)
+                    pending_marks.append(drawer_id)
+
+                    if len(pending_marks) >= commit_every:
+                        _flush_batch()
 
                     if counters["drawers_seen"] % log_every == 0:
                         elapsed = time.time() - t0
@@ -271,6 +330,8 @@ def backfill(
                             counters["errors"],
                             rate,
                         )
+                # Flush the trailing partial batch.
+                _flush_batch()
         finally:
             scan_conn.close()
 
@@ -296,6 +357,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--restart", action="store_true",
                         help="Clear checkpoint table before starting")
     parser.add_argument("--log-every", type=int, default=500)
+    parser.add_argument("--commit-every", type=int, default=100,
+                        help="Batch KG commits every N drawers (default 100)")
     args = parser.parse_args(argv)
 
     counters = backfill(
@@ -308,6 +371,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         max_entities_per_drawer=args.max_entities,
         restart=args.restart,
         log_every=args.log_every,
+        commit_every=args.commit_every,
     )
     print(json.dumps(counters, indent=2))
     return 0

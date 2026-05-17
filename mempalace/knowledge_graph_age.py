@@ -30,6 +30,19 @@ def _load_psycopg2():
     return psycopg2
 
 
+# Unique dollar-quote tag for the cypher() outer SQL boundary. Picked so
+# it can't appear inside a sanitized Cypher literal (we reject the tag
+# substring in ``_cypher_literal``). Hex-suffixed at module load so
+# tests/forks can change it without coordinating with attackers.
+_AGE_DQ_TAG = "mp_age_q"
+_AGE_DQ_OPEN = f"${_AGE_DQ_TAG}$"
+_AGE_DQ_CLOSE = f"${_AGE_DQ_TAG}$"
+
+# Cypher parameter reference: matches $name where name is a valid
+# identifier. Used by ``_inline_cypher_params`` for one-pass substitution.
+_CYPHER_PARAM_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
+
+
 def _cypher_literal(value: Any) -> str:
     """Render a Python value as a Cypher literal for inline substitution.
 
@@ -46,6 +59,12 @@ def _cypher_literal(value: Any) -> str:
     - ``bool`` → bare ``true``/``false``
     - ``str`` → single-quoted with backslash-escaping
     - anything else → ``json.dumps`` and treated as a string
+
+    Defense in depth: rejects strings containing the outer dollar-quote
+    tag (``$mp_age_q$``) so a sanitized-but-adversarial value cannot
+    close the outer SQL boundary that ``_run_cypher`` builds. Upstream
+    sanitizers (``sanitize_kg_value``, ``sanitize_iso_temporal``) already
+    strip control chars and quotes — this check is the last line.
     """
     if value is None:
         return "NULL"
@@ -54,7 +73,33 @@ def _cypher_literal(value: Any) -> str:
     if isinstance(value, (int, float)):
         return str(value)
     s = value if isinstance(value, str) else json.dumps(value)
+    if _AGE_DQ_TAG in s:
+        raise ValueError(
+            f"Cypher literal contains the AGE dollar-quote tag "
+            f"'{_AGE_DQ_TAG}'; reject upstream in the sanitizer."
+        )
     return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _inline_cypher_params(cypher: str, params: dict) -> str:
+    """Single-pass substitution of ``$name`` placeholders with literals.
+
+    Uses ``re.sub`` with a callback so substitutions never re-enter the
+    regex — a value containing ``$other_key`` is preserved verbatim,
+    fixing the recursive-replacement bug in the prior length-sorted
+    ``str.replace`` loop (`techempower-org/mempalace#101` Gemini review,
+    2026-05-17).
+    """
+
+    def _sub(match: "re.Match[str]") -> str:
+        key = match.group(1)
+        if key not in params:
+            # Leave unknown placeholders alone — AGE will raise a clear
+            # parse error rather than silently swallow the literal text.
+            return match.group(0)
+        return _cypher_literal(params[key])
+
+    return _CYPHER_PARAM_RE.sub(_sub, cypher)
 
 
 class KnowledgeGraphAGE:
@@ -524,6 +569,7 @@ class KnowledgeGraphAGE:
         entity_type: str = "unknown",
         count: int = 1,
         confidence: float = 0.5,
+        commit: bool = True,
     ) -> None:
         """Add a (Drawer)-[:MENTIONS]->(Entity) edge.
 
@@ -558,7 +604,18 @@ class KnowledgeGraphAGE:
             """,
             {"did": drawer_id, "ename": entity_name, "count": count,
              "conf": confidence, "etype": entity_type},
+            commit=commit,
         )
+
+    def commit(self) -> None:
+        """Commit the pending KG-write transaction.
+
+        Used by bulk-write callers (``backfill_age``) that pass
+        ``commit=False`` to ``add_mention``/``_run_cypher`` to batch many
+        statements into one transaction, then call ``kg.commit()`` once
+        per batch. The single-statement default still commits per call.
+        """
+        self._conn.commit()
 
 
     def seed_from_entity_facts(self, entity_facts: dict) -> int:
@@ -680,7 +737,13 @@ class KnowledgeGraphAGE:
                 aliases.append(name)
         return aliases
 
-    def _run_cypher(self, cypher: str, params: dict, fetch: bool = False) -> list:
+    def _run_cypher(
+        self,
+        cypher: str,
+        params: dict,
+        fetch: bool = False,
+        commit: bool = True,
+    ) -> list:
         """Run a Cypher statement via AGE.
 
         Inlines parameters into the Cypher source. The conventional
@@ -690,39 +753,45 @@ class KnowledgeGraphAGE:
         function must be a parameter" (verified on AGE 1.6.0 + Postgres
         16, 2026-05-14).
 
-        Inlining is safe because:
+        Inlining safety relies on a layered defense:
         - subject/relation_type/object pass through ``sanitize_kg_value``
           (rejects newlines, quotes, control chars) at the public-API
           boundary in ``add_triple``/``query_triples``.
         - source/valid_from/valid_to go through their respective
           sanitize_* helpers.
-        - The AGE Cypher parser is the only consumer; no SQL injection
-          is reachable since the values land inside dollar-quoted
-          ``$$...$$``.
+        - ``_inline_cypher_params`` does single-pass substitution so a
+          value containing ``$other_key`` cannot trigger a recursive
+          replacement.
+        - ``_cypher_literal`` rejects any string containing the outer
+          dollar-quote tag (``$mp_age_q$``); combined with the tagged
+          envelope below, an adversarial value cannot escape into
+          surrounding SQL.
+
+        Pass ``commit=False`` for bulk write loops (see
+        ``backfill_age._BulkWriter``) so the caller can batch many
+        statements into one transaction; otherwise the method commits on
+        success matching the original single-statement semantics.
         """
         aliases = self._extract_return_aliases(cypher) if fetch else []
         cols_decl = ", ".join(f"{c} agtype" for c in aliases) if aliases else "ok agtype"
 
-        # Inline $-prefixed Cypher params with literal values. Sort
-        # longest-key-first so $valid_from is substituted before $valid.
-        cypher_inlined = cypher
-        for key in sorted(params.keys(), key=len, reverse=True):
-            cypher_inlined = cypher_inlined.replace(f"${key}", _cypher_literal(params[key]))
+        cypher_inlined = _inline_cypher_params(cypher, params)
 
         rows: list = []
         with self._conn.cursor() as cur:
             cur.execute("LOAD 'age'")
             cur.execute('SET search_path = ag_catalog, "$user", public')
             cur.execute(
-                f"SELECT * FROM cypher(%s, $${cypher_inlined}$$) AS ({cols_decl})",
+                f"SELECT * FROM cypher(%s, {_AGE_DQ_OPEN}{cypher_inlined}{_AGE_DQ_CLOSE}) AS ({cols_decl})",
                 (self.GRAPH_NAME,),
             )
             if fetch:
                 rows = cur.fetchall()
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
         return rows
 
-    def _cypher_scalar(self, cypher: str, params: dict) -> Any:
+    def _cypher_scalar(self, cypher: str, params: dict, commit: bool = True) -> Any:
         """Run a Cypher query returning at most one scalar (single column).
 
         Workaround for AGE's single-column RETURN parsing. We rewrite the
@@ -731,24 +800,23 @@ class KnowledgeGraphAGE:
         a separate finding was that AGE's parser sometimes fails on unaliased
         return expressions wrapped in dollar-quoted cypher().
 
-        Returns the unwrapped scalar value or None if no rows.
+        Returns the unwrapped scalar value or None if no rows. See
+        ``_run_cypher`` for substitution + dollar-quote safety; this
+        method delegates to the same helpers.
         """
-        # Inline params same way _run_cypher does.
-        cypher_inlined = cypher
-        for key in sorted(params.keys(), key=len, reverse=True):
-            cypher_inlined = cypher_inlined.replace(f"${key}", _cypher_literal(params[key]))
-        # If no AS alias, append one — AGE requires it for column extraction.
+        cypher_inlined = _inline_cypher_params(cypher, params)
         if " AS " not in cypher_inlined.upper():
             cypher_inlined = cypher_inlined.rstrip() + " AS v"
         with self._conn.cursor() as cur:
             cur.execute("LOAD 'age'")
             cur.execute('SET search_path = ag_catalog, "$user", public')
             cur.execute(
-                f"SELECT * FROM cypher(%s, $${cypher_inlined}$$) AS (v agtype)",
+                f"SELECT * FROM cypher(%s, {_AGE_DQ_OPEN}{cypher_inlined}{_AGE_DQ_CLOSE}) AS (v agtype)",
                 (self.GRAPH_NAME,),
             )
             row = cur.fetchone()
-        self._conn.commit()
+        if commit:
+            self._conn.commit()
         if row is None:
             return None
         return self._unwrap_agtype(row[0])
