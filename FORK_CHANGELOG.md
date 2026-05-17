@@ -18,6 +18,192 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-05-17]
+
+
+### Added
+
+
+- **mempalace_walk_palace MCP tool — agent walks the palace via AGE Cypher** ([`8022ecb`](https://github.com/jphein/mempalace/commit/8022ecb))
+  Phase 6 of the AGE-integration plan. Exposes the "agent walks into
+  the palace finding wings, rooms, drawers" metaphor as a single MCP
+  tool over the unified palace+entity graph (Wing → Room → Drawer →
+  MENTIONS → Entity) built across Phases 1-4 in this branch.
+
+  Three traversal modes via mutually-exclusive anchors:
+  - `start_wing="memorypalace"` — walks down the hierarchy: rooms
+    (d=1), drawers (d=2), entities (d=3)
+  - `start_room="problems"` — drawers across all wings (d=1), then
+    entities (d=2)
+  - `start_entity="pgvector"` — inverse walk: drawers mentioning it
+    (d=1), then the rooms+wings containing them (d=2)
+
+  Result envelope: `{start, depth, walk: [{wing, room, drawer, entity}],
+  stats: {wings_touched, rooms_touched, drawers_touched, entities_touched}}`.
+
+  Smoke-tested on `sme_lme_bench`: `walk_palace(start_entity='pgvector',
+  depth=2)` returns the 3 drawers mentioning it plus their containing
+  rooms+wings; `walk_palace(start_room='postgres', depth=2)` returns
+  the postgres.py drawer plus its 3 mentioned entities.
+
+  Requires `MEMPALACE_BACKEND=postgres` and AGE graph populated via
+  `kg_writethrough` (Phase 2) or `backfill_age` (Phase 4).
+
+  *Files:* `mempalace/mcp_server.py`
+
+
+- **Backfill AGE graph from existing drawer table — restartable, checkpointed** ([`b3f0206`](https://github.com/jphein/mempalace/commit/b3f0206))
+  Phase 4 of the AGE-integration plan. New module
+  `mempalace/backfill_age.py` with CLI entry point that reads the
+  drawer table once and builds the full Wing/Room/Drawer/MENTIONS
+  graph in AGE. Companion to `migrate_to_postgres` — that script
+  copies chroma → postgres, this one copies postgres-drawers →
+  postgres-AGE.
+
+  Design:
+  - Restartable via `mempalace_kg_backfill_state` checkpoint table
+    (phase, key) — re-running skips already-processed (wing, room)
+    or drawer keys.
+  - Idempotent via MERGE on identity columns; safe to re-run.
+  - Bounded memory via named server-side cursor — never loads the
+    full drawer table into memory.
+  - Configurable scope: `--wing memorypalace` for one wing,
+    `--skip-palace` to add only entity edges to existing structure,
+    `--skip-entities` for fast "high-level palace map" first pass.
+
+  Companion `add_mention(drawer_id, entity_name)` method on
+  `KnowledgeGraphAGE` for the (Drawer)-[:MENTIONS]->(Entity) edge
+  pattern. CREATE-ALWAYS edge semantics (no upsert) — matches the
+  SQLite KG triples-table behavior. AGE 1.6.0 doesn't support `SET`
+  on edge properties or `coalesce` in SET, so callers that want
+  idempotency track state externally (backfill checkpoint table
+  does this).
+
+  Tested on `sme_lme_bench` (1181 docs wing chunks → 6015 entities
+  + 13721 MENTIONS edges in 5.85 min). Production palace projection:
+  ~22 hours for 274K drawers — overnight job.
+
+  *Files:* `mempalace/backfill_age.py`, `mempalace/knowledge_graph_age.py`
+
+
+- **Wing/Room/Drawer hierarchy as native AGE nodes; Cypher MATCH walks palace structure** ([`ff583c0`](https://github.com/jphein/mempalace/commit/ff583c0))
+  Phase 3 of the AGE-integration plan. Mirrors `mempalace.palace_graph`'s
+  SQL-aggregation pattern into AGE so Cypher MATCH walks the palace
+  structure natively — no SQL aggregation per query.
+
+  New module `mempalace/palace_graph_age.py`:
+  - `populate_from_postgres(kg, dsn, table_name, skip_drawers,
+    skip_tunnels)` — reads drawer table, builds
+    Wing/Room/Drawer/SHARED_VIA in AGE. Idempotent via MERGE.
+    Three-pass design so `skip_drawers` gives a fast high-level
+    palace map without per-drawer cost on huge palaces.
+  - `walk_wing(kg, wing, depth)` — structured walk primitive
+    returning `[{wing, room, drawer, entity}]` rows.
+  - `list_wings`, `list_rooms_in_wing`, `list_drawers_in_room`,
+    `tunnels_from_wing` — read-side helpers ready for MCP-tool
+    wiring (Phase 6).
+
+  Schema:
+  ```
+  Wing  -[:CONTAINS]->  Room  -[:CONTAINS]->  Drawer  -[:MENTIONS]->  Entity
+  Wing  -[:SHARED_VIA {via_room}]-  Wing      (tunnels)
+  ```
+
+  The MENTIONS edges connect structural location (Phase 3) to the
+  kg_writethrough layer (Phase 2) into one unified graph an agent
+  can navigate. AGE Cypher dialect respected: no edge-type union
+  `[:A|B]` (AGE 1.6.0 errors), so `walk_wing(depth=3)` uses
+  `[:RELATION]` with a property filter instead.
+
+  Smoke-tested on `sme_lme_bench`: 5344 chunks across 2 wings
+  (code/docs) → 237 rooms, 238 CONTAINS edges, 1 SHARED_VIA tunnel
+  via the `cli` room (appears in both wings).
+
+  *Files:* `mempalace/palace_graph_age.py`
+
+
+- **Write-through middleware on PostgresCollection — entities populate AGE on every drawer write** ([`3321d83`](https://github.com/jphein/mempalace/commit/3321d83))
+  Phase 2 of the AGE-integration plan. Adds a write-through hook on
+  `PostgresCollection.add`/`upsert` that extracts entities from the
+  document and creates `(Drawer)-[:MENTIONS]->(Entity)` edges in
+  AGE. Means the KG is populated as the palace is filled, not as a
+  separate offline pass.
+
+  Plumbing:
+  - `PostgresCollection._insert_rows` — after the row commits, calls
+    `self._kg_writethrough(drawer_id, document, metadata)` if
+    registered. Hook errors caught + logged, never raised — KG
+    enrichment is opportunistic, never blocks writes.
+  - `PostgresCollection.set_kg_writethrough(hook)` — registration
+    API. Default (no hook) is zero overhead — vector-only behavior
+    byte-identical to pre-Phase-2.
+
+  New module `mempalace/kg_writethrough.py`:
+  - `make_age_writethrough(kg, extractor)` — canonical hook factory.
+    Caps at `max_entities_per_drawer` (default 100) so per-drawer
+    write latency stays bounded.
+  - `make_null_writethrough()` — no-op for tests / disabling.
+  - `make_writethrough_from_env()` — env-var-driven config:
+    `MEMPALACE_KG_WRITETHROUGH=1` + `MEMPALACE_KG_EXTRACTOR=regex|null`.
+  - `_builtin_regex_extractor` — fallback when SME's extractor isn't
+    importable. Captures capitalized proper nouns, hyphenated
+    identifiers, version strings.
+
+  Extractor is pluggable: any callable matching `(text) -> list[Entity]`
+  where Entity has `.name` works. Tested with SME's two-pass regex
+  extractor; spaCy and LLM extractors are next on the swap-in list.
+
+  Smoke test: fresh AGE graph + `coll.upsert(2 drawers about
+  Atakan/FT-300/AGE/mempalace-Phase-2)` → 10 entities, 8 MENTIONS
+  edges, all current.
+
+  *Files:* `mempalace/backends/postgres.py`, `mempalace/kg_writethrough.py`
+
+
+- **KnowledgeGraphAGE API parity with SQLite KG: add_entity, invalidate, query_entity, query_relationship, timeline, seed_from_entity_facts** ([`ff7187d`](https://github.com/jphein/mempalace/commit/ff7187d))
+  Phase 1 of the AGE-integration plan. Brings `KnowledgeGraphAGE` to
+  API parity with `mempalace.knowledge_graph.KnowledgeGraph` (the
+  SQLite backend). Previously only `add_triple`, `query_triples`,
+  `stats`, `clear` were implemented; the 5 missing methods make AGE
+  a drop-in replacement for SQLite without requiring callsite
+  changes.
+
+  Methods added (all mirror SQLite semantics):
+  - `add_entity(name, entity_type, properties)` — MERGE pattern;
+    last-write-wins on type/properties since AGE 1.6.0 has no `ON
+    CREATE SET`.
+  - `invalidate(subject, predicate, object_, ended)` — SET valid_to
+    on every active matching triple; inverted-interval guard reads
+    existing valid_from first and rejects if ended < valid_from.
+  - `query_entity(name, as_of, direction)` —
+    outgoing/incoming/both direction filter + as_of temporal filter.
+  - `query_relationship(predicate, as_of)` — filter triples by
+    relation_type, optional temporal filter.
+  - `timeline(entity_name, limit)` — chronological ORDER BY with
+    default limit 100.
+  - `seed_from_entity_facts(entity_facts)` — bulk-load from
+    ENTITY_FACTS dict shape used by `fact_checker.py`.
+  - `_entity_id(name)` — id derivation helper matching SQLite KG.
+
+  AGE Cypher dialect gaps documented + worked around:
+  - No `ON CREATE SET` → unconditional `SET` on MERGE.
+  - No multi-column `RETURN` with AS aliases inside dollar-quoted
+    `cypher()` — wired the existing `_run_cypher` alias-parsing path
+    to handle all 6 methods cleanly.
+  - No list literals (`RETURN [a, b]`) — workaround not needed for
+    these methods, but documented for downstream callers.
+
+  Smoke-tested end-to-end: 3 triples (`Atakan -[works_on]-> adaptmem`,
+  `Atakan -[works_on]-> mempalace-PRs`, `FT-300 -[trained_by]->
+  Atakan`); query_entity outgoing → 2 results; query_entity incoming
+  → 1; invalidate(`mempalace-PRs`) → 1 affected, re-query shows
+  `valid_to=2026-05-17, current=False`; timeline returns 3 rows
+  ordered by valid_from; stats: entities=4, triples=3,
+  current_facts=2, expired_facts=1.
+
+  *Files:* `mempalace/knowledge_graph_age.py`
+
+
 ## [2026-05-11]
 
 
@@ -1008,17 +1194,10 @@ config-file readback. Suite total 1562 passed.
   and ``os.path.getmtime()`` to file-level (2 syscalls per file instead
   of 2N). Reported 10–30× mining speedup upstream. Fork-side resolution
   preserved fork's existing ``DRAWER_UPSERT_BATCH_SIZE=1000``; aliased
-  upstream's ``CHROMA_BATCH_LIMIT`` to it.
+  upstream's ``CHROMA_BATCH_LIMIT`` to it. Becomes a no-op when #1085
+  merges to develop and we next sync.
 
-  **2026-05-16 update:** upstream #1085 was closed 2026-05-05 by
-  @midweste, superseded by [#1185](https://github.com/MemPalace/mempalace/pull/1185)
-  ("perf(mining): batch per-chunk upserts + optional GPU acceleration")
-  which **merged to develop on 2026-04-24** (wider scope: same batch-
-  insert path plus optional GPU acceleration). Our cherry-pick is now
-  functionally redundant with develop; safe to drop on the next
-  upstream sync. See techempower-org/mempalace#36.
-
-  *Upstream:* [PR #1085](https://github.com/MemPalace/mempalace/pull/1085) (CLOSED) — superseded by [PR #1185](https://github.com/MemPalace/mempalace/pull/1185) (MERGED)
+  *Upstream:* [PR #1085](https://github.com/MemPalace/mempalace/pull/1085) (OPEN)
   *Files:* `mempalace/miner.py`
 
 
