@@ -113,6 +113,39 @@ This is composition, not a fork-led architectural shift: `BaseBackend` + `BaseCo
 
 **What's still open.** Embedding-model identity across the migration window. Operational ergonomics versus the current daemon-fronted ChromaDB story. Whether the bridge pattern survives at 150K+ drawers without a custom indexing strategy. Whether the bench numbers justify the migration cost at all. The honest version: *we run the queries now and read the numbers, instead of speculating about them.*
 
+## "Walking the palace" — Apache AGE integration (2026-05-17)
+
+*Status: **shipping on `feat/age-kg-parity`**, in review at [PR #101](https://github.com/techempower-org/mempalace/pull/101). Companion read-side fusion endpoint on palace-daemon ships at [techempower-org/palace-daemon#25](https://github.com/techempower-org/palace-daemon/pull/25).*
+
+A six-phase plan to fully integrate the mempalace knowledge base with Apache AGE so the metaphor of *the AI walking into a palace and finding wings, rooms, and drawers* becomes real Cypher traversal — not a narrative device. The motivating result: a [2026-05-17 spike on n=200 git-derived probes](https://github.com/techempower-org/multipass-structural-memory-eval/blob/feat/rlm-adapter/docs/benchmarks/2026-05-17-age-write-through-spike.md) showed graph signal adds **+9pp R@5** over vector-only retrieval (graph-only beats vector by +5pp; RRF fusion adds another +4pp on top).
+
+| Phase | What | Module |
+|---|---|---|
+| 1 | `KnowledgeGraphAGE` API parity with the SQLite KG (6 new methods) | `mempalace/knowledge_graph_age.py` |
+| 2 | Write-through middleware on `PostgresCollection.add/upsert` (every drawer write extracts entities + creates `:MENTIONS` edges in AGE) | `mempalace/kg_writethrough.py` + `mempalace/backends/postgres.py` |
+| 3 | Palace structure as native AGE nodes (Wing → Room → Drawer + tunnels) | `mempalace/palace_graph_age.py` |
+| 4 | `backfill_age` — restartable, checkpointed one-shot for existing drawer tables (~22h for production 274K palace) | `mempalace/backfill_age.py` |
+| 5 | `POST /search/age-fused` endpoint on palace-daemon — vector ⊕ AGE graph RRF fusion | (palace-daemon repo) |
+| 6 | `mempalace_walk_palace` MCP tool — `start_wing` / `start_room` / `start_entity` × depth | `mempalace/mcp_server.py` |
+
+**The unified graph schema after all six phases:**
+
+```
+Wing  -[:CONTAINS]->  Room  -[:CONTAINS]->  Drawer  -[:MENTIONS]->  Entity
+  ↑                                                                    ↑
+  +-[:SHARED_VIA {via_room}]- Wing (tunnels)        (kg_writethrough auto-populates)
+```
+
+**The walk primitive** an agent calls:
+```python
+walk_palace(start_wing="memorypalace", depth=3)
+# → [{wing, room, drawer, entity}] rows for every reachable leaf
+```
+
+**AGE Cypher dialect gaps documented + worked around** during the build (AGE 1.6.0): no multi-column `RETURN` inside `cypher(...)`, no list literals (`RETURN [a, b]` errors), no `MERGE ... ON CREATE SET`, no `SET` on edge properties inline, no `coalesce()` in SET. All five encoded in the implementation. See PR #101 description for the full operational rollout plan and AGE Cypher gap inventory.
+
+Independent same-day cross-fork verification by [@nakata-app](https://github.com/nakata-app) on his AdaptMem fork found the same operational state via a different angle (code-level audit found `KnowledgeGraphAGE` skeleton-only on his fork; the state-level audit on the production palace-daemon found 2 placeholder vertices + 1 placeholder edge total). The two-angle convergence is itself a methodology callout the [SME spec arc](https://github.com/M0nkeyFl0wer/multipass-structural-memory-eval/issues/9) intends to incorporate: *"substrate is ready" claims need cross-fork verification before downstream work depends on them.*
+
 ## What this fork ships, organized by axis
 
 Three bands of work, all instances of the principles above. Detail rows in the [appendix](#fork-change-inventory) at the bottom.
