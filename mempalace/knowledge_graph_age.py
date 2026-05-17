@@ -253,6 +253,294 @@ class KnowledgeGraphAGE:
             for r in rows
         ]
 
+    def add_entity(self, name: str, entity_type: str = "unknown", properties: Optional[dict] = None) -> str:
+        """Add or update an entity node.
+
+        Mirrors ``KnowledgeGraph.add_entity`` in the SQLite backend. MERGE
+        creates the node if absent, and sets ``type``/``properties`` on
+        creation only — AGE doesn't support ``ON CREATE SET``, so the
+        property setting happens via ``MATCH ... SET`` in a follow-up
+        Cypher call to keep semantics close to the SQLite ``INSERT OR
+        REPLACE``.
+
+        Returns the entity id (``name.lower().replace(' ', '_')``) for
+        SQLite-callsite source compatibility.
+        """
+        name = sanitize_kg_value(name, "name")
+        eid = self._entity_id(name)
+        props_json = json.dumps(properties or {})
+        # AGE's MERGE-without-ON-CREATE-SET means we always set type/props.
+        # That diverges slightly from SQLite's "REPLACE if exists" behavior:
+        # any concurrent writer's type would also be overwritten. For the
+        # write-through use case (extractor populating new entities) that's
+        # the right behavior; for the unusual case where two writers race
+        # on the same entity name, last-write-wins is acceptable.
+        self._run_cypher(
+            """
+            MERGE (e:Entity {name: $name})
+            SET e.type = $type, e.properties = $props
+            """,
+            {"name": name, "type": entity_type, "props": props_json},
+        )
+        return eid
+
+    @staticmethod
+    def _entity_id(name: str) -> str:
+        """Mirror SQLite KG's id derivation so cross-backend callers see
+        the same id for the same entity name."""
+        return name.lower().replace(" ", "_").replace("'", "")
+
+    def invalidate(self, subject: str, predicate: str, obj: str, ended: Optional[str] = None) -> int:
+        """Mark active triples matching (subject, predicate, object) as expired.
+
+        Sets ``valid_to`` to ``ended`` (or today if None) on every RELATION
+        whose ``valid_to`` is currently NULL. Mirrors SQLite KG's
+        ``invalidate`` exactly.
+
+        Returns the number of triples affected.
+
+        Inverted-interval check: if the resulting ``valid_to`` would precede
+        an existing ``valid_from`` on any affected triple, raises ValueError
+        before any write happens.
+        """
+        subject = sanitize_kg_value(subject, "subject")
+        predicate = sanitize_kg_value(predicate, "predicate")
+        obj = sanitize_kg_value(obj, "object")
+        if ended is None:
+            from datetime import date as _date
+            ended = _date.today().isoformat()
+        ended = sanitize_iso_temporal(ended, "ended")
+
+        # Inverted-interval guard: read current valid_from values first.
+        rows = self._run_cypher(
+            """
+            MATCH (s:Entity {name: $subj})-[r:RELATION]->(o:Entity {name: $obj})
+            WHERE r.relation_type = $pred AND r.valid_to IS NULL
+            RETURN r.valid_from AS valid_from
+            """,
+            {"subj": subject, "obj": obj, "pred": predicate},
+            fetch=True,
+        )
+        for row in rows:
+            vf = self._unwrap_agtype(row[0])
+            if vf is not None and ended < vf:
+                raise ValueError(
+                    f"valid_to={ended!r} is before valid_from={vf!r}; "
+                    "an inverted interval would be invisible to every KG query"
+                )
+
+        # Apply the invalidation. SET-on-MATCH is the supported AGE form.
+        self._run_cypher(
+            """
+            MATCH (s:Entity {name: $subj})-[r:RELATION]->(o:Entity {name: $obj})
+            WHERE r.relation_type = $pred AND r.valid_to IS NULL
+            SET r.valid_to = $ended
+            """,
+            {"subj": subject, "obj": obj, "pred": predicate, "ended": ended},
+        )
+        return len(rows)
+
+    def query_entity(
+        self,
+        name: str,
+        as_of: Optional[str] = None,
+        direction: str = "both",
+    ) -> list:
+        """Return all triples touching ``name`` (entity name, not id).
+
+        Mirrors ``KnowledgeGraph.query_entity``:
+
+        - ``direction``: "outgoing" (entity → ?), "incoming" (? → entity), "both"
+        - ``as_of``: only return facts whose interval covers this date
+
+        Each result dict has: ``direction``, ``subject``, ``predicate``,
+        ``object``, ``valid_from``, ``valid_to``, ``confidence``,
+        ``source_closet`` (None on AGE — not yet plumbed), ``current``.
+        """
+        name = sanitize_kg_value(name, "name")
+        results = []
+
+        if as_of is not None:
+            as_of = sanitize_iso_temporal(as_of, "as_of")
+        # Build temporal WHERE fragment if as_of given.
+        temporal_where = ""
+        temporal_params: dict = {}
+        if as_of:
+            temporal_where = (
+                " AND (r.valid_from IS NULL OR r.valid_from <= $as_of)"
+                " AND (r.valid_to IS NULL OR r.valid_to >= $as_of)"
+            )
+            temporal_params["as_of"] = as_of
+
+        if direction in ("outgoing", "both"):
+            rows = self._run_cypher(
+                f"""
+                MATCH (s:Entity)-[r:RELATION]->(o:Entity)
+                WHERE s.name = $name {temporal_where}
+                RETURN s.name AS subject, r.relation_type AS predicate,
+                       o.name AS object,
+                       r.valid_from AS valid_from, r.valid_to AS valid_to,
+                       r.confidence AS confidence, r.source AS source
+                """,
+                {"name": name, **temporal_params},
+                fetch=True,
+            )
+            for r in rows:
+                vt = self._unwrap_agtype(r[4])
+                results.append({
+                    "direction": "outgoing",
+                    "subject": self._unwrap_agtype(r[0]),
+                    "predicate": self._unwrap_agtype(r[1]),
+                    "object": self._unwrap_agtype(r[2]),
+                    "valid_from": self._unwrap_agtype(r[3]),
+                    "valid_to": vt,
+                    "confidence": self._unwrap_agtype(r[5]),
+                    "source_closet": self._unwrap_agtype(r[6]),
+                    "current": vt is None,
+                })
+
+        if direction in ("incoming", "both"):
+            rows = self._run_cypher(
+                f"""
+                MATCH (s:Entity)-[r:RELATION]->(o:Entity)
+                WHERE o.name = $name {temporal_where}
+                RETURN s.name AS subject, r.relation_type AS predicate,
+                       o.name AS object,
+                       r.valid_from AS valid_from, r.valid_to AS valid_to,
+                       r.confidence AS confidence, r.source AS source
+                """,
+                {"name": name, **temporal_params},
+                fetch=True,
+            )
+            for r in rows:
+                vt = self._unwrap_agtype(r[4])
+                results.append({
+                    "direction": "incoming",
+                    "subject": self._unwrap_agtype(r[0]),
+                    "predicate": self._unwrap_agtype(r[1]),
+                    "object": self._unwrap_agtype(r[2]),
+                    "valid_from": self._unwrap_agtype(r[3]),
+                    "valid_to": vt,
+                    "confidence": self._unwrap_agtype(r[5]),
+                    "source_closet": self._unwrap_agtype(r[6]),
+                    "current": vt is None,
+                })
+
+        return results
+
+    def query_relationship(self, predicate: str, as_of: Optional[str] = None) -> list:
+        """Return all triples with the given relation type.
+
+        Mirrors SQLite ``KnowledgeGraph.query_relationship``.
+        """
+        predicate = sanitize_kg_value(predicate, "predicate")
+        if as_of is not None:
+            as_of = sanitize_iso_temporal(as_of, "as_of")
+
+        temporal_where = ""
+        params = {"pred": predicate}
+        if as_of:
+            temporal_where = (
+                " AND (r.valid_from IS NULL OR r.valid_from <= $as_of)"
+                " AND (r.valid_to IS NULL OR r.valid_to >= $as_of)"
+            )
+            params["as_of"] = as_of
+
+        rows = self._run_cypher(
+            f"""
+            MATCH (s:Entity)-[r:RELATION]->(o:Entity)
+            WHERE r.relation_type = $pred {temporal_where}
+            RETURN s.name AS subject, r.relation_type AS predicate,
+                   o.name AS object,
+                   r.valid_from AS valid_from, r.valid_to AS valid_to
+            """,
+            params,
+            fetch=True,
+        )
+        return [
+            {
+                "subject": self._unwrap_agtype(r[0]),
+                "predicate": self._unwrap_agtype(r[1]),
+                "object": self._unwrap_agtype(r[2]),
+                "valid_from": self._unwrap_agtype(r[3]),
+                "valid_to": self._unwrap_agtype(r[4]),
+                "current": self._unwrap_agtype(r[4]) is None,
+            }
+            for r in rows
+        ]
+
+    def timeline(self, entity_name: Optional[str] = None, limit: int = 100) -> list:
+        """Return triples in chronological order, optionally filtered by entity.
+
+        Mirrors SQLite ``KnowledgeGraph.timeline``. Limit defaults to 100
+        for parity. AGE ``ORDER BY ... LIMIT`` works inside cypher() so no
+        workaround needed.
+        """
+        if entity_name is not None:
+            entity_name = sanitize_kg_value(entity_name, "entity_name")
+            rows = self._run_cypher(
+                """
+                MATCH (s:Entity)-[r:RELATION]->(o:Entity)
+                WHERE s.name = $name OR o.name = $name
+                RETURN s.name AS subject, r.relation_type AS predicate,
+                       o.name AS object,
+                       r.valid_from AS valid_from, r.valid_to AS valid_to
+                ORDER BY r.valid_from
+                LIMIT $limit
+                """,
+                {"name": entity_name, "limit": limit},
+                fetch=True,
+            )
+        else:
+            rows = self._run_cypher(
+                """
+                MATCH (s:Entity)-[r:RELATION]->(o:Entity)
+                RETURN s.name AS subject, r.relation_type AS predicate,
+                       o.name AS object,
+                       r.valid_from AS valid_from, r.valid_to AS valid_to
+                ORDER BY r.valid_from
+                LIMIT $limit
+                """,
+                {"limit": limit},
+                fetch=True,
+            )
+        return [
+            {
+                "subject": self._unwrap_agtype(r[0]),
+                "predicate": self._unwrap_agtype(r[1]),
+                "object": self._unwrap_agtype(r[2]),
+                "valid_from": self._unwrap_agtype(r[3]),
+                "valid_to": self._unwrap_agtype(r[4]),
+                "current": self._unwrap_agtype(r[4]) is None,
+            }
+            for r in rows
+        ]
+
+    def seed_from_entity_facts(self, entity_facts: dict) -> int:
+        """Seed the graph from fact_checker.py ENTITY_FACTS dict.
+
+        Mirrors SQLite ``KnowledgeGraph.seed_from_entity_facts``. ENTITY_FACTS
+        is a dict of {entity_name: {fact_label: value, ...}} — each
+        non-empty value becomes a (entity_name, fact_label, value) triple
+        with no temporal bounds and confidence 1.0.
+
+        Returns the number of triples written.
+        """
+        n = 0
+        for entity, facts in (entity_facts or {}).items():
+            if not isinstance(facts, dict):
+                continue
+            for label, value in facts.items():
+                if value is None or value == "":
+                    continue
+                self.add_triple(
+                    subject=entity,
+                    relation_type=label,
+                    object_=str(value),
+                )
+                n += 1
+        return n
+
     def stats(self) -> dict:
         """Return aggregate counts mirroring the SQLite KG's ``stats()`` shape.
 
