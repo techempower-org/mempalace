@@ -103,18 +103,23 @@ def make_age_writethrough(
         if not entities:
             return
         # Cap to bound per-drawer write cost.
+        # Use add_mention (Drawer)-[:MENTIONS]->(Entity) rather than
+        # add_triple (Entity-RELATION-Entity) so the drawer keeps its
+        # :Drawer label and the palace-structure layer (Wing→Room→Drawer)
+        # connects cleanly to the entity layer.
         for ent in entities[:max_entities_per_drawer]:
             try:
-                kg.add_triple(
-                    subject=drawer_id,
-                    relation_type=relation_type,
-                    object_=ent.name,
+                kg.add_mention(
+                    drawer_id=drawer_id,
+                    entity_name=ent.name,
+                    entity_type=getattr(ent, "type", "unknown"),
+                    count=getattr(ent, "count", 1),
                     confidence=confidence,
                 )
             except Exception as e:  # noqa: BLE001
                 logger.debug(
-                    "add_triple failed for (%s, %s, %s): %s",
-                    drawer_id, relation_type, ent.name, e,
+                    "add_mention failed for (%s, %s): %s",
+                    drawer_id, ent.name, e,
                 )
 
     return hook

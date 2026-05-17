@@ -516,6 +516,51 @@ class KnowledgeGraphAGE:
             for r in rows
         ]
 
+    def add_mention(
+        self,
+        drawer_id: str,
+        entity_name: str,
+        *,
+        entity_type: str = "unknown",
+        count: int = 1,
+        confidence: float = 0.5,
+    ) -> None:
+        """Add a (Drawer)-[:MENTIONS]->(Entity) edge.
+
+        Connects the palace-structure layer (Drawer nodes from
+        ``palace_graph_age``) to the entity layer (Entity nodes).
+        MERGE pattern on the nodes — re-running for the same
+        (drawer, entity) pair creates a *new parallel edge* rather
+        than incrementing count.
+
+        CREATE-ALWAYS edge semantics is intentional and matches the
+        SQLite KG's triples-table behavior (each ``add_triple`` inserts
+        a new row, no UPSERT). Callers that need idempotency should
+        track write state externally (e.g. ``backfill_age``'s
+        ``mempalace_kg_backfill_state`` table) and skip the call if the
+        drawer was already processed.
+
+        AGE 1.6.0 Cypher dialect gaps respected:
+          - No SET on edge properties inline (parser errors at '=').
+          - No ON CREATE SET.
+          - No coalesce() in SET.
+        Edge properties are set at CREATE time and never modified after.
+        """
+        drawer_id = sanitize_kg_value(drawer_id, "drawer_id")
+        entity_name = sanitize_kg_value(entity_name, "entity_name")
+        # MERGE the nodes (idempotent on identity), CREATE the edge
+        # (one per call — no upsert on edges in AGE 1.6.0).
+        self._run_cypher(
+            """
+            MERGE (d:Drawer {id: $did})
+            MERGE (e:Entity {name: $ename})
+            CREATE (d)-[:MENTIONS {count: $count, confidence: $conf, etype: $etype}]->(e)
+            """,
+            {"did": drawer_id, "ename": entity_name, "count": count,
+             "conf": confidence, "etype": entity_type},
+        )
+
+
     def seed_from_entity_facts(self, entity_facts: dict) -> int:
         """Seed the graph from fact_checker.py ENTITY_FACTS dict.
 
@@ -676,6 +721,37 @@ class KnowledgeGraphAGE:
                 rows = cur.fetchall()
         self._conn.commit()
         return rows
+
+    def _cypher_scalar(self, cypher: str, params: dict) -> Any:
+        """Run a Cypher query returning at most one scalar (single column).
+
+        Workaround for AGE's single-column RETURN parsing. We rewrite the
+        RETURN to include an AS alias automatically if absent — AGE requires
+        AS markers on every returned column even in single-column form, and
+        a separate finding was that AGE's parser sometimes fails on unaliased
+        return expressions wrapped in dollar-quoted cypher().
+
+        Returns the unwrapped scalar value or None if no rows.
+        """
+        # Inline params same way _run_cypher does.
+        cypher_inlined = cypher
+        for key in sorted(params.keys(), key=len, reverse=True):
+            cypher_inlined = cypher_inlined.replace(f"${key}", _cypher_literal(params[key]))
+        # If no AS alias, append one — AGE requires it for column extraction.
+        if " AS " not in cypher_inlined.upper():
+            cypher_inlined = cypher_inlined.rstrip() + " AS v"
+        with self._conn.cursor() as cur:
+            cur.execute("LOAD 'age'")
+            cur.execute('SET search_path = ag_catalog, "$user", public')
+            cur.execute(
+                f"SELECT * FROM cypher(%s, $${cypher_inlined}$$) AS (v agtype)",
+                (self.GRAPH_NAME,),
+            )
+            row = cur.fetchone()
+        self._conn.commit()
+        if row is None:
+            return None
+        return self._unwrap_agtype(row[0])
 
     @staticmethod
     def _unwrap_agtype(value: Any) -> Any:

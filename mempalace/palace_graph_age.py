@@ -230,9 +230,14 @@ def walk_wing(kg: KnowledgeGraphAGE, wing_name: str, depth: int = 2, limit: int 
     """
     wing_clean = sanitize_kg_value(wing_name, "wing")
     if depth >= 3:
+        # AGE doesn't support edge-type union (`[:A|B]`) in MATCH patterns.
+        # The kg_writethrough hook (Phase 2) writes triples as :RELATION edges
+        # with relation_type='mentions' on the edge properties, so we filter
+        # by property rather than label.
         cypher = """
             MATCH (w:Wing {name: $wing})-[:CONTAINS]->(r:Room)-[:CONTAINS]->(d:Drawer)
-            OPTIONAL MATCH (d)-[:MENTIONS|RELATION]->(e:Entity)
+            OPTIONAL MATCH (d)-[rel:RELATION]->(e:Entity)
+            WHERE rel.relation_type = 'mentions'
             RETURN w.name AS wing, r.name AS room, d.id AS drawer, e.name AS entity
             LIMIT $limit
         """
