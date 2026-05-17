@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [Unreleased] — 2026-05-17 — *AGE-integration 6-phase plan: KnowledgeGraphAGE + write-through + palace structure + backfill + walk_palace MCP*
+
+Multi-project AGE-integration plan landed on this fork's `feat/age-kg-parity` branch ([PR #101](https://github.com/techempower-org/mempalace/pull/101)). Companion fork-PR on palace-daemon adds the read-side fusion endpoint ([techempower-org/palace-daemon#25](https://github.com/techempower-org/palace-daemon/pull/25)). The metaphor of *the AI walking into a palace and finding wings, rooms, and drawers* now corresponds to real Cypher traversal over a unified `Wing → Room → Drawer → MENTIONS → Entity` graph.
+
+### Added
+
+- **`KnowledgeGraphAGE` API parity with the SQLite `KnowledgeGraph`** ([`ff7187d`](https://github.com/techempower-org/mempalace/commit/ff7187d)). Adds 6 missing methods (`add_entity`, `invalidate`, `query_entity`, `query_relationship`, `timeline`, `seed_from_entity_facts`) on top of the existing `add_triple` / `query_triples` / `stats` / `clear`. AGE 1.6.0 Cypher dialect gaps documented + worked around: no `ON CREATE SET`, no multi-column `RETURN` inside `cypher()`, no list literals, no `SET` on edge properties inline.
+- **Write-through KG middleware on `PostgresCollection`** ([`3321d83`](https://github.com/techempower-org/mempalace/commit/3321d83)). New `set_kg_writethrough(hook)` API; hook fires after every successful drawer write with `(drawer_id, document, metadata)`. New module `mempalace/kg_writethrough.py` provides `make_age_writethrough(kg, extractor)` factory + env-var-driven `make_writethrough_from_env()` + a builtin regex extractor fallback. Default behavior unchanged when no hook is registered.
+- **Palace structure as native AGE nodes** ([`ff583c0`](https://github.com/techempower-org/mempalace/commit/ff583c0)). New module `mempalace/palace_graph_age.py` mirrors the SQL-aggregation pattern from `mempalace.palace_graph` into AGE: `populate_from_postgres(kg, dsn, table_name)` builds `Wing -[CONTAINS]-> Room -[CONTAINS]-> Drawer` + `Wing -[SHARED_VIA {via_room}]- Wing` tunnels. Idempotent via MERGE.
+- **`backfill_age` — restartable AGE population from drawer table** ([`b3f0206`](https://github.com/techempower-org/mempalace/commit/b3f0206)). New module + CLI `mempalace-backfill-age` for one-shot postgres-drawers → postgres-AGE migration. Checkpoint table `mempalace_kg_backfill_state` makes re-runs safe. Smoke-tested on 5344-drawer test palace (58948 entities in 26 min); ~22h projected for production 274K palace.
+- **`add_mention(drawer_id, entity_name)` on `KnowledgeGraphAGE`** (same `b3f0206`). Connects palace-structure to entity layer via `(Drawer)-[:MENTIONS]->(Entity)` edges. CREATE-ALWAYS semantics matches SQLite KG triples-table behavior; idempotency tracked externally via backfill checkpoint table.
+- **`mempalace_walk_palace` MCP tool** ([`8022ecb`](https://github.com/techempower-org/mempalace/commit/8022ecb)). Agent-facing walk primitive: `start_wing="..."` walks down, `start_room="..."` enumerates across wings, `start_entity="..."` is inverse walk. Requires `MEMPALACE_BACKEND=postgres` + AGE populated.
+- **`.gemini/config.yaml`** ([`c35c74e`](https://github.com/techempower-org/mempalace/commit/c35c74e)). Gemini Code Assist tuning — MEDIUM severity threshold, ignore patterns for benchmark JSONs and generated `FORK_CHANGELOG.md`.
+
+### Spike result that motivated the plan
+
+[AGE write-through bench on n=200 git-derived probes](https://github.com/techempower-org/multipass-structural-memory-eval/blob/feat/rlm-adapter/docs/benchmarks/2026-05-17-age-write-through-spike.md):
+
+| Mode | R@5 | Δ vs vector |
+|---|---:|---:|
+| vector_only (pgvector + MiniLM base) | 0.1850 | — |
+| graph_only (AGE entity-overlap) | 0.2350 | **+5.0pp** |
+| fusion (RRF combine) | 0.2750 | **+9.0pp** |
+
+### Cross-fork verification
+
+Independent same-day audit by [@nakata-app](https://github.com/nakata-app) on his AdaptMem fork found the same operational conclusion via a different angle (code-level audit found `KnowledgeGraphAGE` skeleton-only; state-level audit on the production palace-daemon found 2 placeholder vertices + 1 placeholder edge total). Cross-fork verification framing discussed at [MemPalace/mempalace/discussions/1384#discussioncomment-16951344](https://github.com/MemPalace/mempalace/discussions/1384#discussioncomment-16951344).
+
+### Fixed
+
+- **upstream/develop sync** ([`6058489`](https://github.com/techempower-org/mempalace/commit/6058489)). Merged 60 develop commits into fork main (last sync 2026-05-13 via PR #1487). 12 conflict files resolved across `cli.py`, `convo_miner.py`, `hooks_cli.py`, `mcp_server.py`, `miner.py`, `palace.py`, `palace_graph.py`, `searcher.py`, and three test files. Notable upstream changes brought in: Igor's #1519 `convo_miner` `min_chunk_size` validation, KG cache path canonicalization via `_canonicalize_kg_path` + `realpath` + `normcase` (4 commits), cold-start embedder diagnostics + opt-in warmup (#1495), tunnel hyphenated wing slug preservation (#1504), stratified palace state messages (#1498), bash 3.2 compat for hooks (#1440), entity-registry tmp cleanup on failure (#1408), and none-metadata MCP handler fix (#1445). Follow-up commit [`342a59f`](https://github.com/techempower-org/mempalace/commit/342a59f) drops shadow `chunk_*` properties on `MempalaceConfig`, scales hook timeout bounds in `tests/test_claude_plugin_hook_config.py` to milliseconds, and updates fork-side test assertions to match upstream's new `wing_<project>` API shape (#1410).
+
+---
+
 ## [Unreleased] — 2026-05-14 / 2026-05-15 — *postgres cutover, hybrid retrieval, encoder-axis evidence*
 
 Fork-side work that landed after the v3.3.5 release. Nothing upstreamed yet; some of it is operator-flavored and lives only on the fork.

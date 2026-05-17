@@ -282,6 +282,46 @@ class PostgresCollection(BaseCollection):
 
         self._maybe_create_vector_index(inserted_rows=len(rows))
 
+        # ── KG write-through (Phase 2 of /goal: AGE integration) ──
+        # If the postgres backend was configured with a KG hook (set via
+        # ``set_kg_writethrough(hook)``), call it for each row we just
+        # wrote so entities/relations land in the KG alongside the
+        # drawer. Hook signature: ``hook(drawer_id, document, metadata)``.
+        # Failures inside the hook are caught + logged but never raise —
+        # KG enrichment is opportunistic, not mandatory.
+        hook = getattr(self, "_kg_writethrough", None)
+        if hook is not None:
+            for row in rows:
+                doc_id, document, metadata_json = row[2], row[3], row[5]
+                try:
+                    metadata = json.loads(metadata_json) if metadata_json else {}
+                except (ValueError, TypeError):
+                    metadata = {}
+                try:
+                    hook(drawer_id=doc_id, document=document, metadata=metadata)
+                except Exception as e:  # noqa: BLE001 — opportunistic enrichment
+                    logger.warning(
+                        "KG write-through hook failed for drawer %s: %s",
+                        doc_id, e,
+                    )
+
+    def set_kg_writethrough(self, hook) -> None:
+        """Register a callable invoked after each successful drawer write.
+
+        Hook signature: ``hook(drawer_id: str, document: str, metadata: dict)``.
+        Called once per drawer in ``_insert_rows`` after the row commits.
+        Exceptions inside the hook are caught + logged; they never propagate.
+
+        Set to ``None`` to disable. The default (no hook registered) is
+        zero overhead — vector-only write path matches the pre-Phase-2
+        behavior byte-identically.
+
+        Typical use: configure an entity-extracting hook that populates
+        the AGE KG. See ``mempalace.kg_writethrough.make_age_writethrough``
+        for the canonical implementation.
+        """
+        self._kg_writethrough = hook
+
     # ------------------------------------------------------------------
     # Reads
     # ------------------------------------------------------------------
