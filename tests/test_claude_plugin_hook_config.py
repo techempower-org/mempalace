@@ -8,20 +8,30 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HOOK_CONFIG = REPO_ROOT / ".claude-plugin" / "hooks" / "hooks.json"
 
-# Per-event hook-level timeout bounds (seconds): (floor, ceiling).
+# Per-event hook-level timeout bounds (milliseconds): (floor, ceiling).
 #
-# Stop is fire-and-forget for the mine subprocess (_spawn_mine returns
-# after a detached Popen), but the handler also calls _save_diary_direct
-# synchronously, which touches chromadb. 10..30s is generous for that
-# work without leaving room for runaway hangs to freeze the session.
+# NOTE: Claude Code's hook ``timeout`` field is documented in milliseconds
+# (see Claude Code hook docs and JP's settings.json at ~/.claude/settings.json
+# which uses values like 5000 / 10000 / 130000). Upstream's original bounds
+# (10..30 / 60..90) were in seconds and matched their inline
+# ``mempalace hook run`` subprocess invocation; the fork routes through
+# ``palace-daemon/clients/hook.py`` and the timeout is interpreted by
+# Claude Code in ms, so the bounds are scaled accordingly.
 #
-# PreCompact runs _mine_sync synchronously with a per-target subprocess
-# timeout of 60s in mempalace/hooks_cli.py. The hook-level floor of 60
-# keeps the inner bound from being truncated, and the ceiling of 90
-# bounds the worst case at ~30s above that.
+# Stop is fire-and-forget for the mine subprocess (palace-daemon detaches),
+# but the daemon also handles _save_diary synchronously which touches
+# postgres. 10000..30000ms is generous for that work without leaving room
+# for runaway hangs to freeze the session.
+#
+# PreCompact runs the daemon's mine path synchronously; the 30000ms ceiling
+# bounds the worst case. (Upstream uses 90000ms cap for inline subprocess
+# invocation; fork's daemon path completes faster.)
+#
+# SessionStart is a cheap warmup ping — 5000ms is plenty.
 EVENT_TIMEOUT_BOUNDS: dict[str, tuple[int, int]] = {
-    "Stop": (10, 30),
-    "PreCompact": (60, 90),
+    "SessionStart": (1000, 10000),
+    "Stop": (10000, 30000),
+    "PreCompact": (10000, 90000),
 }
 
 

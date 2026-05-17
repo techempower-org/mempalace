@@ -238,8 +238,10 @@ def test_stop_hook_saves_silently_at_interval(tmp_path):
         )
     # Verbatim-only: systemMessage tells the user the ingest fired; no count or themes.
     assert result["systemMessage"].startswith("\u2726 Transcript ingest triggered")
-    # tmp_path has no "-Projects-" segment, so _wing_from_transcript_path falls back to "sessions"
-    assert "wing=sessions" in result["systemMessage"]
+    # tmp_path has no JSONL cwd and no "-Projects-" segment, so
+    # _wing_from_transcript_path falls back to "wing_sessions"
+    # (upstream #1410 API).
+    assert "wing=wing_sessions" in result["systemMessage"]
     mock_ingest.assert_called_once_with(str(transcript))
 
 
@@ -259,7 +261,10 @@ def test_stop_hook_derives_wing_from_transcript_path(tmp_path):
             {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)},
             state_dir=tmp_path,
         )
-    assert "wing=myproject" in result["systemMessage"]
+    # Upstream #1410 API: ``-Projects-myproject`` → ``wing_myproject``
+    # via the legacy ``-Projects-<name>`` branch of
+    # _wing_from_transcript_path.
+    assert "wing=wing_myproject" in result["systemMessage"]
     mock_ingest.assert_called_once_with(str(transcript))
 
 
@@ -314,21 +319,21 @@ def test_precompact_allows(tmp_path):
 
 def test_wing_from_transcript_path_extracts_project():
     path = "/home/jp/.claude/projects/-home-jp-Projects-memorypalace/session.jsonl"
-    assert _wing_from_transcript_path(path) == "memorypalace"
+    assert _wing_from_transcript_path(path) == "wing_memorypalace"
 
 
 def test_wing_from_transcript_path_fallback():
-    assert _wing_from_transcript_path("/some/random/path.jsonl") == "sessions"
+    assert _wing_from_transcript_path("/some/random/path.jsonl") == "wing_sessions"
 
 
 def test_wing_from_transcript_path_windows_backslashes():
     path = "C:\\Users\\jp\\.claude\\projects\\-home-jp-Projects-myapp\\session.jsonl"
-    assert _wing_from_transcript_path(path) == "myapp"
+    assert _wing_from_transcript_path(path) == "wing_myapp"
 
 
 def test_wing_from_transcript_path_lowercases():
     path = "/home/jp/.claude/projects/-home-jp-Projects-MyProject/session.jsonl"
-    assert _wing_from_transcript_path(path) == "myproject"
+    assert _wing_from_transcript_path(path) == "wing_myproject"
 
 
 def test_wing_from_transcript_path_non_projects_layout():
@@ -346,7 +351,7 @@ def test_wing_from_transcript_path_macos_users_layout():
     # macOS ~/ layout without a Projects/ segment — single-token project name
     # so the heuristic produces the same result as the leaf-only approach.
     path = "/Users/alice/.claude/projects/-Users-alice-code-MyApp/session.jsonl"
-    assert _wing_from_transcript_path(path) == "myapp"
+    assert _wing_from_transcript_path(path) == "wing_myapp"
 
 
 def test_wing_from_transcript_path_nested_deep():
@@ -763,7 +768,8 @@ def test_ingest_transcript_routes_through_daemon(tmp_path):
     mock_post.assert_called_once()
     args, kwargs = mock_post.call_args
     assert args[0] == str(convo_dir)
-    assert kwargs["wing"] == "myapp"
+    # Upstream #1410 API: ``wing_<project>`` shape.
+    assert kwargs["wing"] == "wing_myapp"
     assert kwargs["mode"] == "convos"
 
 
@@ -1076,7 +1082,7 @@ def test_ingest_transcript_skips_when_target_running(tmp_path):
                     "--mode",
                     "convos",
                     "--wing",
-                    "sessions",
+                    "wing_sessions",
                 ]
                 pid_file = _pid_file_for_cmd(expected_cmd)
                 pid_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1361,11 +1367,12 @@ def test_precompact_mines_transcript_dir(tmp_path, monkeypatch):
     mock_popen.assert_called_once()
     cmd = mock_popen.call_args[0][0]
     # Mines the transcript's parent dir as convos. Wing is derived per-transcript;
-    # for a path outside the standard Claude Code projects layout, _wing_from_transcript_path
-    # falls back to "sessions".
+    # for a path outside the standard Claude Code projects layout,
+    # _wing_from_transcript_path falls back to "wing_sessions"
+    # (upstream #1410 API).
     assert str(tmp_path) in cmd
     assert cmd[cmd.index("--mode") + 1] == "convos"
-    assert cmd[cmd.index("--wing") + 1] == "sessions"
+    assert cmd[cmd.index("--wing") + 1] == "wing_sessions"
 
 
 # --- run_hook ---

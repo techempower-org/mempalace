@@ -629,20 +629,13 @@ class MempalaceConfig:
         except OSError:
             pass
 
-    @property
-    def chunk_size(self):
-        """Characters per drawer chunk."""
-        return self._file_config.get("chunk_size", 800)
-
-    @property
-    def chunk_overlap(self):
-        """Overlap between adjacent chunks."""
-        return self._file_config.get("chunk_overlap", 100)
-
-    @property
-    def min_chunk_size(self):
-        """Minimum chunk size — skip smaller chunks."""
-        return self._file_config.get("min_chunk_size", 50)
+    # NOTE: legacy raw-passthrough ``chunk_size`` / ``chunk_overlap`` /
+    # ``min_chunk_size`` properties were removed in the upstream/develop
+    # merge — they shadowed the validated, coercing versions defined
+    # earlier (~L482) and caused ingest to receive raw string/bool/
+    # negative values from hand-edited config.json. The validated
+    # accessors above are now the single source of truth (upstream PR
+    # #1024 + #1519). Do not re-add the raw-passthrough form.
 
     def init(self):
         """Create config directory and write default config.json if it doesn't exist."""
