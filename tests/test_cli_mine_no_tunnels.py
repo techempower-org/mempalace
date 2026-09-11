@@ -131,3 +131,36 @@ def test_daemon_strict_is_quiet_when_the_flag_is_absent(tmp_path, capsys):
         cmd_mine(_mine_args(root))
 
     assert "--no-tunnels" not in capsys.readouterr().err
+
+
+def test_daemon_job_queue_warns_that_no_tunnels_is_not_forwarded(tmp_path, capsys):
+    """`--daemon` submits to the local job-queue daemon, whose payload has no
+    tunnels field — and that branch returns BEFORE the daemon-strict warning
+    below it, so the flag was accepted and silently ignored."""
+    root = tmp_path / "proj"
+    root.mkdir()
+
+    with (
+        patch("mempalace.cli._daemon_strict", return_value=False),
+        patch("mempalace.cli._submit_daemon_cli_job") as submit,
+    ):
+        cmd_mine(_mine_args(root, daemon=True, no_tunnels=True))
+
+    assert submit.called, "control: the job must still be submitted"
+    err = capsys.readouterr().err
+    assert "--no-tunnels" in err
+    assert "daemon" in err.lower()
+
+
+def test_daemon_job_queue_is_quiet_without_the_flag(tmp_path, capsys):
+    root = tmp_path / "proj"
+    root.mkdir()
+
+    with (
+        patch("mempalace.cli._daemon_strict", return_value=False),
+        patch("mempalace.cli._submit_daemon_cli_job") as submit,
+    ):
+        cmd_mine(_mine_args(root, daemon=True))
+
+    assert submit.called
+    assert "--no-tunnels" not in capsys.readouterr().err

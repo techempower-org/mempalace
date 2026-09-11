@@ -38,6 +38,17 @@ from mempalace import miner as miner_mod
 from mempalace.miner import mine
 
 
+def _nullcontext_factory():
+    """`mine_palace_lock` stand-in: the real one takes an exclusive flock."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _lock(_palace_path):
+        yield
+
+    return _lock
+
+
 class _StubCollection:
     """Records writes; reports no prior drawers so every file mines."""
 
@@ -239,3 +250,40 @@ def test_a_mine_that_files_something_still_computes(project, derived_spies):
 
     assert col.upsert_calls
     assert derived_spies == {"topic": 1, "hallways": 1, "entity": 1}
+
+
+def test_fts5_validation_still_runs_when_derived_is_skipped(project, derived_spies, monkeypatch):
+    """The integrity check is NOT a derived analytic and must never be gated.
+
+    It sits inside `if not dry_run:` but outside the `compute_derived` gate.
+    That placement is easy to break with an editor's re-indent, and nothing
+    pinned it until this test.
+    """
+    from mempalace import miner as m
+
+    calls = []
+    monkeypatch.setattr(m, "_validate_palace_fts5_after_mine", lambda p: calls.append(p))
+    monkeypatch.setattr(m, "get_collection", lambda *_a, **_k: _StubCollection())
+    monkeypatch.setattr(m, "get_closets_collection", lambda *_a, **_k: _StubCollection())
+    monkeypatch.setattr(m, "mine_palace_lock", _nullcontext_factory())
+
+    mine(str(project), str(project / "palace"), compute_derived=False)
+
+    assert derived_spies == {"topic": 0, "hallways": 0, "entity": 0}
+    assert len(calls) == 1, "FTS5 validation must still run with the derived block skipped"
+
+
+def test_fts5_validation_runs_when_derived_is_computed(project, derived_spies, monkeypatch):
+    """Control: the same harness with the gate open also validates once."""
+    from mempalace import miner as m
+
+    calls = []
+    monkeypatch.setattr(m, "_validate_palace_fts5_after_mine", lambda p: calls.append(p))
+    monkeypatch.setattr(m, "get_collection", lambda *_a, **_k: _StubCollection())
+    monkeypatch.setattr(m, "get_closets_collection", lambda *_a, **_k: _StubCollection())
+    monkeypatch.setattr(m, "mine_palace_lock", _nullcontext_factory())
+
+    mine(str(project), str(project / "palace"))
+
+    assert derived_spies == {"topic": 1, "hallways": 1, "entity": 1}
+    assert len(calls) == 1

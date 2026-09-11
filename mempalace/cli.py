@@ -1969,6 +1969,17 @@ def cmd_mine(args):
         }
         if source_adapter:
             payload["source_adapter"] = source_adapter
+        if getattr(args, "no_tunnels", False):
+            # The job-queue daemon's mine payload has no tunnels field, and
+            # service.execute_job calls mine() without compute_derived — so
+            # the flag would be accepted here and the expensive derived-graph
+            # rebuild would run anyway. This branch returns before the
+            # daemon-strict warning below, so it needs its own (#474).
+            print(
+                "  WARN: --daemon ignores --no-tunnels: the job-queue mine payload "
+                "carries no tunnels field, so the derived-graph rebuild will still run",
+                file=sys.stderr,
+            )
         _submit_daemon_cli_job("mine", payload, args, background=getattr(args, "background", False))
         return
 

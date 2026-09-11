@@ -2406,6 +2406,13 @@ def mine(
     prompt) avoids walking the tree twice. When ``None`` (the default),
     ``mine`` walks the tree itself just like before.
 
+    The same block is ALSO skipped, with no flag, whenever the mine upserted
+    zero drawers. The count that matters is **drawers upserted, not files
+    processed**: since palace-daemon#262 most drain mines walk their files
+    and upsert nothing because the stored ``source_mtime`` still matches, so
+    a files-processed test would almost never fire. Measured on the palace
+    host, one such no-op mine still spent 14+ minutes at 3.5 GB here.
+
     ``compute_derived`` controls the post-mine derived-analytics block
     (cross-wing topic tunnels, within-wing hallways, cross-wing entity
     tunnels). It defaults to ``True`` -- existing callers see no change.
