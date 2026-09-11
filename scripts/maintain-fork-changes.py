@@ -225,6 +225,12 @@ def resolve_head_by_file_add(
             unresolved.append((entry, "could not find the commit that added the entry file"))
             continue
         pr = entry.get("fork_pr")
+        # Bound unconditionally: the advisory below reads `via_api`, and under
+        # the previous shape it was assigned only inside this block and stayed
+        # safe purely by short-circuit ORDER in that condition. Reordering the
+        # terms — a harmless-looking edit — would have made it a NameError.
+        # Cheaper to make the reorder safe than to forbid it in a comment.
+        via_api: str | None = None
         if pr and fetch is not None:
             try:
                 via_api = fetch(int(pr))
@@ -251,7 +257,7 @@ def resolve_head_by_file_add(
                 )
             )
             continue
-        if pr and fetch is not None and not via_api:
+        if pr and fetch is not None and not via_api:  # safe in any term order now
             # A `fork_pr` that cannot be verified is usually a number
             # GUESSED before `gh pr create` returned. It cannot corrupt
             # the result -- file-add already has the answer -- but it is
