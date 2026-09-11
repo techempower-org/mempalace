@@ -1089,6 +1089,28 @@ class MempalaceConfig:
         return str(raw).strip().lower() or "sqlite"
 
     @property
+    def hallway_backend(self) -> str:
+        """Hallway store backend. The JSON file stays the default.
+
+        Postgres is opt-in via ``MEMPALACE_HALLWAY_BACKEND=postgres`` or
+        ``config.json {"hallway_backend": "postgres"}``, and uses
+        ``postgres_dsn`` for its connection.
+
+        The default is deliberately unchanged even on a postgres palace: the
+        hallway file is ~1 GB on the production host and the cutover is a
+        deliberate step taken after the migration has been verified against
+        real data, not a side effect of selecting a storage backend. A
+        chroma/sqlite install never needs postgres for hallways at all.
+
+        Lowercased before returning; falls back to ``"json"`` on empty.
+        """
+        env = os.environ.get("MEMPALACE_HALLWAY_BACKEND", "").strip().lower()
+        if env:
+            return env
+        raw = self._file_config.get("hallway_backend", "json")
+        return str(raw).strip().lower() or "json"
+
+    @property
     def auto_query_enabled(self) -> bool:
         """Whether the auto-query classifier is active.
 
