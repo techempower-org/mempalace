@@ -1530,6 +1530,128 @@ class TestCmdSearchProvenance:
         out = json.loads(capsys.readouterr().out)
         assert [h["id"] for h in out["results"]] == ["f", "t"]
 
+    # ── conditional widen (#451 item F, the fetched-window bound) ──────
+
+    @staticmethod
+    def _fast_payload_n(items):
+        return {"results": items}
+
+    @staticmethod
+    def _t(i, text):
+        return {
+            "id": f"t{i}",
+            "wing": "2g",
+            "room": "p",
+            "snippet": text,
+            "source_file": f"/p/s{i}.jsonl",
+            "rank": 0.05,
+        }
+
+    @staticmethod
+    def _f(i, text):
+        return {
+            "id": f"f{i}",
+            "wing": "2g",
+            "room": "p",
+            "snippet": text,
+            "source_file": "/p/CLAUDE.md",
+            "rank": 0.01,
+        }
+
+    def test_no_widen_when_a_curated_hit_is_already_present(self):
+        """THE COMMON CASE COSTS NOTHING: exactly one daemon call."""
+        from mempalace import cli
+
+        payload = self._fast_payload_n([self._t(1, UNRELATED), self._f(1, CARD)])
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_rest", return_value=payload) as m,
+        ):
+            cli._daemon_search_fast("q", 2, wing="2g")
+        assert m.call_count == 1
+
+    def test_widens_once_when_nothing_curated_matched(self):
+        """The broken case pays exactly one extra call, at 2x the limit."""
+        from mempalace import cli
+
+        narrow = self._fast_payload_n([self._t(i, UNRELATED) for i in range(2)])
+        wide = self._fast_payload_n([self._t(i, UNRELATED) for i in range(3)] + [self._f(1, CARD)])
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_rest", side_effect=[narrow, wide]) as m,
+        ):
+            cli._daemon_search_fast("q", 2, wing="2g")
+        assert m.call_count == 2
+        assert m.call_args_list[0].args[1]["limit"] == 2
+        assert m.call_args_list[1].args[1]["limit"] == 4
+
+    def test_widen_surfaces_a_curated_near_duplicate_inside_the_limit(self):
+        """The point of widening: the card sits outside the first window, is a
+        near-duplicate of a hit inside it, and must end up above the cut."""
+        from mempalace import cli
+
+        narrow = self._fast_payload_n([self._t(0, TRANSCRIPT), self._t(1, UNRELATED)])
+        wide = self._fast_payload_n(
+            [self._t(0, TRANSCRIPT), self._t(1, UNRELATED), self._t(2, UNRELATED), self._f(1, CARD)]
+        )
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_rest", side_effect=[narrow, wide]),
+        ):
+            data = cli._daemon_search_fast("q", 2, wing="2g")
+        ids = [h["id"] for h in data["results"]]
+        assert ids[0] == "f1", f"curated hit must clear the cut, got {ids}"
+        assert len(ids) == 2, "result is truncated back to the requested limit"
+
+    def test_widen_that_finds_nothing_curated_still_reports_honestly(self, capsys):
+        """A widened window with no curated hit must leave the header firing."""
+        from mempalace import cli
+
+        narrow = self._fast_payload_n([self._t(i, UNRELATED) for i in range(2)])
+        wide = self._fast_payload_n([self._t(i, UNRELATED) for i in range(4)])
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_rest", side_effect=[narrow, wide]),
+        ):
+            try:
+                cli.cmd_search(self._args(fmt="table", results=2))
+            except SystemExit:
+                pass
+        out = capsys.readouterr().out
+        assert "no curated document matched" in out, (
+            "a widened window that still found nothing curated must keep saying so"
+        )
+
+    def test_widen_tolerates_a_failed_second_call(self):
+        """The extra fetch is an optimisation; losing it must not lose the search."""
+        from mempalace import cli
+
+        narrow = self._fast_payload_n([self._t(i, UNRELATED) for i in range(2)])
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_rest", side_effect=[narrow, cli.DaemonError("boom")]),
+        ):
+            data = cli._daemon_search_fast("q", 2, wing="2g")
+        assert len(data["results"]) == 2
+
+    def test_no_widen_when_the_limit_already_exceeds_the_cap(self):
+        """At a large limit the widened window would not be wider — skip it."""
+        from mempalace import cli
+
+        payload = self._fast_payload_n([self._t(i, UNRELATED) for i in range(3)])
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_rest", return_value=payload) as m,
+        ):
+            cli._daemon_search_fast("q", 40, wing="2g")
+        assert m.call_count == 1
+
     def test_compact_tag_marks_diary_hits(self):
         """The table renderer gets a diary note; compact must not be the one
         renderer that stays silent about an unciteable hit."""
