@@ -57,6 +57,7 @@ from .provenance import (
     provenance_note,
     source_kind,
 )
+from .result_ordering import prefer_curated
 from .version import __version__
 
 
@@ -685,6 +686,7 @@ def _provenance_tag(hit: dict) -> str:
     """Short source-shape tag for ``--format compact`` (empty when unremarkable).
 
     ``⟨transcript⟩`` — a quoted copy from a session transcript.
+    ``⟨diary⟩`` — a palace-written summary with no file behind it.
     ``⟨stale⟩`` — the file on disk has been modified since it was indexed.
     Never both: a growing session transcript is expected, so ``⟨stale⟩`` is
     suppressed for transcripts exactly as ``provenance_note`` suppresses the
@@ -700,6 +702,8 @@ def _provenance_tag(hit: dict) -> str:
     flags = []
     if kind == "transcript":
         flags.append("transcript")
+    elif kind == "diary":
+        flags.append("diary")
     elif hit.get("source_stale") is True:
         flags.append("stale")
     return f" ⟨{','.join(flags)}⟩" if flags else ""
@@ -2635,6 +2639,7 @@ def _daemon_search_fast(query: str, n_results: int, wing: str = None) -> dict | 
         if hit.get("source_file"):
             hit["source"] = hit["source_file"]
     annotate(hits)
+    prefer_curated(hits)
     return {"results": hits, "query": query, "source": "bm25-fast"}
 
 
@@ -2652,6 +2657,7 @@ def _daemon_search_hybrid(
         return None
     data.setdefault("source", "hybrid")
     annotate(data.get("results"))
+    prefer_curated(data.get("results"))
     return data
 
 
@@ -2883,7 +2889,9 @@ def cmd_search(args):
 
             if data is None:
                 data = _call_daemon_tool("mempalace_search", arguments)
-                annotate(data.get("results") if isinstance(data, dict) else None)
+                results = data.get("results") if isinstance(data, dict) else None
+                annotate(results)
+                prefer_curated(results)
         except DaemonError as e:
             if want_json:
                 _emit_json({"error": str(e), "source": "daemon", "query": args.query})

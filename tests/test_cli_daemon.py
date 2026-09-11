@@ -1257,6 +1257,21 @@ class TestCmdRoomsDaemon:
 # ── search provenance rendering (techempower-org/mempalace#451) ─────────
 
 
+# Text fixtures for the near-duplicate ordering tests below. ``_NEAR_CLAIM``
+# appears verbatim in both the curated card and the transcript quoting it —
+# the real shape from the 2g corpus that #451 item F was measured on.
+_NEAR_CLAIM = (
+    "the five handsets refused one cell and the fault was never inside "
+    "their modems because a documented refuser camped and carried a call"
+)
+CARD = "REFUTED 2026-09-06 " + _NEAR_CLAIM + " this correction supersedes the headline"
+TRANSCRIPT = "and then I told the team " + _NEAR_CLAIM + " which is what the log shows"
+UNRELATED = (
+    "the postgres backend scrubs lone surrogates and nul bytes at every bind "
+    "site so a mined corpus cannot abort the whole batch on one stray byte"
+)
+
+
 class TestCmdSearchProvenance:
     """Every search hit carries ``source_kind`` and, when the CLI can tell,
     ``source_stale`` — and the renderers say so.
@@ -1418,6 +1433,109 @@ class TestCmdSearchProvenance:
 
         hit = {"source_kind": "transcript", "source_stale": True}
         assert cli._provenance_tag(hit) == " ⟨transcript⟩"
+
+    def test_fast_route_orders_curated_above_its_near_duplicate(self, capsys):
+        """#451 item F, FAIL-D: on bm25-fast the curated card measured rank 13
+        while a transcript quoting it sat at rank 1."""
+        from mempalace import cli
+
+        payload = {
+            "results": [
+                {
+                    "id": "t",
+                    "wing": "2g",
+                    "room": "problems",
+                    "snippet": TRANSCRIPT,
+                    "source_file": "/p/s.jsonl",
+                    "rank": 0.051,
+                },
+                {
+                    "id": "f",
+                    "wing": "2g",
+                    "room": "problems",
+                    "snippet": CARD,
+                    "source_file": "/p/CLAUDE.md",
+                    "rank": 0.017,
+                },
+            ]
+        }
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_rest", return_value=payload),
+        ):
+            with pytest.raises(SystemExit):
+                cli.cmd_search(self._args(fmt="json", results=2))
+        out = json.loads(capsys.readouterr().out)
+        assert [h["id"] for h in out["results"]] == ["f", "t"]
+
+    def test_fast_route_leaves_transcript_only_recall_alone(self, capsys):
+        """THE BOUND, at the route level: no curated near-duplicate, no reorder."""
+        from mempalace import cli
+
+        payload = {
+            "results": [
+                {
+                    "id": "t",
+                    "wing": "2g",
+                    "room": "p",
+                    "snippet": UNRELATED,
+                    "source_file": "/p/s.jsonl",
+                    "rank": 0.051,
+                },
+                {
+                    "id": "f",
+                    "wing": "2g",
+                    "room": "p",
+                    "snippet": CARD,
+                    "source_file": "/p/CLAUDE.md",
+                    "rank": 0.017,
+                },
+            ]
+        }
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_rest", return_value=payload),
+        ):
+            with pytest.raises(SystemExit):
+                cli.cmd_search(self._args(fmt="json", results=2))
+        out = json.loads(capsys.readouterr().out)
+        assert [h["id"] for h in out["results"]] == ["t", "f"]
+
+    def test_mcp_envelope_route_applies_the_preference(self, capsys):
+        from mempalace import cli
+
+        envelope = {
+            "results": [
+                {
+                    "id": "t",
+                    "wing": "2g",
+                    "room": "p",
+                    "text": TRANSCRIPT,
+                    "source_file": "s.jsonl",
+                },
+                {"id": "f", "wing": "2g", "room": "p", "text": CARD, "source_file": "CLAUDE.md"},
+            ]
+        }
+        args = self._args(fmt="json")
+        args.room = "p"
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_tool", return_value=envelope),
+        ):
+            with pytest.raises(SystemExit):
+                cli.cmd_search(args)
+        out = json.loads(capsys.readouterr().out)
+        assert [h["id"] for h in out["results"]] == ["f", "t"]
+
+    def test_compact_tag_marks_diary_hits(self):
+        """The table renderer gets a diary note; compact must not be the one
+        renderer that stays silent about an unciteable hit."""
+        from mempalace import cli
+
+        assert cli._provenance_tag({"source_kind": "diary"}) == " ⟨diary⟩"
 
     def test_compact_tag_reports_stale_for_a_curated_file(self):
         from mempalace import cli

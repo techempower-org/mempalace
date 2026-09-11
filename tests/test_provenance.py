@@ -250,6 +250,19 @@ class TestProvenanceNote:
         hit = {"source_file": str(f), "created_at": datetime.now().isoformat()}
         assert provenance_note(hit) is None
 
+    def test_diary_hit_says_it_has_no_citable_source(self):
+        """Palace diary summaries rank first on literal-term queries with
+        ``source_file`` rendering "?" and no staleness — legitimate memory, but
+        a reader cannot verify them anywhere (techempower-org/mempalace#451
+        item G)."""
+        note = provenance_note({"id": "diary_2g_20260906_1", "source_file": None})
+        assert note == "palace diary summary — no source file"
+
+    def test_diary_note_survives_annotation(self):
+        hits = [{"id": "diary_2g_1", "source_file": None}]
+        annotate(hits)
+        assert provenance_note(hits[0]) == "palace diary summary — no source file"
+
     def test_uses_already_annotated_fields(self):
         """Renderers get annotated hits; the note must not re-stat the disk."""
         hit = {"source_kind": "transcript", "source_stale": False}

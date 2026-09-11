@@ -36,6 +36,7 @@ from .palace import (
     resolve_backend_name,
 )
 from .provenance import annotate as _annotate_provenance
+from .result_ordering import prefer_curated as _prefer_curated
 from .ratings import net_rating, rating_distance_adjustment
 from .recency import RECENCY_HALFLIFE_DAYS, recency_distance_adjustment
 
@@ -2861,6 +2862,10 @@ def _search_result_envelope(
             "before": before,
         },
         "total_before_filter": candidates_fetched,
+        # Curated documents are ordered above the near-duplicate transcripts
+        # that quote them (#451 item F) — bounded to near-duplicates, so
+        # transcript-only recall keeps the ranker's order.
+        #
         # Provenance is stamped here so every caller of ``search_memories``
         # — including MCP ``mempalace_search``, which is what the fleet
         # actually reads — sees which kind of source a hit came from. Hits
@@ -2869,7 +2874,7 @@ def _search_result_envelope(
         # host's filesystem. Under the daemon that is the palace host, which
         # is the copy the miner read — the right mtime to compare. See
         # provenance.py for the cross-host rule.
-        "results": _annotate_provenance(hits),
+        "results": _prefer_curated(_annotate_provenance(hits)),
     }
     if date_window_active and candidates_fetched >= pool_size:
         result["date_filter_pool_truncated"] = True
@@ -3339,6 +3344,9 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
         stop_words=stop_words,
     )
     if short_circuit is not None:
+        # The vector-disabled BM25 fallback is a public ``search_memories``
+        # return too, so it gets the same curated-first ordering.
+        _prefer_curated(short_circuit.get("results") if isinstance(short_circuit, dict) else None)
         return short_circuit
 
     drawers_col, open_error = _open_search_collection(palace_path, collection_name)

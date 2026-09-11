@@ -60,6 +60,7 @@ _EMPTY_PATHS = ("", "?", "none", "null", "unknown")
 _STALE_GRACE_SECONDS = 60
 
 _TRANSCRIPT_NOTE = "quoted copy from a session transcript — verify at the curated source"
+_DIARY_NOTE = "palace diary summary — no source file"
 
 
 def _paths(hit) -> list:
@@ -228,6 +229,11 @@ def provenance_note(hit) -> Optional[str]:
     notes = []
     if kind == "transcript":
         notes.append(_TRANSCRIPT_NOTE)
+    elif kind == "diary":
+        # A palace-written summary: legitimate memory, but there is no file a
+        # reader can open to check it, and these rank first on literal-term
+        # queries (techempower-org/mempalace#451 item G).
+        notes.append(_DIARY_NOTE)
     if stale is True and kind != "transcript":
         indexed = _indexed_at(hit)
         when = indexed.strftime("%Y-%m-%d") if indexed else "unknown date"
