@@ -295,3 +295,27 @@ def test_schema_is_created_idempotently(pg_store):
     assert "CREATE TABLE IF NOT EXISTS" in statements
     assert "CREATE INDEX IF NOT EXISTS" in statements
     assert "DROP" not in statements.upper()
+
+
+def test_the_store_does_not_normalize_wing_names(pg_store):
+    """Wing matching stays exact string equality, as the JSON path had it.
+
+    ``hallways.py`` never calls ``normalize_wing_name`` — zero references in
+    the module — so a wing spelled differently from the drawers' metadata
+    matches nothing and the caller gets silence, not duplicates (measured by
+    the #474 lane). Normalizing here would be an improvement *and* a
+    behaviour change: queries that used to return nothing would start
+    returning rows. This storage move is not the place to make it, so the
+    store passes the caller's wing through verbatim and this test says so
+    out loud rather than leaving it to be discovered.
+    """
+    store, conn = pg_store(rows=[])
+
+    store.list(wing="Kiyo-XHCI-Fix")
+    _, params = conn.executed[-1]
+    assert params[0] == "Kiyo-XHCI-Fix", "wing must reach SQL exactly as given"
+
+    store.replace_wing("Kiyo-XHCI-Fix", [])
+    delete_sql, delete_params = conn.executed[-1]
+    assert delete_sql.startswith("DELETE")
+    assert delete_params[0] == "Kiyo-XHCI-Fix"
