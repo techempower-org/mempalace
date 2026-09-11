@@ -1769,6 +1769,22 @@ def cmd_mine(args):
         print(f"  Source adapter {source_adapter!r}: {drawers_written} drawer(s){suffix}.")
         return
 
+    # A .jsonl handed to projects mode is a mode mistake, not a mine: projects
+    # mode would chunk raw JSON as prose, and until #451 made projects mode
+    # accept a file at all it was silently a no-op (scan_project walks a file
+    # and finds nothing). Name the mode that does work and exit 2, the same
+    # usage-error code the --source dispatch above uses. A DIRECTORY whose
+    # name happens to end in .jsonl is still a directory mine.
+    _mine_target = Path(os.path.expanduser(args.dir))
+    if mode == "projects" and _mine_target.suffix.lower() == ".jsonl" and not _mine_target.is_dir():
+        print(
+            f"mempalace: {args.dir} is a .jsonl transcript; projects mode files it as "
+            "prose, not as exchanges. Use --mode convos (one drawer per exchange) "
+            "or --mode session (one manifest drawer per file).",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     # Explicit --daemon submits to the opt-in local job-queue daemon
     # (upstream #1783 family). This is a deliberate user request and takes
     # precedence over the ambient PALACE_DAEMON_URL HTTP routing below — the
@@ -1827,7 +1843,18 @@ def cmd_mine(args):
             # the same way miner / convo_miner do when --wing is omitted.
             from .config import normalize_wing_name
 
-            wing = normalize_wing_name(Path(directory).name)
+            wing_source = Path(directory)
+            if wing_source.is_file():
+                # A single file belongs to its project, not to itself (#451):
+                # ~/Projects/2g/CLAUDE.md is wing '2g', never 'claude_md'.
+                # Only reachable when the path exists locally; when the daemon
+                # runs on another host and the path does not, this falls
+                # through to the historic dirname behaviour — pass --wing to
+                # be explicit in that case.
+                from .miner import resolve_project_root
+
+                wing_source = resolve_project_root(wing_source)
+            wing = normalize_wing_name(wing_source.name)
         ok = _post_daemon_mine_cli(directory, wing=wing, mode=args.mode)
         sys.exit(0 if ok else 1)
 
@@ -9450,7 +9477,12 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
     # mine
     p_mine = sub.add_parser("mine", help="Mine files into the palace")
     p_mine.add_argument(
-        "dir", help="Directory to mine, or one conversation file with --mode convos"
+        "dir",
+        help=(
+            "Directory to mine, one file (projects mode mines just that file — a "
+            "targeted re-index that replaces its existing drawers), or one "
+            "conversation file with --mode convos"
+        ),
     )
     p_mine.add_argument(
         "--backend",

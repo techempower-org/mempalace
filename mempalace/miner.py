@@ -2080,6 +2080,120 @@ def _write_prepared(
 # =============================================================================
 
 
+def _skip(message: str, explain: bool) -> bool:
+    """Emit a ``SKIP:`` line when the caller asked for one, and return False.
+
+    ``scan_project`` walks thousands of files, so its filename/extension/
+    gitignore rejections are deliberately silent — a per-file line per
+    ignored artifact would bury the mine output. A caller that named ONE
+    file has no such problem and every reason to be told why nothing
+    happened, so ``scan_single_file`` turns the same lines on.
+    """
+    if explain:
+        try:
+            print(f"  SKIP: {message}", file=sys.stderr)
+        except OSError:
+            pass
+    return False
+
+
+def file_passes_scan_gates(
+    filepath: Path,
+    project_path: Path,
+    *,
+    matchers: list = None,
+    include_paths: set = None,
+    exclude_matcher=None,
+    explain: bool = False,
+) -> bool:
+    """Decide whether one candidate file may be mined.
+
+    Extracted verbatim from :func:`scan_project`'s walk so that a mine of a
+    single named file applies exactly the same gates as that file would meet
+    inside a directory walk — there is no second policy to drift out of sync.
+
+    ``matchers`` is the ancestor-ordered list of active ``.gitignore``
+    matchers (empty disables the gitignore gate, which is what
+    ``--no-gitignore`` does). ``explain`` makes the otherwise-silent
+    rejections print a ``SKIP:`` line.
+    """
+    matchers = matchers or []
+    include_paths = include_paths or set()
+    force_include = is_force_included(filepath, project_path, include_paths)
+    exact_force_include = is_exact_force_include(filepath, project_path, include_paths)
+
+    if not force_include and filepath.name in SKIP_FILENAMES:
+        return _skip(f"{filepath.name} (mempalace-generated or lockfile)", explain)
+    if filepath.suffix.lower() not in READABLE_EXTENSIONS and not exact_force_include:
+        return _skip(
+            f"{filepath.name} (suffix {filepath.suffix or '<none>'} is not a readable "
+            "text extension; pass --include-ignored <project-relative-path> to "
+            "force it)",
+            explain,
+        )
+    if matchers and not force_include:
+        if is_gitignored(filepath, matchers, is_dir=False):
+            return _skip(
+                f"{filepath.name} (.gitignore; pass --no-gitignore or "
+                "--include-ignored <project-relative-path> to mine it anyway)",
+                explain,
+            )
+    # Skip files matching project-level exclude_patterns (mempalace.yaml).
+    # force_include paths bypass this check so callers can selectively
+    # re-include files that would otherwise be excluded.
+    if not force_include and exclude_matcher and exclude_matcher.matches(filepath, is_dir=False):
+        return _skip(f"{filepath.name} (mempalace.yaml exclude_patterns)", explain)
+    # Skip symlinks — prevents following links to /dev/urandom, etc.
+    if filepath.is_symlink():
+        try:
+            rel = filepath.relative_to(project_path).as_posix()
+        except ValueError:
+            rel = filepath.name
+        try:
+            print(f"  SKIP: {rel} (symlink)", file=sys.stderr)
+        except OSError:
+            pass
+        return False
+    # Skip files exceeding size limit, or those whose stat() raises
+    # (permission denied, racing delete, broken symlink that survived
+    # the earlier is_symlink check). Both branches log to stderr to
+    # match the SKIP: (symlink) line above; silent drops at this
+    # gate were the original #923 complaint.
+    try:
+        file_stat = filepath.stat()
+        # Reject anything that is not a regular file before it can
+        # reach a reader. os.walk lists FIFOs, sockets and device
+        # nodes as plain filenames and the extension filter above
+        # decides by name, so ``notes.md`` can be a named pipe.
+        # stat() itself never blocks on one; opening it can.
+        if not stat.S_ISREG(file_stat.st_mode):
+            print(
+                f"  SKIP: {filepath.name} (not a regular file)",
+                file=sys.stderr,
+            )
+            return False
+        file_size = file_stat.st_size
+        if file_size > MAX_FILE_SIZE:
+            print(
+                f"  SKIP: {filepath.name} ({file_size / (1024 * 1024):.1f} MB)"
+                f" exceeds {MAX_FILE_SIZE // (1024 * 1024)} MB limit",
+                file=sys.stderr,
+            )
+            return False
+    except OSError as exc:
+        # Prefer ``exc.strerror`` so the path isn't duplicated in the
+        # output (PermissionError stringifies to
+        # ``[Errno 13] Permission denied: '<path>'`` and the path is
+        # already in the SKIP prefix). Falls back to the default repr
+        # when strerror is unset.
+        print(
+            f"  SKIP: {filepath.name} (stat error: {exc.strerror or exc})",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def scan_project(
     project_dir: str,
     respect_gitignore: bool = True,
@@ -2135,72 +2249,112 @@ def scan_project(
 
         for filename in filenames:
             filepath = root_path / filename
-            force_include = is_force_included(filepath, project_path, include_paths)
-            exact_force_include = is_exact_force_include(filepath, project_path, include_paths)
-
-            if not force_include and filename in SKIP_FILENAMES:
-                continue
-            if filepath.suffix.lower() not in READABLE_EXTENSIONS and not exact_force_include:
-                continue
-            if respect_gitignore and active_matchers and not force_include:
-                if is_gitignored(filepath, active_matchers, is_dir=False):
-                    continue
-            # Skip files matching project-level exclude_patterns (mempalace.yaml).
-            # force_include paths bypass this check so callers can selectively
-            # re-include files that would otherwise be excluded.
-            if (
-                not force_include
-                and exclude_matcher
-                and exclude_matcher.matches(filepath, is_dir=False)
+            if file_passes_scan_gates(
+                filepath,
+                project_path,
+                matchers=active_matchers if respect_gitignore else [],
+                include_paths=include_paths,
+                exclude_matcher=exclude_matcher,
             ):
-                continue
-            # Skip symlinks — prevents following links to /dev/urandom, etc.
-            if filepath.is_symlink():
-                rel = filepath.relative_to(project_path).as_posix()
-                try:
-                    print(f"  SKIP: {rel} (symlink)", file=sys.stderr)
-                except OSError:
-                    pass
-                continue
-            # Skip files exceeding size limit, or those whose stat() raises
-            # (permission denied, racing delete, broken symlink that survived
-            # the earlier is_symlink check). Both branches log to stderr to
-            # match the SKIP: (symlink) line above; silent drops at this
-            # gate were the original #923 complaint.
-            try:
-                file_stat = filepath.stat()
-                # Reject anything that is not a regular file before it can
-                # reach a reader. os.walk lists FIFOs, sockets and device
-                # nodes as plain filenames and the extension filter above
-                # decides by name, so ``notes.md`` can be a named pipe.
-                # stat() itself never blocks on one; opening it can.
-                if not stat.S_ISREG(file_stat.st_mode):
-                    print(
-                        f"  SKIP: {filepath.name} (not a regular file)",
-                        file=sys.stderr,
-                    )
-                    continue
-                file_size = file_stat.st_size
-                if file_size > MAX_FILE_SIZE:
-                    print(
-                        f"  SKIP: {filepath.name} ({file_size / (1024 * 1024):.1f} MB)"
-                        f" exceeds {MAX_FILE_SIZE // (1024 * 1024)} MB limit",
-                        file=sys.stderr,
-                    )
-                    continue
-            except OSError as exc:
-                # Prefer ``exc.strerror`` so the path isn't duplicated in the
-                # output (PermissionError stringifies to
-                # ``[Errno 13] Permission denied: '<path>'`` and the path is
-                # already in the SKIP prefix). Falls back to the default repr
-                # when strerror is unset.
-                print(
-                    f"  SKIP: {filepath.name} (stat error: {exc.strerror or exc})",
-                    file=sys.stderr,
-                )
-                continue
-            files.append(filepath)
+                files.append(filepath)
     return files
+
+
+# =============================================================================
+# SCAN ONE FILE
+# =============================================================================
+
+# Directories that mark the root of a project when walking up from a file.
+# ``.git`` is a directory in a normal clone and a FILE in a linked worktree,
+# so membership is tested with ``exists()``, never ``is_dir()``.
+PROJECT_ROOT_MARKERS = (".git", "mempalace.yaml", "mempal.yaml")
+
+
+def resolve_project_root(path) -> Path:
+    """Return the project directory a single mined file belongs to.
+
+    A directory mine gets its wing from the directory it was handed and its
+    rooms from paths relative to it. A single-file mine has no such argument,
+    and answering "which project is this file in?" with "the directory it
+    happens to sit in" would file ``<repo>/docs/notes/CLAUDE.md`` under a wing
+    called ``notes``. So walk up to the nearest ancestor carrying a project
+    marker (``.git`` / ``mempalace.yaml`` / ``mempal.yaml``) — the same two
+    things ``load_config`` and the rest of the toolchain already treat as "a
+    project lives here" — and fall back to the file's own directory when the
+    file is loose on disk and belongs to no project at all.
+
+    Nearest marker wins, so a subproject with its own ``mempalace.yaml``
+    inside a larger git repo keeps its own wing.
+    """
+    target = Path(path).expanduser()
+    try:
+        target = target.resolve()
+    except OSError:
+        target = Path(os.path.abspath(str(target)))
+    start = target if target.is_dir() else target.parent
+    for candidate in (start, *start.parents):
+        for marker in PROJECT_ROOT_MARKERS:
+            if (candidate / marker).exists():
+                return candidate
+    return start
+
+
+def scan_single_file(
+    filepath,
+    project_path,
+    respect_gitignore: bool = True,
+    include_ignored: list = None,
+    exclude_patterns: list = None,
+) -> list:
+    """Return ``[path]`` for one explicitly named file, or ``[]`` if a gate rejects it.
+
+    The single-file counterpart of :func:`scan_project`. It applies the very
+    same per-file gates — via the shared :func:`file_passes_scan_gates` — so a
+    file mined by name behaves exactly as it would have inside a directory
+    walk: same extension whitelist, same ``SKIP_FILENAMES``, same
+    ``.gitignore`` and ``exclude_patterns`` handling, same symlink / regular
+    file / size checks, same ``--include-ignored`` override.
+
+    The one difference is voice. ``scan_project``'s rejections are silent
+    because a tree walk would otherwise drown the mine in them; here the
+    operator named this one file and got nothing back, so every rejection
+    explains itself on stderr.
+
+    ``.gitignore`` matchers are collected from ``project_path`` down to the
+    file's own directory, in ancestor order, which is the state the walk would
+    have accumulated by the time it reached that directory.
+    """
+    # NOT resolved yet: resolving would replace a symlink with its target and
+    # the symlink gate below would never fire. ``abspath`` normalizes ``..``
+    # without following links.
+    target = Path(os.path.abspath(os.path.expanduser(str(filepath))))
+    root = Path(project_path).expanduser().resolve()
+
+    matchers = []
+    if respect_gitignore:
+        cache = {}
+        chain = [target.parent]
+        while chain[-1] != root and chain[-1].parent != chain[-1]:
+            chain.append(chain[-1].parent)
+        for directory in reversed(chain):
+            matcher = load_gitignore_matcher(directory, cache)
+            if matcher is not None:
+                matchers.append(matcher)
+
+    if not file_passes_scan_gates(
+        target,
+        root,
+        matchers=matchers,
+        include_paths=normalize_include_paths(include_ignored),
+        exclude_matcher=GitignoreMatcher.from_patterns(root, exclude_patterns or []),
+        explain=True,
+    ):
+        return []
+    # Safe to resolve now — the final component is known not to be a symlink,
+    # and the drawers this file already has are keyed by its resolved path
+    # (that is what ``scan_project`` produces), which the re-mine must match
+    # for the delete-then-insert replace to find them.
+    return [target.resolve()]
 
 
 # =============================================================================
@@ -2224,7 +2378,19 @@ def mine(
     collection=None,
     closets_collection=None,
 ):
-    """Mine a project directory into the palace.
+    """Mine a project directory — or one file inside a project — into the palace.
+
+    ``project_dir`` normally names a directory and the whole tree is walked.
+    When it names a single regular file, only that file is mined (#451): the
+    project it belongs to is found by walking up to the nearest ``.git`` /
+    ``mempalace.yaml`` (:func:`resolve_project_root`) and supplies the wing
+    and the relative path room detection keys off, so a file is filed exactly
+    where a directory mine would have filed it. The file's existing drawers
+    are replaced, not duplicated — ``process_file`` deletes by ``source_file``
+    before inserting — and an unchanged file is still skipped on its stored
+    mtime, so re-queuing one costs nothing. This is the targeted re-index
+    path: re-mining a 111 MB corpus to refresh one edited CLAUDE.md holds the
+    palace write lock for hours.
 
     ``workers`` controls parallelism of the read/chunk/route prep half.
     The default ``1`` runs the unchanged sequential path (zero behaviour
@@ -2448,8 +2614,20 @@ def _mine_impl(  # noqa: C901 — injected-handle branches push complexity one t
 
     injected_collection = collection is not None
 
-    project_path = Path(project_dir).expanduser().resolve()
-    config = load_config(project_dir)
+    # ``project_dir`` may name a single regular file (#451). Targeted
+    # re-index of one curated document — a project's CLAUDE.md after a claim
+    # in it was refuted — must not require re-walking the whole tree and
+    # holding the palace write lock for the duration. The file still has to
+    # be mined AS PART OF ITS PROJECT: wing and room detection both key off
+    # the project root, never off the file's own directory or name.
+    target = Path(project_dir).expanduser()
+    single_file = files is None and target.is_file()
+    if single_file:
+        project_path = resolve_project_root(target)
+        config = load_config(str(project_path))
+    else:
+        project_path = target.resolve()
+        config = load_config(project_dir)
     palace_config = MempalaceConfig()
 
     cfg_chunk_size = palace_config.chunk_size
@@ -2461,7 +2639,15 @@ def _mine_impl(  # noqa: C901 — injected-handle branches push complexity one t
     rooms = config.get("rooms", [{"name": "general", "description": "All project files"}])
     exclude_patterns = config.get("exclude_patterns", [])
 
-    if files is None:
+    if files is None and single_file:
+        files = scan_single_file(
+            target,
+            project_path,
+            respect_gitignore=respect_gitignore,
+            include_ignored=include_ignored,
+            exclude_patterns=exclude_patterns,
+        )
+    elif files is None:
         files = scan_project(
             project_dir,
             respect_gitignore=respect_gitignore,
@@ -2481,6 +2667,8 @@ def _mine_impl(  # noqa: C901 — injected-handle branches push complexity one t
     print(f"  Wing:    {wing}")
     print(f"  Rooms:   {', '.join(r['name'] for r in rooms)}")
     limit_suffix = f" (limit: {limit} new)" if limit > 0 else ""
+    if single_file:
+        print(f"  File:    {target} (targeted re-index)")
     print(f"  Files:   {len(files)}{limit_suffix}")
     print(f"  Palace:  {palace_path}")
     print(f"  Device:  {describe_device()}")
