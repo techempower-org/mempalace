@@ -129,12 +129,25 @@ def _kind_rank(hit) -> int:
 def prefer_curated(results, threshold: Optional[float] = None):
     """Order curated hits above the near-duplicates that quote them, in place.
 
-    Hits are grouped by near-duplicate similarity; within a group they are
-    ordered curated document → transcript → diary, ties broken by the
-    ranker's original position. Each group is emitted at the position of its
-    earliest member, so a curated hit rises to meet the highest-ranked copy of
-    itself and nothing else moves further than it has to. Hits in no group —
-    the overwhelming majority — keep the ranker's order exactly.
+    A hit moves above another hit only when BOTH hold:
+
+    * it is a **direct** near-duplicate of that hit — they share text
+      themselves, never by way of a third chunk, and
+    * it outranks it by kind (curated document → transcript → diary).
+
+    Directness is the whole bound and it is not decorative. Grouping by
+    connected component would make near-duplicate transitive: with A wholly
+    contained in B, and B sharing its tail with C, A would join C's group and
+    could be promoted over C despite sharing no 3-gram with it — a curated
+    document outranking something it does not duplicate, which is exactly
+    what this function promises not to do.
+
+    Each hit is therefore given the earliest position it has *earned* — the
+    index of the topmost hit it directly duplicates and outranks — and the
+    list is sorted by (earned position, kind, original position). A hit that
+    earns nothing keeps the ranker's index, so hits in no duplicate
+    relationship (the overwhelming majority) keep the ranker's order exactly,
+    and a hit that IS promoted moves no further than the copy it cleared.
 
     Idempotent, tolerant of non-dict items and a non-list argument, and never
     raises: this runs on the return path of a search the caller already paid
@@ -149,61 +162,31 @@ def prefer_curated(results, threshold: Optional[float] = None):
     if len(indexed) < 2:
         return results
 
+    thr = NEAR_DUP_THRESHOLD if threshold is None else threshold
     shingles = {i: _shingles(h.get("text")) for i, h in indexed}
     ranks = {i: _kind_rank(h) for i, h in indexed}
-
-    # Union-find over near-duplicate pairs, so a card and the several
-    # transcripts quoting it end up in one group.
-    parent = {i: i for i, _ in indexed}
-
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(x, y):
-        rx, ry = find(x), find(y)
-        if rx != ry:
-            parent[max(rx, ry)] = min(rx, ry)
-
     ids = [i for i, _ in indexed]
+
+    # The earliest index each hit has earned. Only a DIRECT near-duplicate it
+    # outranks can pull a hit upward, and only as far as that hit.
+    earned = {i: i for i in ids}
     for pos, i in enumerate(ids):
         si = shingles[i]
         if len(si) < _MIN_SHINGLES:
             continue
-        for j in ids[pos + 1 :]:
+        for j in ids[:pos]:
+            if ranks[j] <= ranks[i]:
+                continue
             sj = shingles[j]
             if len(sj) < _MIN_SHINGLES:
                 continue
-            if len(si & sj) / min(len(si), len(sj)) >= (
-                NEAR_DUP_THRESHOLD if threshold is None else threshold
-            ):
-                union(i, j)
+            if len(si & sj) / min(len(si), len(sj)) >= thr:
+                earned[i] = min(earned[i], j)
 
-    groups = {}
-    for i in ids:
-        groups.setdefault(find(i), []).append(i)
-
-    # Only groups that actually mix kinds can change anything.
-    reordered = {}
-    for root, members in groups.items():
-        if len(members) < 2 or len({ranks[m] for m in members}) < 2:
-            continue
-        reordered[min(members)] = sorted(members, key=lambda m: (ranks[m], m))
-
-    if not reordered:
+    if all(earned[i] == i for i in ids):
         return results
 
-    moved = {m for members in reordered.values() for m in members}
-    out = []
-    for i, h in enumerate(results):
-        if i in reordered:
-            out.extend(results[m] for m in reordered[i])
-        elif i in moved:
-            continue
-        else:
-            out.append(h)
-
-    results[:] = out
+    order = sorted(ids, key=lambda i: (earned[i], ranks[i], i))
+    moved = iter([results[i] for i in order])
+    results[:] = [next(moved) if isinstance(h, dict) else h for h in results]
     return results

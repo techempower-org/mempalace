@@ -186,6 +186,73 @@ class TestPreferCurated:
         assert hits[-1]["id"] == "f", "unchanged when the set is too large to compare"
 
 
+# ── the bound is DIRECT, not transitive ────────────────────────────────
+
+# Three chunks where near-duplicate chains but does not connect the ends:
+#   A is wholly contained in B      -> sim(A, B) = 1.0
+#   B and C share their second half -> sim(B, C) ~ 0.49
+#   A and C share nothing at all    -> sim(A, C) = 0.0
+_SEG1 = (
+    "the five handsets refused one cell and the fault was never inside their "
+    "modems because a documented refuser camped and carried an answered call"
+)
+_SEG2 = (
+    "the postgres backend scrubs lone surrogates and nul bytes at every bind "
+    "site so a mined corpus cannot abort the whole batch on one stray byte"
+)
+_SEG3 = (
+    "the hallways file grew to nine hundred megabytes of json which the miner "
+    "loads in full on every pass and that is what made the sweep take an hour"
+)
+CHUNK_A = _SEG1
+CHUNK_B = _SEG1 + " " + _SEG2
+CHUNK_C = _SEG2 + " " + _SEG3
+
+
+class TestNearDuplicateIsDirectNotTransitive:
+    """A curated hit may only clear hits it *itself* duplicates.
+
+    Grouping by connected component makes near-duplicate transitive: A~B and
+    B~C would put A, B and C in one group and let A jump over C even though
+    they share no 3-gram at all. That silently widens the documented bound —
+    the whole point of which is that a curated document never outranks
+    something it does not duplicate.
+    """
+
+    def test_the_chain_has_the_shape_the_bug_needs(self):
+        assert similarity(CHUNK_A, CHUNK_B) == pytest.approx(1.0)
+        assert similarity(CHUNK_A, CHUNK_C) == pytest.approx(0.0)
+        assert is_near_duplicate(CHUNK_B, CHUNK_C) is True
+        assert is_near_duplicate(CHUNK_A, CHUNK_C) is False
+
+    def test_curated_does_not_jump_a_hit_it_shares_no_text_with(self):
+        hits = [
+            _hit("transcript", CHUNK_C, id="C"),
+            _hit("transcript", CHUNK_B, id="B"),
+            _hit("file", CHUNK_A, id="A"),
+        ]
+        prefer_curated(hits)
+        ids = [h["id"] for h in hits]
+        assert ids.index("A") > ids.index("C"), (
+            "A shares no 3-gram with C and must not be promoted over it"
+        )
+        assert ids.index("A") < ids.index("B"), (
+            "A IS a direct near-duplicate of B and must clear it"
+        )
+        assert ids == ["C", "A", "B"]
+
+    def test_a_non_duplicate_keeps_its_place_relative_to_non_duplicates(self):
+        """B is a true near-duplicate of A, but that must not drag B below C."""
+        hits = [
+            _hit("transcript", CHUNK_C, id="C"),
+            _hit("transcript", CHUNK_B, id="B"),
+            _hit("file", CHUNK_A, id="A"),
+        ]
+        prefer_curated(hits)
+        ids = [h["id"] for h in hits]
+        assert ids.index("C") < ids.index("B"), "B keeps its place behind C"
+
+
 # ── wiring: every interactive route applies the preference ──────────────
 
 
