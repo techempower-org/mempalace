@@ -131,6 +131,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/miner.py`, `mempalace/cli.py`
 
 
+### Changed
+
+
+- **Legacy `hallways` delegates to `hallway list`; both surfaces share one limit rule** ([`5383040`](https://github.com/techempower-org/mempalace/commit/5383040))
+  The earlier deprecation pass gave the legacy plural verb a stderr notice
+  and taught it to honour ``--json``, but left it on its own fetch path, so
+  four of the five rows in the issue's comparison table were still open:
+  no daemon routing whatever ``PALACE_DAEMON_URL`` said, ``args.wing``
+  passed raw to ``list_hallways`` rather than through the sanitizing
+  ``mempalace_list_hallways`` tool, a co-occurrence sort with no tiebreak
+  (equal-count rows swapped places between runs), and label-only output.
+  ``cmd_hallways`` now prints the notice and delegates its whole body to
+  ``cmd_hallway_list``, closing all four at once and leaving one
+  hallway-listing path instead of two divergent ones. The JSON payload
+  carries a ``deprecated`` marker; the notice stays off the ``--json``
+  surface so nothing has to parse stderr.
+
+  Collapsing the paths surfaced two ``--limit`` defects, both preconditions
+  for the delegation. ``hallway list --json`` accepted ``--limit`` and
+  ignored it, returning the full list — the same silently-dropped-flag
+  defect the issue was filed about, one verb over (measured: ``--limit 1``
+  over a 2-row fixture returned 2). And ``max(0, limit)`` folded a negative
+  limit into the documented ``0 = all`` sentinel, so ``--limit -1`` printed
+  the entire graph instead of nothing. Both surfaces now share
+  ``_hallway_limit`` / ``_hallway_shown``: ``0`` means all, a negative limit
+  means none, and ``total`` keeps reporting the unsliced count so a scripted
+  caller can tell the list was truncated.
+
+  *Tests:* 22 (TestLegacyHallwaysAlias x13, test_cli_hallways x9)
+  *Files:* `mempalace/cli.py`, `tests/test_cli_hallways.py`, `tests/test_cli_read_family.py`
+
+
 ### Fixed
 
 

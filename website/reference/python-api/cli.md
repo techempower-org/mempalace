@@ -421,13 +421,22 @@ Daemon unreachable → exit 1; inner-error envelope → exit 2.
 def cmd_hallways(args)
 ```
 
-List within-wing entity hallways (the auto-built associative graph).
+Deprecated alias for ``mempalace hallway list`` (#407).
 
-DEPRECATED (#407): ``mempalace hallway list`` is the first-class verb —
-daemon-routed, paginated, with ``--json``. This legacy verb stays for
-scripts that call it, prints a one-line notice on stderr, and now honours
-``--json`` instead of silently ignoring it (a ``jq`` pipeline used to get
-human text and exit 0).
+The plural verb predates the daemon and carried its own fetch path:
+always local whatever ``PALACE_DAEMON_URL`` said, ``args.wing``
+passed raw to ``list_hallways`` instead of through the sanitizing
+MCP tool, and a co-occurrence sort with no tiebreak, so equal-count
+rows changed places between runs. #438 closed the ``--json`` hole in
+isolation; delegating the whole body closes the remaining rows of
+#407's table with it and leaves one hallway-listing path instead of
+two divergent ones.
+
+Kept working for scripts that call it — removal is a later release.
+The notice goes to stderr so it cannot corrupt a ``--json`` pipe,
+and is suppressed entirely on the ``--json`` surface, which carries
+a ``deprecated`` marker inside the payload instead (#438's choice,
+kept: nothing then has to parse stderr to notice).
 
 ### `cmd_overlap`
 
@@ -750,14 +759,16 @@ against, which can differ from the locally installed version.
 ### `cmd_hallway_list`
 
 ```python
-def cmd_hallway_list(args)
+def cmd_hallway_list(args, _deprecated_alias: bool = False)
 ```
 
 List within-wing entity hallways (slice of #191, issue #358).
 
 Wraps ``mempalace_list_hallways``. The pre-existing ``mempalace
-hallways`` verb stays as a back-compatible local-only alias; this is
-the daemon-routed superset with ``--json`` and stable ordering.
+hallways`` verb is a deprecated alias that delegates here (#407), so
+both spellings share one fetch path, one sort and one limit rule;
+``_deprecated_alias`` only adds the ``deprecated`` marker to the
+JSON payload when the caller arrived by the old name.
 
 ### `cmd_hallway_delete`
 
