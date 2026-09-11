@@ -633,6 +633,161 @@ class TestHallwayList:
         assert "illegal" in json.loads(capsys.readouterr().out)["error"]
 
 
+# ── #407 legacy `hallways` alias ──────────────────────────────────────
+
+
+class TestLegacyHallwaysAlias:
+    """``hallways`` (plural, pre-daemon) delegates to ``hallway list``.
+
+    #438 gave the legacy verb its deprecation notice and taught it to
+    emit ``--json``, but left it on its own local-only fetch path — so
+    the other four rows of #407's comparison table (daemon routing, wing
+    sanitization, the stable id tiebreak, the richer output) were still
+    open. Delegating closes them as one code path instead of two.
+    """
+
+    def test_legacy_verb_routes_to_the_daemon(self):
+        """Was: always local, whatever ``PALACE_DAEMON_URL`` said."""
+        from mempalace import cli
+
+        captured: list = []
+        with patch.dict("os.environ", _env(), clear=True):
+            with patch(
+                "urllib.request.urlopen",
+                side_effect=_make_responder(_HALLWAYS, captured=captured),
+            ):
+                cli.cmd_hallways(_args(wing="candela", json=True))
+
+        assert captured[0]["params"]["name"] == "mempalace_list_hallways"
+        assert captured[0]["params"]["arguments"] == {"wing": "candela"}
+
+    def test_legacy_verb_local_path_goes_through_the_sanitizing_tool(self, capsys, tmp_path):
+        """Was: ``args.wing`` passed raw to ``list_hallways``."""
+        from mempalace import cli
+
+        with patch.dict("os.environ", _env(), clear=True):
+            with patch("mempalace.mcp_server.tool_list_hallways", return_value=_HALLWAYS) as fn:
+                cli.cmd_hallways(_args(palace=str(tmp_path), wing="candela", json=True))
+
+        fn.assert_called_once_with("candela")
+        assert json.loads(capsys.readouterr().out)["total"] == 2
+
+    def test_legacy_verb_sanitization_rejection_exits_2(self, capsys, tmp_path):
+        from mempalace import cli
+
+        with patch.dict("os.environ", _env(), clear=True):
+            with patch(
+                "mempalace.mcp_server.tool_list_hallways",
+                return_value={"error": "wing contains illegal characters"},
+            ):
+                with pytest.raises(SystemExit) as exc:
+                    cli.cmd_hallways(_args(palace=str(tmp_path), wing="../etc", json=True))
+
+        assert exc.value.code == 2
+        assert "illegal" in json.loads(capsys.readouterr().out)["error"]
+
+    def test_equal_counts_get_a_stable_id_tiebreak(self, capsys):
+        """Was: co-occurrence only, so equal-count rows came back in
+        whatever order the store happened to yield."""
+        from mempalace import cli
+
+        tied = [
+            {"id": "hw-z", "wing": "w", "entity_a": "a", "entity_b": "b", "co_occurrence_count": 5},
+            {"id": "hw-a", "wing": "w", "entity_a": "c", "entity_b": "d", "co_occurrence_count": 5},
+        ]
+        with patch.dict("os.environ", _env(), clear=True):
+            with patch("urllib.request.urlopen", side_effect=_make_responder(tied)):
+                cli.cmd_hallways(_args(json=True))
+
+        ids = [h["id"] for h in json.loads(capsys.readouterr().out)["hallways"]]
+        assert ids == ["hw-a", "hw-z"]
+
+    def test_legacy_verb_prints_the_richer_table(self, capsys):
+        """Was: the label string only — no id, wing or count column."""
+        from mempalace import cli
+
+        with patch.dict("os.environ", _env(), clear=True):
+            with patch("urllib.request.urlopen", side_effect=_make_responder(_HALLWAYS)):
+                cli.cmd_hallways(_args(limit=50))
+
+        out = capsys.readouterr().out
+        assert "HALLWAYS — 2" in out
+        assert "hw-b" in out and "wax ↔ wick" in out
+
+    def test_notice_goes_to_stderr_not_stdout(self, capsys):
+        from mempalace import cli
+
+        with patch.dict("os.environ", _env(), clear=True):
+            with patch("urllib.request.urlopen", side_effect=_make_responder(_HALLWAYS)):
+                cli.cmd_hallways(_args(limit=50))
+
+        captured = capsys.readouterr()
+        assert "deprecated" in captured.err and "hallway list" in captured.err
+        assert "deprecated" not in captured.out
+
+    def test_json_surface_stays_free_of_the_notice(self, capsys):
+        """#438's decision, kept: a ``--json`` caller gets the marker in
+        the payload instead, so nothing has to parse stderr."""
+        from mempalace import cli
+
+        with patch.dict("os.environ", _env(), clear=True):
+            with patch("urllib.request.urlopen", side_effect=_make_responder(_HALLWAYS)):
+                cli.cmd_hallways(_args(json=True, limit=1))
+
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        payload = json.loads(captured.out)
+        assert payload["deprecated"] == "use `mempalace hallway list`"
+        assert payload["total"] == 2, "total still reports the unsliced count"
+        assert len(payload["hallways"]) == 1
+
+    def test_new_verb_json_carries_no_deprecated_marker(self, capsys):
+        from mempalace import cli
+
+        with patch.dict("os.environ", _env(), clear=True):
+            with patch("urllib.request.urlopen", side_effect=_make_responder(_HALLWAYS)):
+                cli.cmd_hallway_list(_args(hallway_action="list", json=True))
+
+        assert "deprecated" not in json.loads(capsys.readouterr().out)
+
+    def test_json_honours_limit_on_the_new_verb(self, capsys):
+        """``--limit`` was accepted and silently ignored on ``hallway
+        list``'s ``--json`` surface — the same defect class #407 was
+        filed about, one verb over."""
+        from mempalace import cli
+
+        with patch.dict("os.environ", _env(), clear=True):
+            with patch("urllib.request.urlopen", side_effect=_make_responder(_HALLWAYS)):
+                cli.cmd_hallway_list(_args(hallway_action="list", json=True, limit=1))
+
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["total"] == 2
+        assert len(payload["hallways"]) == 1
+
+    @pytest.mark.parametrize("verb", ["cmd_hallways", "cmd_hallway_list"])
+    def test_negative_limit_shows_nothing_not_everything(self, capsys, verb):
+        """``max(0, limit)`` collapsed a negative limit into the
+        documented ``0 = all`` sentinel, so ``--limit -1`` dumped the
+        whole graph instead of showing nothing."""
+        from mempalace import cli
+
+        with patch.dict("os.environ", _env(), clear=True):
+            with patch("urllib.request.urlopen", side_effect=_make_responder(_HALLWAYS)):
+                getattr(cli, verb)(_args(hallway_action="list", json=True, limit=-1))
+
+        assert json.loads(capsys.readouterr().out)["hallways"] == []
+
+    @pytest.mark.parametrize("verb", ["cmd_hallways", "cmd_hallway_list"])
+    def test_zero_limit_still_means_all(self, capsys, verb):
+        from mempalace import cli
+
+        with patch.dict("os.environ", _env(), clear=True):
+            with patch("urllib.request.urlopen", side_effect=_make_responder(_HALLWAYS)):
+                getattr(cli, verb)(_args(hallway_action="list", json=True, limit=0))
+
+        assert len(json.loads(capsys.readouterr().out)["hallways"]) == 2
+
+
 # ── #358 mempalace hallway delete ─────────────────────────────────────
 
 

@@ -5849,52 +5849,30 @@ def _build_overlap_cypher(wing_a: str, wing_b: str, limit: int) -> str:
 
 
 def cmd_hallways(args):
-    """List within-wing entity hallways (the auto-built associative graph).
+    """Deprecated alias for ``mempalace hallway list`` (#407).
 
-    DEPRECATED (#407): ``mempalace hallway list`` is the first-class verb —
-    daemon-routed, paginated, with ``--json``. This legacy verb stays for
-    scripts that call it, prints a one-line notice on stderr, and now honours
-    ``--json`` instead of silently ignoring it (a ``jq`` pipeline used to get
-    human text and exit 0).
+    The plural verb predates the daemon and carried its own fetch path:
+    always local whatever ``PALACE_DAEMON_URL`` said, ``args.wing``
+    passed raw to ``list_hallways`` instead of through the sanitizing
+    MCP tool, and a co-occurrence sort with no tiebreak, so equal-count
+    rows changed places between runs. #438 closed the ``--json`` hole in
+    isolation; delegating the whole body closes the remaining rows of
+    #407's table with it and leaves one hallway-listing path instead of
+    two divergent ones.
+
+    Kept working for scripts that call it — removal is a later release.
+    The notice goes to stderr so it cannot corrupt a ``--json`` pipe,
+    and is suppressed entirely on the ``--json`` surface, which carries
+    a ``deprecated`` marker inside the payload instead (#438's choice,
+    kept: nothing then has to parse stderr to notice).
     """
-    from .hallways import list_hallways
-
-    want_json = _resolve_read_format(args) == "json"
-    if not want_json:
+    if _resolve_read_format(args) != "json":
         print(
             "mempalace: `hallways` is deprecated — use `mempalace hallway list` "
             "(daemon-routed, --json, pagination). See techempower-org/mempalace#407.",
             file=sys.stderr,
         )
-
-    palace_path = (
-        os.path.expanduser(args.palace)
-        if getattr(args, "palace", None)
-        else MempalaceConfig().palace_path
-    )
-    rows = list_hallways(
-        getattr(args, "wing", None),
-        config=MempalaceConfig(palace_path=palace_path),
-    )
-    rows.sort(key=lambda h: h.get("co_occurrence_count", 0), reverse=True)
-    limit = max(0, getattr(args, "limit", 50))
-    if want_json:
-        _emit_json(
-            {
-                "hallways": rows[:limit],
-                "wing_filter": getattr(args, "wing", None),
-                "total": len(rows),
-                "deprecated": "use `mempalace hallway list`",
-            }
-        )
-        return
-    if not rows:
-        print("No hallways yet -- they are built from drawer entities when you mine.")
-        return
-    print(f"  {len(rows)} hallway(s):")
-    for h in rows[:limit]:
-        label = h.get("label") or f"{h.get('entity_a', '?')} <-> {h.get('entity_b', '?')}"
-        print(f"    {label}")
+    cmd_hallway_list(args, _deprecated_alias=True)
 
 
 def _print_overlap_table(rows: list[dict], wing_a: str, wing_b: str) -> None:
@@ -9457,6 +9435,34 @@ def cmd_aaak(args):
 # ── mempalace hallway list|delete (issue #358) ────────────────────────
 
 
+def _hallway_limit(args) -> int:
+    """The requested row cap, uncoerced beyond ``int``.
+
+    Deliberately does *not* clamp with ``max(0, ...)``: ``0`` is the
+    documented "show everything" sentinel, so clamping folded a negative
+    limit into it (#407).
+    """
+    raw = getattr(args, "limit", _HALLWAY_DEFAULT_LIMIT)
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        return _HALLWAY_DEFAULT_LIMIT
+
+
+def _hallway_shown(rows: list[dict], limit: int) -> list[dict]:
+    """The rows a ``--limit`` actually displays, on every surface.
+
+    ``0`` means all. A *negative* limit means *none* -- it used to mean
+    all, because ``max(0, limit)`` folded it into the ``0`` sentinel and
+    ``--limit -1`` printed the entire graph. Slicing with the raw value
+    is no better: ``rows[:-1]`` is "all but the last", which is neither
+    of the two things a caller could have meant.
+    """
+    if limit == 0:
+        return list(rows)
+    return list(rows[:limit]) if limit > 0 else []
+
+
 def _hallway_rows(data) -> list[dict]:
     """Normalise the tool response to a list of hallway records.
 
@@ -9479,7 +9485,14 @@ def _print_hallways_table(rows: list[dict], scope_wing: str | None, limit: int) 
         print()
         return
 
-    shown = rows[:limit] if limit else rows
+    shown = _hallway_shown(rows, limit)
+    if not shown:
+        # A limit can legitimately hide every row; say so rather than
+        # crashing on max() over an empty sequence.
+        print(f"\n  HALLWAYS — {len(rows)}{scope_label}")
+        print(f"    (no rows shown at --limit {limit})")
+        print()
+        return
     id_w = min(max(len("id"), max(len(str(h.get("id") or "")) for h in shown)), 34)
     wing_w = min(max(len("wing"), max(len(str(h.get("wing") or "")) for h in shown)), 22)
 
@@ -9506,16 +9519,18 @@ def _truncate_cell(value: str, width: int) -> str:
     return value if len(value) <= width else value[: width - 1] + "…"
 
 
-def cmd_hallway_list(args):
+def cmd_hallway_list(args, _deprecated_alias: bool = False):
     """List within-wing entity hallways (slice of #191, issue #358).
 
     Wraps ``mempalace_list_hallways``. The pre-existing ``mempalace
-    hallways`` verb stays as a back-compatible local-only alias; this is
-    the daemon-routed superset with ``--json`` and stable ordering.
+    hallways`` verb is a deprecated alias that delegates here (#407), so
+    both spellings share one fetch path, one sort and one limit rule;
+    ``_deprecated_alias`` only adds the ``deprecated`` marker to the
+    JSON payload when the caller arrived by the old name.
     """
     want_json = _resolve_read_format(args) == "json"
     wing = getattr(args, "wing", None)
-    limit = max(0, int(getattr(args, "limit", _HALLWAY_DEFAULT_LIMIT) or 0))
+    limit = _hallway_limit(args)
 
     if _daemon_strict() and not getattr(args, "palace", None):
         arguments = {"wing": wing} if wing else {}
@@ -9531,7 +9546,18 @@ def cmd_hallway_list(args):
     rows.sort(key=lambda h: (-int(h.get("co_occurrence_count") or 0), str(h.get("id") or "")))
 
     if want_json:
-        _emit_json({"hallways": rows, "wing_filter": wing, "total": len(rows)})
+        # ``total`` stays the unsliced count: a scripted caller needs to
+        # know a limit truncated the list. ``--limit`` used to be
+        # accepted and ignored here -- the same silently-dropped-flag
+        # defect #407 was filed about, one verb over.
+        payload = {
+            "hallways": _hallway_shown(rows, limit),
+            "wing_filter": wing,
+            "total": len(rows),
+        }
+        if _deprecated_alias:
+            payload["deprecated"] = "use `mempalace hallway list`"
+        _emit_json(payload)
         return
     _print_hallways_table(rows, scope_wing=wing, limit=limit)
 

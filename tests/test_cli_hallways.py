@@ -1,111 +1,146 @@
-"""Tests for the `hallways` CLI command."""
+"""Tests for the legacy ``hallways`` CLI verb.
 
+Since #407 the plural verb is a deprecated alias that delegates to
+``cmd_hallway_list``, so it reaches its rows through the sanitizing
+``mempalace_list_hallways`` tool rather than calling ``list_hallways``
+directly. These tests therefore patch the tool and pass ``--palace``,
+which pins the local route regardless of any ambient
+``PALACE_DAEMON_URL``. The daemon route, the wing sanitization and the
+``deprecated`` marker are covered in
+``tests/test_cli_read_family.py::TestLegacyHallwaysAlias``.
+"""
+
+import json
+import os
 from argparse import Namespace
+from unittest.mock import patch
 
-import mempalace.hallways as hallways_mod
+import pytest
+
 from mempalace.cli import cmd_hallways
 
 
-def test_lists_sorted_by_count(monkeypatch, capsys):
-    rows = [
+def _args(**overrides):
+    defaults = {
+        "wing": None,
+        "limit": 50,
+        "palace": "/selected/palace",
+        "json": False,
+        "format": None,
+    }
+    defaults.update(overrides)
+    return Namespace(**defaults)
+
+
+def _rows(*specs):
+    return [
         {
-            "entity_a": "C",
-            "entity_b": "D",
-            "co_occurrence_count": 1,
+            "id": hid,
             "wing": "w",
-            "label": "C <-> D (x1)",
-        },
-        {
-            "entity_a": "A",
-            "entity_b": "B",
-            "co_occurrence_count": 3,
-            "wing": "w",
-            "label": "A <-> B (x3)",
-        },
+            "entity_a": a,
+            "entity_b": b,
+            "co_occurrence_count": count,
+        }
+        for hid, a, b, count in specs
     ]
-    monkeypatch.setattr(hallways_mod, "list_hallways", lambda wing=None, config=None: list(rows))
-    cmd_hallways(Namespace(wing=None, limit=50))
+
+
+def test_lists_sorted_by_count(capsys):
+    rows = _rows(("hw-cd", "C", "D", 1), ("hw-ab", "A", "B", 3))
+    with patch("mempalace.mcp_server.tool_list_hallways", return_value=rows):
+        cmd_hallways(_args())
+
     out = capsys.readouterr().out
-    assert "2 hallway(s)" in out
-    assert "A <-> B (x3)" in out
+    assert "HALLWAYS — 2" in out
     # Highest co-occurrence first.
-    assert out.index("A <-> B") < out.index("C <-> D")
+    assert out.index("A ↔ B") < out.index("C ↔ D")
 
 
-def test_respects_limit(monkeypatch, capsys):
-    rows = [
-        {"entity_a": f"E{i}", "entity_b": "X", "co_occurrence_count": i, "label": f"E{i} <-> X"}
-        for i in range(5)
-    ]
-    monkeypatch.setattr(hallways_mod, "list_hallways", lambda wing=None, config=None: list(rows))
-    cmd_hallways(Namespace(wing=None, limit=2))
-    assert capsys.readouterr().out.count("<->") == 2
+def test_respects_limit(capsys):
+    rows = _rows(*[(f"hw-{i}", f"E{i}", "X", i) for i in range(5)])
+    with patch("mempalace.mcp_server.tool_list_hallways", return_value=rows):
+        cmd_hallways(_args(limit=2))
+
+    assert capsys.readouterr().out.count("↔") == 2
 
 
-def test_negative_limit_shows_nothing_not_tail(monkeypatch, capsys):
-    rows = [
-        {"entity_a": f"E{i}", "entity_b": "X", "co_occurrence_count": i, "label": f"E{i} <-> X"}
-        for i in range(5)
-    ]
-    monkeypatch.setattr(hallways_mod, "list_hallways", lambda wing=None, config=None: list(rows))
-    cmd_hallways(Namespace(wing=None, limit=-2))
-    # A negative limit must not slice from the end (which would print all-but-2).
-    assert capsys.readouterr().out.count("<->") == 0
+def test_negative_limit_shows_nothing_not_tail(capsys):
+    rows = _rows(*[(f"hw-{i}", f"E{i}", "X", i) for i in range(5)])
+    with patch("mempalace.mcp_server.tool_list_hallways", return_value=rows):
+        cmd_hallways(_args(limit=-2))
+
+    out = capsys.readouterr().out
+    # A negative limit must not slice from the end (which would print
+    # all-but-2), and must not fold into the "0 = all" sentinel either.
+    assert out.count("↔") == 0
+    assert "no rows shown" in out
 
 
-def test_empty_message(monkeypatch, capsys):
-    monkeypatch.setattr(hallways_mod, "list_hallways", lambda wing=None, config=None: [])
-    cmd_hallways(Namespace(wing="x", limit=50))
-    assert "No hallways yet" in capsys.readouterr().out
+def test_zero_limit_shows_everything(capsys):
+    """``0`` is the documented show-all sentinel on the surviving verb."""
+    rows = _rows(*[(f"hw-{i}", f"E{i}", "X", i) for i in range(5)])
+    with patch("mempalace.mcp_server.tool_list_hallways", return_value=rows):
+        cmd_hallways(_args(limit=0))
+
+    assert capsys.readouterr().out.count("↔") == 5
 
 
-def test_explicit_palace_scopes_hallway_listing(monkeypatch, tmp_path):
-    calls = []
+def test_empty_message(capsys):
+    with patch("mempalace.mcp_server.tool_list_hallways", return_value=[]):
+        cmd_hallways(_args(wing="x"))
 
-    def fake_list(wing=None, config=None):
-        calls.append((wing, config.palace_path))
+    out = capsys.readouterr().out
+    assert "no hallways" in out
+    assert "when you mine" in out
+
+
+def test_explicit_palace_scopes_hallway_listing(tmp_path):
+    """``--palace`` must be in force *while the tool runs* — it is
+    applied by redirecting ``MEMPALACE_PALACE_PATH`` for the call, not
+    by passing a config object down."""
+    selected = tmp_path / "selected" / "palace"
+    seen = {}
+
+    def fake_tool(wing=None):
+        seen["wing"] = wing
+        seen["palace"] = os.environ.get("MEMPALACE_PALACE_PATH")
         return []
 
-    selected = tmp_path / "selected" / "palace"
-    monkeypatch.setattr(hallways_mod, "list_hallways", fake_list)
+    with patch("mempalace.mcp_server.tool_list_hallways", side_effect=fake_tool):
+        cmd_hallways(_args(wing="wing_aya", palace=str(selected)))
 
-    cmd_hallways(Namespace(wing="wing_aya", limit=50, palace=str(selected)))
-
-    assert calls == [("wing_aya", str(selected))]
+    assert seen == {"wing": "wing_aya", "palace": str(selected)}
 
 
-def test_legacy_hallways_prints_deprecation_and_honours_json(monkeypatch, capsys):
-    """#407: the legacy verb warns on stderr, and --json emits JSON (it was
-    silently ignored — a jq pipeline got human text and exit 0)."""
-    import json as _json
+def test_deprecation_notice_on_stderr(capsys):
+    with patch("mempalace.mcp_server.tool_list_hallways", return_value=[]):
+        cmd_hallways(_args())
 
-    from mempalace import cli
+    err = capsys.readouterr().err
+    assert "deprecated" in err
+    assert "hallway list" in err
 
-    rows = [
-        {"label": "a <-> b", "entity_a": "a", "entity_b": "b", "co_occurrence_count": 3},
-        {"label": "c <-> d", "entity_a": "c", "entity_b": "d", "co_occurrence_count": 1},
-    ]
-    monkeypatch.setattr("mempalace.hallways.list_hallways", lambda wing, config=None: list(rows))
-    monkeypatch.setattr(
-        cli, "MempalaceConfig", lambda *a, **k: type("C", (), {"palace_path": "/p"})()
-    )
 
-    class Args:
-        palace = None
-        wing = None
-        limit = 1
-        json = False
-        format = None
+def test_json_surface_honours_limit_and_marks_deprecation(capsys):
+    rows = _rows(("hw-ab", "A", "B", 3), ("hw-cd", "C", "D", 1))
+    with patch("mempalace.mcp_server.tool_list_hallways", return_value=rows):
+        cmd_hallways(_args(limit=1, json=True))
 
-    cli.cmd_hallways(Args())
-    out = capsys.readouterr()
-    assert "deprecated" in out.err and "hallway list" in out.err
-    assert "1 hallway" not in out.out or "2 hallway(s)" in out.out
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["total"] == 2
+    assert [h["id"] for h in payload["hallways"]] == ["hw-ab"]
+    assert payload["deprecated"] == "use `mempalace hallway list`"
+    assert captured.err == "", "the JSON surface carries the marker instead of a notice"
 
-    Args.json = True
-    cli.cmd_hallways(Args())
-    out = capsys.readouterr()
-    payload = _json.loads(out.out)
-    assert payload["total"] == 2 and len(payload["hallways"]) == 1
-    assert payload["hallways"][0]["label"] == "a <-> b"
-    assert out.err == "", "no chrome on the JSON surface"
+
+def test_tool_error_envelope_exits_2(capsys):
+    with patch(
+        "mempalace.mcp_server.tool_list_hallways",
+        return_value={"error": "wing contains illegal characters"},
+    ):
+        with pytest.raises(SystemExit) as exc:
+            cmd_hallways(_args(wing="../etc"))
+
+    assert exc.value.code == 2
+    assert "illegal" in capsys.readouterr().err
