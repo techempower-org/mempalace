@@ -208,6 +208,15 @@ def provenance_note(hit) -> Optional[str]:
     Reuses ``source_kind`` / ``source_stale`` already stamped by
     :func:`annotate` when they are present, so a renderer handed an annotated
     hit never re-stats the disk.
+
+    The staleness caveat is deliberately NOT rendered for transcripts: a live
+    session's transcript is appended to continuously, so it is always
+    "modified after indexing" and the note would fire on every open session
+    while telling the reader nothing the transcript caveat does not already
+    say. Staleness is the interesting signal for curated documents, which is
+    the case #451 was filed about. The ``source_stale`` FIELD is still stamped
+    on every kind by :func:`annotate` — this is a rendering rule, not a
+    measurement one.
     """
     if not isinstance(hit, dict):
         return None
@@ -219,7 +228,7 @@ def provenance_note(hit) -> Optional[str]:
     notes = []
     if kind == "transcript":
         notes.append(_TRANSCRIPT_NOTE)
-    if stale is True:
+    if stale is True and kind != "transcript":
         indexed = _indexed_at(hit)
         when = indexed.strftime("%Y-%m-%d") if indexed else "unknown date"
         notes.append(

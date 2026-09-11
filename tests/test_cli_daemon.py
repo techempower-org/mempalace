@@ -1208,11 +1208,19 @@ class TestCmdSearchProvenance:
         assert cli._provenance_tag({"source_file": "abc.jsonl"}) == " ⟨transcript⟩"
         assert cli._provenance_tag({"source_file": "/p/CLAUDE.md"}) == ""
 
-    def test_compact_tag_reports_both_flags(self):
+    def test_compact_tag_omits_stale_for_transcripts(self):
+        """Mirrors provenance_note: a growing session transcript is expected,
+        so ⟨stale⟩ would fire on every open session and add nothing."""
         from mempalace import cli
 
         hit = {"source_kind": "transcript", "source_stale": True}
-        assert cli._provenance_tag(hit) == " ⟨transcript,stale⟩"
+        assert cli._provenance_tag(hit) == " ⟨transcript⟩"
+
+    def test_compact_tag_reports_stale_for_a_curated_file(self):
+        from mempalace import cli
+
+        hit = {"source_kind": "file", "source_stale": True}
+        assert cli._provenance_tag(hit) == " ⟨stale⟩"
 
     def test_header_warns_when_only_transcripts_and_diaries_matched(self, capsys):
         """The real #451 query returns transcripts plus a palace diary chunk.

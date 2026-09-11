@@ -656,6 +656,9 @@ def _provenance_tag(hit: dict) -> str:
 
     ``⟨transcript⟩`` — a quoted copy from a session transcript.
     ``⟨stale⟩`` — the file on disk has been modified since it was indexed.
+    Never both: a growing session transcript is expected, so ``⟨stale⟩`` is
+    suppressed for transcripts exactly as ``provenance_note`` suppresses the
+    matching sentence.
 
     The kind is derived when the hit was not annotated, mirroring
     ``provenance_note``'s fallback so ``compact`` is never the one renderer
@@ -663,10 +666,11 @@ def _provenance_tag(hit: dict) -> str:
     field: deciding it costs an ``os.stat`` per hit, and every path that
     produces hits already stamps it.
     """
+    kind = hit.get("source_kind") or source_kind(hit)
     flags = []
-    if (hit.get("source_kind") or source_kind(hit)) == "transcript":
+    if kind == "transcript":
         flags.append("transcript")
-    if hit.get("source_stale") is True:
+    elif hit.get("source_stale") is True:
         flags.append("stale")
     return f" ⟨{','.join(flags)}⟩" if flags else ""
 

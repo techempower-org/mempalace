@@ -157,6 +157,17 @@ class TestAnnotate:
         assert hits[0]["source_stale"] is True
         assert hits[0]["source_indexed_at"] == indexed
 
+    def test_stamps_source_stale_on_transcripts_too(self, tmp_path):
+        """Suppression is a RENDERING rule. The machine-readable field stays on
+        every kind so JSON/MCP consumers can still see it."""
+        f = tmp_path / "session.jsonl"
+        f.write_text("x\n")
+        indexed = (datetime.now() - timedelta(days=2)).isoformat()
+        hits = [{"source_file": str(f), "created_at": indexed}]
+        annotate(hits)
+        assert hits[0]["source_kind"] == "transcript"
+        assert hits[0]["source_stale"] is True
+
     def test_omits_source_stale_when_undecidable(self):
         hits = [{"source_file": "a.jsonl", "created_at": "unknown"}]
         annotate(hits)
@@ -201,14 +212,35 @@ class TestProvenanceNote:
             f"(indexed {indexed.strftime('%Y-%m-%d')}) — re-mine or read the file"
         )
 
-    def test_transcript_and_stale_join_with_semicolon(self, tmp_path):
+    def test_stale_transcript_gets_only_the_transcript_note(self, tmp_path):
+        """A live session's transcript is appended to continuously, so a
+        transcript is ALWAYS "modified after indexing" — the note would fire on
+        every open session and say nothing the transcript caveat doesn't already
+        say. The staleness note is for curated files, which is the #451 case."""
         f = tmp_path / "session.jsonl"
         f.write_text("x\n")
         indexed = (datetime.now() - timedelta(days=2)).isoformat()
         note = provenance_note({"source_file": str(f), "created_at": indexed})
-        assert note.count("; ") == 1
-        assert note.startswith("quoted copy from a session transcript")
-        assert "source file modified after indexing" in note
+        assert note == "quoted copy from a session transcript — verify at the curated source"
+        assert "modified after indexing" not in note
+
+    def test_stale_curated_file_still_gets_the_stale_note(self, tmp_path):
+        """The suppression is transcript-only; a curated document going stale is
+        exactly what #451 is about."""
+        f = tmp_path / "CLAUDE.md"
+        f.write_text("x\n")
+        indexed = (datetime.now() - timedelta(days=2)).isoformat()
+        note = provenance_note({"source_file": str(f), "created_at": indexed})
+        assert note.startswith("source file modified after indexing")
+
+    def test_stale_memory_file_still_gets_the_stale_note(self, tmp_path):
+        mem = tmp_path / "memory"
+        mem.mkdir()
+        f = mem / "user_jp.md"
+        f.write_text("x\n")
+        indexed = (datetime.now() - timedelta(days=2)).isoformat()
+        hit = {"source_file": str(f), "source_path": str(f), "created_at": indexed}
+        assert provenance_note(hit).startswith("source file modified after indexing")
 
     def test_fresh_curated_file_has_no_note(self, tmp_path):
         f = tmp_path / "CLAUDE.md"
