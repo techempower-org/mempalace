@@ -5149,32 +5149,47 @@ def cmd_migrate_wings(args):
 _CURATED_DOCS_MAX = 50
 
 
-def _curated_doc_paths(project_root: str) -> list:
-    """Absolute paths of the project's curated docs, sorted and capped.
+def _curated_doc_paths(project_root: str) -> tuple:
+    """``(paths_to_examine, total_found)`` for the project's curated docs.
 
     ``CLAUDE.md`` plus ``docs/**/*.md`` — the hand-written layer whose stale
     copy in the palace is invisible, as distinct from transcripts, which are
     append-only and re-mined continuously.
 
-    Sorted for determinism (two runs must agree, or the cap would silently
-    inspect a different subset each time) and capped at
-    :data:`_CURATED_DOCS_MAX`.
+    Sorted for determinism (two runs must agree, or the cap would inspect a
+    different subset each time) and capped at :data:`_CURATED_DOCS_MAX`.
+
+    The PRE-CAP total comes back with the list, and that is load-bearing
+    rather than convenience. Returning only the capped list made the
+    truncated tail unrepresentable: it could never populate stale / never
+    indexed / undecidable, so the check printed ✓ "N up to date" and exited 0
+    having examined a fraction of the files. Measured in review — 2g holds
+    795 curated docs, 745 of them unexamined, i.e. 6.3% coverage able to
+    report clean. A cap that hides what it skipped turns this check into the
+    one thing the module refuses to be.
+
+    ``CLAUDE.md`` is placed first BY CONSTRUCTION so it always survives the
+    cap. Sorting the combined list happened to do that, because ``C`` sorts
+    before ``docs/``, but "happens to" is not a property worth relying on —
+    a project whose docs directory were capitalised would have lost it.
     """
     root = os.path.abspath(os.path.expanduser(project_root))
     if not os.path.isdir(root):
-        return []
-    found = []
+        return [], 0
+    head = []
     claude = os.path.join(root, "CLAUDE.md")
     if os.path.isfile(claude):
-        found.append(claude)
+        head.append(claude)
+    docs = []
     docs_root = os.path.join(root, "docs")
     if os.path.isdir(docs_root):
         for dirpath, dirnames, filenames in os.walk(docs_root):
             dirnames.sort()
             for name in sorted(filenames):
                 if name.endswith(".md"):
-                    found.append(os.path.join(dirpath, name))
-    return sorted(found)[:_CURATED_DOCS_MAX]
+                    docs.append(os.path.join(dirpath, name))
+    ordered = head + sorted(docs)
+    return ordered[:_CURATED_DOCS_MAX], len(ordered)
 
 
 def _in_linked_worktree(path: str) -> bool:
@@ -5258,9 +5273,10 @@ def _curated_docs_check(wing: str, palace_path: str) -> tuple:
 
     from . import provenance
 
-    paths = _curated_doc_paths(os.getcwd())
+    paths, total_found = _curated_doc_paths(os.getcwd())
     if not paths:
         return None, "no CLAUDE.md or docs/*.md in this project", "warn"
+    unexamined = total_found - len(paths)
 
     recorded, note = _curated_indexed_mtimes(wing, palace_path)
     stale, never, unknown = [], [], []
@@ -5295,6 +5311,14 @@ def _curated_docs_check(wing: str, palace_path: str) -> tuple:
         parts.append("{} cannot be checked".format(len(unknown)))
     if note:
         parts.append(note)
+    if unexamined:
+        # Disclosed on EVERY outcome, not only the clean one: a ✗ that hides
+        # how much it did not look at is still an under-reported answer.
+        parts.append(
+            "{} examined, {} not examined (cap {})".format(
+                len(paths), unexamined, _CURATED_DOCS_MAX
+            )
+        )
     if never and _in_linked_worktree(os.getcwd()):
         parts.append(
             "run from a linked worktree, whose paths the palace never saw — "
@@ -5305,6 +5329,8 @@ def _curated_docs_check(wing: str, palace_path: str) -> tuple:
     detail = "; ".join(parts)
     if stale:
         return False, detail, "error"
+    # Everything examined was fine but the cap hid the rest: that is an
+    # unknown, never a clean bill. A truncated run can only ever be a warn.
     return None, detail, "warn"
 
 

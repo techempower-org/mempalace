@@ -70,7 +70,7 @@ class TestCuratedDocsEnumeration:
         from mempalace.cli import _curated_doc_paths
 
         root = _project(tmp_path, docs=("a.md", "deep/b.md"), other=("notes.txt", "README.md"))
-        found = _curated_doc_paths(str(root))
+        found, _total = _curated_doc_paths(str(root))
 
         rel = sorted(os.path.relpath(p, root) for p in found)
         assert rel == [
@@ -83,25 +83,51 @@ class TestCuratedDocsEnumeration:
         from mempalace.cli import _curated_doc_paths
 
         root = _project(tmp_path, docs=("z.md", "a.md", "m.md"))
-        first = _curated_doc_paths(str(root))
-        second = _curated_doc_paths(str(root))
+        first, _t1 = _curated_doc_paths(str(root))
+        second, _t2 = _curated_doc_paths(str(root))
 
         assert first == second, "order must be stable across runs"
         assert first == sorted(first)
         assert all(os.path.isabs(p) for p in first)
 
-    def test_is_capped(self, tmp_path):
+    def test_is_capped_and_reports_the_pre_cap_total(self):
+        """The cap must be visible to the caller, not silent.
+
+        The first version returned only the capped list, so the truncated
+        tail could never populate stale/never/unknown and the check printed
+        ✓ "N up to date" exit 0 having never looked at most of the files.
+        Measured in review: 2g has 795 curated docs, of which 745 were never
+        examined — 6.3% coverage able to report clean. The old
+        `test_is_capped` asserted exactly the length that hid it.
+        """
         from mempalace.cli import _CURATED_DOCS_MAX, _curated_doc_paths
 
-        root = _project(tmp_path, docs=tuple(f"d{i:03d}.md" for i in range(_CURATED_DOCS_MAX + 10)))
-        found = _curated_doc_paths(str(root))
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _project(
+                __import__("pathlib").Path(tmp),
+                docs=tuple(f"d{i:03d}.md" for i in range(_CURATED_DOCS_MAX + 10)),
+            )
+            found, total = _curated_doc_paths(str(root))
 
         assert len(found) == _CURATED_DOCS_MAX
+        assert total == _CURATED_DOCS_MAX + 11, "CLAUDE.md plus every docs/*.md"
+        assert total > len(found)
+
+    def test_claude_md_survives_the_cap_by_construction(self, tmp_path):
+        """Not by ASCII luck: CLAUDE.md is placed first, then the docs capped."""
+        from mempalace.cli import _CURATED_DOCS_MAX, _curated_doc_paths
+
+        root = _project(tmp_path, docs=tuple(f"A{i:03d}.md" for i in range(_CURATED_DOCS_MAX + 5)))
+        found, _total = _curated_doc_paths(str(root))
+
+        assert found[0] == os.path.join(str(root), "CLAUDE.md")
 
     def test_missing_project_yields_nothing(self, tmp_path):
         from mempalace.cli import _curated_doc_paths
 
-        assert _curated_doc_paths(str(tmp_path / "nope")) == []
+        assert _curated_doc_paths(str(tmp_path / "nope")) == ([], 0)
 
 
 class TestDoctorOkIsTriState:
@@ -322,6 +348,117 @@ class TestCuratedCheckOverDaemon:
         check = _checks_from(capsys.readouterr().out)["curated_docs"]
         assert check["level"] == "warn"
         assert check["ok"] is not False, "a doctor never turns its own outage into a ✗"
+
+
+class TestCuratedCheckNeverReportsCleanWhenItDidNotLook:
+    """A truncated run can never be ✓ (#490 review).
+
+    The cap is a budget guard, and a guard that hides what it skipped turns
+    the check into the exact instrument this module refuses to be: one that
+    answers "clean" about files it never examined. Measured live in review —
+    2g 795 docs / 745 unexamined, realmwatch 148 / 98, memorypalace 72 / 22.
+    """
+
+    def _all_fresh_payload(self, paths):
+        return {
+            "sources_by_wing": {
+                "proj": {
+                    "sources": [
+                        {
+                            "source_file": p,
+                            "drawer_count": 1,
+                            "max_source_mtime": os.path.getmtime(p),
+                        }
+                        for p in paths
+                    ]
+                }
+            }
+        }
+
+    def test_truncation_downgrades_a_clean_verdict_to_warn(self, tmp_path, capsys):
+        from mempalace import cli
+
+        n_extra = 12
+        root = _project(
+            tmp_path,
+            docs=tuple(f"d{i:03d}.md" for i in range(cli._CURATED_DOCS_MAX + n_extra - 1)),
+        )
+        (root / ".git").mkdir()
+        examined, total = cli._curated_doc_paths(str(root))
+        payload = self._all_fresh_payload(examined)
+
+        with (
+            patch("mempalace.cli._daemon_url", return_value="http://d:8085"),
+            patch(
+                "mempalace.cli._call_daemon_rest", return_value={"total_drawers": 1, "wings": {}}
+            ),
+            patch("mempalace.cli._call_daemon_tool", return_value=payload),
+            patch("os.getcwd", return_value=str(root)),
+            pytest.raises(SystemExit) as exc,
+        ):
+            cli.cmd_doctor(_doctor_args(json=True))
+
+        check = _checks_from(capsys.readouterr().out)["curated_docs"]
+        assert check["ok"] is None, "every examined file was fresh, but most were not examined"
+        assert check["level"] == "warn"
+        assert f"{len(examined)} examined" in check["detail"]
+        assert f"{total - len(examined)} not" in check["detail"]
+        assert exc.value.code == 0, "not looking is not a failure — it is an unknown"
+
+    def test_an_untruncated_clean_run_is_still_ok(self, tmp_path, capsys):
+        from mempalace import cli
+
+        root = _project(tmp_path, docs=("a.md",))
+        (root / ".git").mkdir()
+        examined, total = cli._curated_doc_paths(str(root))
+        assert total == len(examined)
+        payload = self._all_fresh_payload(examined)
+
+        with (
+            patch("mempalace.cli._daemon_url", return_value="http://d:8085"),
+            patch(
+                "mempalace.cli._call_daemon_rest", return_value={"total_drawers": 1, "wings": {}}
+            ),
+            patch("mempalace.cli._call_daemon_tool", return_value=payload),
+            patch("os.getcwd", return_value=str(root)),
+            pytest.raises(SystemExit) as exc,
+        ):
+            cli.cmd_doctor(_doctor_args(json=True))
+
+        check = _checks_from(capsys.readouterr().out)["curated_docs"]
+        assert check["ok"] is True
+        assert "not examined" not in check["detail"]
+        assert exc.value.code == 0
+
+    def test_a_stale_file_still_beats_truncation_in_the_verdict(self, tmp_path, capsys):
+        """Truncation downgrades ✓ to !; it must not upgrade ✗ to !."""
+        from mempalace import cli
+
+        root = _project(
+            tmp_path, docs=tuple(f"d{i:03d}.md" for i in range(cli._CURATED_DOCS_MAX + 5))
+        )
+        (root / ".git").mkdir()
+        examined, _total = cli._curated_doc_paths(str(root))
+        payload = self._all_fresh_payload(examined)
+        # Make the first examined file stale.
+        payload["sources_by_wing"]["proj"]["sources"][0]["max_source_mtime"] -= 3600
+
+        with (
+            patch("mempalace.cli._daemon_url", return_value="http://d:8085"),
+            patch(
+                "mempalace.cli._call_daemon_rest", return_value={"total_drawers": 1, "wings": {}}
+            ),
+            patch("mempalace.cli._call_daemon_tool", return_value=payload),
+            patch("os.getcwd", return_value=str(root)),
+            pytest.raises(SystemExit) as exc,
+        ):
+            cli.cmd_doctor(_doctor_args(json=True))
+
+        check = _checks_from(capsys.readouterr().out)["curated_docs"]
+        assert check["ok"] is False
+        assert "modified after indexing" in check["detail"]
+        assert "not examined" in check["detail"], "the blind spot is still disclosed"
+        assert exc.value.code == 1
 
 
 class TestCuratedCheckNamesTheWorktreeCase:
