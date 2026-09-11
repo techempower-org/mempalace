@@ -2863,9 +2863,12 @@ def _search_result_envelope(
         "total_before_filter": candidates_fetched,
         # Provenance is stamped here so every caller of ``search_memories``
         # — including MCP ``mempalace_search``, which is what the fleet
-        # actually reads — sees which kind of source a hit came from. The
-        # daemon result shape keeps a basename only, so ``source_kind`` is
-        # decidable there and ``source_stale`` is not (see provenance.py).
+        # actually reads — sees which kind of source a hit came from. Hits
+        # from this path carry ``source_path`` (the full path) beside the
+        # display basename, so staleness resolves here too, against THIS
+        # host's filesystem. Under the daemon that is the palace host, which
+        # is the copy the miner read — the right mtime to compare. See
+        # provenance.py for the cross-host rule.
         "results": _annotate_provenance(hits),
     }
     if date_window_active and candidates_fetched >= pool_size:

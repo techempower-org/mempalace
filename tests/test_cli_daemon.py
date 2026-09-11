@@ -1126,8 +1126,10 @@ class TestCmdSearchProvenance:
         assert [h["source_kind"] for h in payload["results"]] == ["transcript", "transcript"]
 
     def test_json_omits_source_stale_for_basename_only_paths(self, capsys):
-        """A daemon hit has no directory, so staleness is undecidable — and an
-        undecidable answer must not be rendered as "not stale"."""
+        """A hit whose only path is a bare basename cannot be located on disk,
+        so staleness is undecidable — and an undecidable answer must never be
+        rendered as "not stale". (Most real hits DO carry an absolute
+        ``source_path`` and do resolve; this fixture pins the other case.)"""
         payload = json.loads(self._run("json", capsys).out)
         assert all("source_stale" not in h for h in payload["results"])
 

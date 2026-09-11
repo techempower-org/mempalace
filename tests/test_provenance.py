@@ -299,9 +299,11 @@ class TestSearcherAnnotatesResults:
 
     Every branch that assembles ``results`` has to stamp provenance, or the
     fleet's most-used read path is the one surface that stays silent about it.
-    Daemon hits carry a basename-only ``source_file``, so ``source_kind`` is
-    decidable there and ``source_stale`` is not — that asymmetry is the
-    contract, not a gap.
+    These hits keep ``source_path`` (the full path) beside the display
+    basename, so staleness resolves here as well — measured against the host
+    running the call, which under the daemon is the palace host.
+    ``_bm25_only_via_postgres`` is the one arm that returns a basename only,
+    and its hits are therefore decidable for kind but not for staleness.
     """
 
     def test_envelope_annotates_every_hit(self):

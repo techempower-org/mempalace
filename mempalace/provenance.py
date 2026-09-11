@@ -39,10 +39,15 @@ __all__ = [
     "source_stale",
 ]
 
-# Keys the search arms use for a source path. The MCP / daemon paths store a
-# basename only (``searcher`` writes ``Path(src).name``); the local paths keep
-# the full path alongside it. Any of them answers "what kind of source is
-# this?"; only an absolute one can answer "is it stale?".
+# Keys the search arms use for a source path, in preference order. ``searcher``
+# writes the basename to ``source_file`` for display and keeps the full path in
+# ``source_path`` (only ``_source_file_full`` / ``_chunk_index`` get stripped
+# before a public return), so most hits carry BOTH — the basename first and an
+# absolute path right behind it. ``_bm25_only_via_postgres`` is the exception:
+# it sets no ``source_path``, so its hits really are basename-only.
+# Any of these keys answers "what kind of source is this?"; only an absolute
+# one can answer "is it stale?", which is why staleness resolves for most hits
+# and not for that one branch.
 _PATH_KEYS = ("source_file", "source_path", "_source_file_full", "source")
 
 # Keys carrying the time the drawer was filed into the palace.
@@ -129,6 +134,16 @@ def _indexed_at(hit) -> Optional[datetime]:
 
     Wall-clock naive, matching ``filed_at`` storage and the shared
     ``date_window`` comparison convention.
+
+    ``parse_date_bound`` dropping any ``tzinfo`` is LOAD-BEARING here, not
+    incidental tidiness. Production ``filed_at`` values are naive local ISO
+    strings, but ``diary_ingest`` writes an aware (UTC) one, and both
+    comparisons downstream are against naive datetimes —
+    ``datetime.fromtimestamp(mtime)`` and ``datetime.now()``. An aware value
+    reaching either one raises ``TypeError: can't compare offset-naive and
+    offset-aware datetimes`` from inside a search the caller has already paid
+    for. Normalising on the way in is what lets :func:`source_stale` promise
+    it never raises; keep any replacement parser naive-returning.
     """
     raw = _indexed_at_raw(hit)
     if raw is None:
@@ -148,14 +163,25 @@ def source_stale(hit, now: Optional[datetime] = None) -> Optional[bool]:
 
     ``False`` — the file exists and has not moved on.
 
-    ``None``  — undecidable, which is the common case and is *not* a denial
-    of staleness. It covers a basename-only path (the MCP / daemon result
-    shape carries no directory, so the file cannot be located), a missing or
-    unparseable index timestamp, a file that is not on this machine, and an
-    index timestamp in the future (a clock problem, not a staleness answer).
+    ``None``  — undecidable, and *not* a denial of staleness. It covers a hit
+    whose only path is a bare basename (``_bm25_only_via_postgres`` is the one
+    arm that returns those), a missing or unparseable index timestamp, a file
+    that is not on this machine, and an index timestamp in the future (a clock
+    problem, not a staleness answer).
 
-    ``now`` is injectable for tests and bounds the future-timestamp check.
-    Never raises.
+    WHOSE filesystem answers is deliberate: whichever host runs this. Under
+    MCP ``mempalace_search`` that is the palace host, and its copy is the
+    right one to compare — it is the copy the miner actually read, so its
+    mtime is what "has the source moved on since indexing?" means. The CLI
+    then re-annotates the same hits locally, and because :func:`annotate`
+    only writes ``source_stale`` when it can decide, the answer you get is
+    the last host that *could* decide (the reader's, when the file is present
+    on both; the palace host's, when it is present only there). Where the
+    file is Syncthing-replicated the two agree, because mtime is preserved.
+    A path missing on both yields ``None``.
+
+    ``now`` is injectable for tests and bounds the future-timestamp check; it
+    must be naive (see :func:`_indexed_at`). Never raises.
     """
     indexed = _indexed_at(hit)
     if indexed is None:
@@ -214,8 +240,13 @@ def annotate(results):
 
     ``source_stale`` and ``source_indexed_at`` are omitted when there is
     nothing to base them on: ``source_stale`` needs an absolute path that
-    exists on this machine (daemon/MCP hits carry a basename only, so they
-    are decidable for *kind* but never for *staleness*), and
+    exists on the host running this call, plus a parseable index timestamp.
+    Most hits carry an absolute ``source_path`` alongside the display
+    basename, so staleness usually DOES resolve — including inside the
+    palace daemon, against the palace host's filesystem (see
+    :func:`source_stale` for why that is the right copy). Because the field
+    is written only when decidable, re-annotating on a second host refines
+    the answer rather than clobbering it with ``None``.
     ``source_indexed_at`` is the parseable index timestamp echoed back.
     """
     if not isinstance(results, list):
