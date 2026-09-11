@@ -2840,57 +2840,22 @@ def _mine_impl(  # noqa: C901 — injected-handle branches push complexity one t
                 from .config import MempalaceConfig
 
                 graph_config = MempalaceConfig(palace_path=palace_path)
-                # Cross-wing topic tunnels: after every file in this wing has been
-                # processed, link this wing to any other wing that shares a
-                # confirmed TOPIC label. Out of scope for v1: manifest-dependency
-                # overlap, per-topic allow/deny lists, search-result surfacing.
-                try:
-                    tunnels_added = _compute_topic_tunnels_for_wing(wing, config=graph_config)
-                    if tunnels_added:
-                        print(f"\n  Topic tunnels: +{tunnels_added} cross-wing link(s)")
-                except Exception as e:
-                    # Tunnel computation must never fail a mine — degrade quietly.
-                    print(
-                        f"\n  WARNING: topic tunnel computation skipped — {e}",
-                        file=sys.stderr,
-                    )
-
-                # Within-wing hallways: link entities (people, projects, concepts)
-                # that co-occur in drawers across this wing's rooms. Mirrors the
-                # tunnel-compute fault-tolerance pattern — hallway computation
-                # must never fail a mine; it's a derived analytic, not load-bearing
-                # for the drawer write that already committed above.
-                try:
-                    hallways_created = compute_hallways_for_wing(
-                        wing, col=collection, config=graph_config
-                    )
-                    if hallways_created:
-                        print(f"\n  Hallways: +{len(hallways_created)} within-wing entity link(s)")
-                except Exception as e:
-                    print(
-                        f"\n  WARNING: hallway computation skipped — {e}",
-                        file=sys.stderr,
-                    )
-
-                # Cross-wing entity tunnels: derived from the hallway records
-                # materialized just above. When an entity appears in hallways of
-                # this wing AND another wing, a tunnel bridges them. Runs in
-                # parallel with topic tunnels — both kinds coexist via
-                # ``kind="entity"`` / ``kind="topic"``. Same fault-tolerance
-                # pattern: never fail a mine over a derived analytic.
-                try:
-                    entity_tunnels_added = _compute_entity_tunnels_for_wing(
-                        wing, config=graph_config
-                    )
-                    if entity_tunnels_added:
+                # The three steps live in recompute_derived_graph so this block
+                # and `mempalace tunnels --rebuild` cannot drift into two
+                # different ideas of what "the derived graph" is (#486 review).
+                _derived = recompute_derived_graph(wing, collection=collection, config=graph_config)
+                for _key, _noun, _unit in _DERIVED_GRAPH_REPORT:
+                    _err = _derived["errors"].get(_key)
+                    if _err is not None:
+                        # A derived analytic must never fail a mine — the drawer
+                        # write already committed. Degrade quietly.
                         print(
-                            f"\n  Entity tunnels: +{entity_tunnels_added} cross-wing entity link(s)"
+                            f"\n  WARNING: {_noun} computation skipped — {_err}",
+                            file=sys.stderr,
                         )
-                except Exception as e:
-                    print(
-                        f"\n  WARNING: entity tunnel computation skipped — {e}",
-                        file=sys.stderr,
-                    )
+                    elif _derived[_key]:
+                        _head, _tail = _unit.split(": ", 1)
+                        print(f"\n  {_head}: +{_derived[_key]} {_tail}")
 
             if not injected_collection:
                 # Skip when the caller owns the client (issue #261). The
@@ -3012,6 +2977,59 @@ def _cleanup_mine_pid_file() -> None:
     except OSError:
         # Best-effort cleanup; never fail the mine over PID bookkeeping.
         pass
+
+
+# (metadata key, noun used in the warning, label used in the count line)
+_DERIVED_GRAPH_REPORT = (
+    ("topic_tunnels", "topic tunnel", "Topic tunnels: cross-wing link(s)"),
+    ("hallways", "hallway", "Hallways: within-wing entity link(s)"),
+    ("entity_tunnels", "entity tunnel", "Entity tunnels: cross-wing entity link(s)"),
+)
+
+
+def recompute_derived_graph(wing: str, *, collection=None, config=None) -> dict:
+    """Recompute one wing's derived graph. THE definition of those steps.
+
+    Three steps, in order, because they are a chain:
+
+    1. cross-wing **topic** tunnels — link this wing to any other sharing a
+       confirmed TOPIC label;
+    2. within-wing **hallways** — link entities that co-occur in drawers
+       across this wing's rooms;
+    3. cross-wing **entity** tunnels — derived from the hallway records
+       step 2 just materialized.
+
+    Every step is independently fault-tolerant: a derived analytic must never
+    take down its caller. For the post-mine block that is because the drawer
+    write has already committed; for ``mempalace tunnels --rebuild`` it is
+    because a partial refresh beats none. Failures land in ``errors`` keyed by
+    step rather than raising, and the caller decides how loudly to say so.
+
+    Returns ``{"topic_tunnels": int, "hallways": int, "entity_tunnels": int,
+    "errors": {step: Exception}}``; a step that failed has a count of 0 and an
+    entry in ``errors``.
+
+    Both the post-mine block and the rebuild verb call this, so a fourth
+    derived step cannot land in one and be forgotten in the other.
+    """
+    out: dict = {"topic_tunnels": 0, "hallways": 0, "entity_tunnels": 0, "errors": {}}
+
+    try:
+        out["topic_tunnels"] = _compute_topic_tunnels_for_wing(wing, config=config)
+    except Exception as e:
+        out["errors"]["topic_tunnels"] = e
+
+    try:
+        out["hallways"] = len(compute_hallways_for_wing(wing, col=collection, config=config))
+    except Exception as e:
+        out["errors"]["hallways"] = e
+
+    try:
+        out["entity_tunnels"] = _compute_entity_tunnels_for_wing(wing, config=config)
+    except Exception as e:
+        out["errors"]["entity_tunnels"] = e
+
+    return out
 
 
 def _compute_topic_tunnels_for_wing(wing: str, config=None) -> int:

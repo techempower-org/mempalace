@@ -425,6 +425,36 @@ Existing positional/keyword callers see no behaviour change: when
 both kwargs are omitted, ``mine`` walks exactly the original code
 path (construct client, acquire lock, validate at end).
 
+### `recompute_derived_graph`
+
+```python
+def recompute_derived_graph(wing: str, *, collection = None, config = None) -> dict
+```
+
+Recompute one wing's derived graph. THE definition of those steps.
+
+Three steps, in order, because they are a chain:
+
+1. cross-wing **topic** tunnels — link this wing to any other sharing a
+   confirmed TOPIC label;
+2. within-wing **hallways** — link entities that co-occur in drawers
+   across this wing's rooms;
+3. cross-wing **entity** tunnels — derived from the hallway records
+   step 2 just materialized.
+
+Every step is independently fault-tolerant: a derived analytic must never
+take down its caller. For the post-mine block that is because the drawer
+write has already committed; for ``mempalace tunnels --rebuild`` it is
+because a partial refresh beats none. Failures land in ``errors`` keyed by
+step rather than raising, and the caller decides how loudly to say so.
+
+Returns ``&#123;"topic_tunnels": int, "hallways": int, "entity_tunnels": int,
+"errors": &#123;step: Exception}}``; a step that failed has a count of 0 and an
+entry in ``errors``.
+
+Both the post-mine block and the rebuild verb call this, so a fourth
+derived step cannot land in one and be forgotten in the other.
+
 ### `status`
 
 ```python
