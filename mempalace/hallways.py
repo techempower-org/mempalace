@@ -152,6 +152,18 @@ def _save_hallways(hallways: list[dict], config=None) -> None:
         raise
 
 
+def _hallway_store(config=None):
+    """Return the configured hallway store (JSON by default, postgres opt-in).
+
+    Indirection rather than a direct import so tests can substitute a store,
+    and so the JSON path keeps calling ``_load_hallways``/``_save_hallways``
+    above — which existing tests monkeypatch through ``_get_hallway_file``.
+    """
+    from .hallway_store import get_hallway_store
+
+    return get_hallway_store(config)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Core algorithm — compute entity-pair hallways for one wing
 # ─────────────────────────────────────────────────────────────────────────────
@@ -272,6 +284,7 @@ def compute_hallways_for_wing(
         return []
 
     if not metadatas:
+        _hallway_store(config).replace_wing(wing, [])
         return []
 
     # 2. Walk drawers, counting entity-pair co-occurrence + tracking rooms.
@@ -307,6 +320,7 @@ def compute_hallways_for_wing(
                 pair_rooms[key].add(room_str)
 
     if not pair_counts:
+        _hallway_store(config).replace_wing(wing, [])
         return []
 
     # 3. Materialize hallway records for pairs above the threshold.
@@ -315,23 +329,22 @@ def compute_hallways_for_wing(
     #    across recomputes. Without this preservation, every mine wipes
     #    the connection weights accumulated through use — defeating the
     #    living-connection layer entirely.
-    existing = _load_hallways(config)
-    existing_dynamics_lookup: dict = {}
-    for h in existing:
-        if h.get("wing") != wing:
-            continue
-        # Canonicalize the lookup key by sorting the entity pair — must
-        # match the symmetric ID generation in _hallway_id (which also
-        # sorts). Without this, a persisted record with reversed entity
-        # order would silently miss the lookup and lose its accumulated
-        # dynamics on every recompute. Per PR #1578 review
-        # (gemini-code-assist, HIGH priority).
-        key = tuple(sorted([h.get("entity_a"), h.get("entity_b")]))
-        # Only copy the fields the dynamics layer cares about; everything
-        # else is recomputed deterministically from the drawer set.
-        existing_dynamics_lookup[key] = {
-            k: h[k] for k in ("strength", "stability", "last_activated", "access_count") if k in h
-        }
+    #    The store returns only this wing's dynamics. Reading every record to
+    #    recover four fields per pair costs a full parse of a 1.04 GB file —
+    #    ~3 s of load, and a second copy live at once because
+    #    _compute_entity_tunnels_for_wing loads it again through
+    #    list_hallways, which is where a mine subprocess's 1.6-4.1 GB RSS
+    #    comes from. On the postgres store this is one indexed query.
+    #    (The 29 minutes #442 reports for the post-mine block is create_tunnel
+    #    persisting per call in palace_graph, not this load — see the
+    #    hallway_store module docstring.)
+    #
+    #    Keys are the sorted entity pair, matching the symmetric id in
+    #    _hallway_id. Without that canonicalization a record persisted with
+    #    the pair reversed misses the lookup and silently loses its
+    #    accumulated weights on every recompute (PR #1578 review, HIGH).
+    store = _hallway_store(config)
+    existing_dynamics_lookup = store.dynamics_for_wing(wing)
 
     created: list[dict] = []
     created_at = datetime.now(timezone.utc).isoformat()
@@ -363,9 +376,10 @@ def compute_hallways_for_wing(
         initialize_dynamics_fields(record)
         created.append(record)
 
-    # 4. Persist — preserve other-wing records, replace this wing's records.
-    preserved_other_wings = [h for h in existing if h.get("wing") != wing]
-    _save_hallways(preserved_other_wings + created, config)
+    # 4. Persist this wing's records. Other wings are untouched — on the
+    #    JSON store that still means a whole-file rewrite, but on postgres it
+    #    is a delete+insert scoped to the wing instead of rewriting ~1 GB.
+    store.replace_wing(wing, created)
 
     return created
 
@@ -375,19 +389,26 @@ def compute_hallways_for_wing(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def list_hallways(wing: Optional[str] = None, config=None) -> list[dict]:
-    """List hallway records. Filter by ``wing`` if specified."""
-    all_hallways = _load_hallways(config)
-    if wing is None:
-        return list(all_hallways)
-    return [h for h in all_hallways if h.get("wing") == wing]
+def list_hallways(
+    wing: Optional[str] = None,
+    config=None,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+) -> list[dict]:
+    """List hallway records, optionally filtered by ``wing`` and paginated.
+
+    On the postgres store the wing filter and the pagination are both SQL, so
+    a wing-scoped call reads only that wing. On the JSON store the filter is
+    still applied after the full load — same behaviour as before, which is
+    why the postgres cutover is the actual fix rather than this signature.
+
+    ``limit``/``offset`` are new and optional: 797K records is not a sane
+    payload at any speed, and the daemon needs a bounded page to be able to
+    answer ``mempalace_list_hallways`` at all (palace-daemon#255).
+    """
+    return _hallway_store(config).list(wing=wing, limit=limit, offset=offset)
 
 
 def delete_hallway(hallway_id: str, config=None) -> bool:
     """Remove one hallway record by id. Returns True if a record was removed."""
-    hallways = _load_hallways(config)
-    filtered = [h for h in hallways if h.get("id") != hallway_id]
-    if len(filtered) == len(hallways):
-        return False
-    _save_hallways(filtered, config)
-    return True
+    return _hallway_store(config).delete(hallway_id)
