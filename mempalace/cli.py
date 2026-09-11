@@ -6498,6 +6498,52 @@ def _print_tunnels_table(bundle, scope_wing: str | None) -> None:
     print()
 
 
+def _rebuild_derived_graph(wing: str, palace_path=None) -> None:
+    """Recompute one wing's derived graph: topic tunnels, hallways, entity tunnels.
+
+    The same three steps the post-mine block runs, against a named wing,
+    without mining anything. They are called through the ``miner`` module
+    rather than imported by name so the post-mine block stays the single
+    definition of what "the derived graph" means — this verb must not become
+    a second, drifting copy of that list.
+
+    Each step is independently fault-tolerant, matching the post-mine block:
+    a derived analytic must never take down the whole operation, and a
+    partial refresh is better than none.
+    """
+    from . import miner as _miner
+    from .config import MempalaceConfig
+
+    config = MempalaceConfig(palace_path=palace_path) if palace_path else MempalaceConfig()
+
+    print(f"\n  Rebuilding derived graph for wing '{wing}'")
+    collection = None
+    try:
+        collection = _miner.get_collection(config.palace_path)
+    except Exception as e:
+        # Hallways need the collection; the two tunnel steps do not, so this
+        # degrades to a partial rebuild rather than aborting.
+        print(f"  WARNING: could not open the palace collection — {e}", file=sys.stderr)
+
+    try:
+        added = _miner._compute_topic_tunnels_for_wing(wing, config=config)
+        print(f"  Topic tunnels:  +{added}")
+    except Exception as e:
+        print(f"  WARNING: topic tunnel computation skipped — {e}", file=sys.stderr)
+
+    try:
+        created = _miner.compute_hallways_for_wing(wing, col=collection, config=config)
+        print(f"  Hallways:       +{len(created)}")
+    except Exception as e:
+        print(f"  WARNING: hallway computation skipped — {e}", file=sys.stderr)
+
+    try:
+        added = _miner._compute_entity_tunnels_for_wing(wing, config=config)
+        print(f"  Entity tunnels: +{added}")
+    except Exception as e:
+        print(f"  WARNING: entity tunnel computation skipped — {e}", file=sys.stderr)
+
+
 def cmd_tunnels(args):
     """List cross-wing tunnels (slice of #191).
 
@@ -6508,6 +6554,23 @@ def cmd_tunnels(args):
 
     Daemon unreachable → exit 1; inner-error envelope → exit 2.
     """
+    if getattr(args, "rebuild", False):
+        # Local operation — deliberately ahead of the daemon check below,
+        # which only the listing path needs.
+        wing = getattr(args, "wing", None)
+        if not wing:
+            print(
+                "mempalace: tunnels --rebuild requires --wing <slug>. There is no "
+                "--all: rebuilding every wing pays compute_hallways_for_wing's full "
+                "load-and-rewrite of hallways.json per wing (~44s per wing at the "
+                "current 1.2 GB, ~37 min across 50 wings), which would recreate the "
+                "problem this verb exists to fix. See #442.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        _rebuild_derived_graph(wing, getattr(args, "palace", None))
+        return
+
     fmt = _resolve_tunnels_format(args)
     want_json = fmt == "json"
 
@@ -11368,6 +11431,19 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         help="List cross-wing tunnels (daemon mempalace_list_tunnels fast-path)",
     )
     p_tunnels.add_argument("--wing", default=None, help="Filter to tunnels touching one wing")
+    p_tunnels.add_argument(
+        "--rebuild",
+        action="store_true",
+        help=(
+            "Recompute one wing's derived graph (topic tunnels, hallways, entity "
+            "tunnels) instead of listing. Requires --wing; runs locally, no daemon "
+            "needed. This is THE way to refresh the graph on purpose — since #474 "
+            "it otherwise refreshes only as a side effect of a full-directory mine "
+            "that files drawers. No --all by design: a whole-palace sweep rewrites "
+            "hallways.json once per wing (~37 min across 50 wings at its current "
+            "size), which is the problem this verb exists to fix"
+        ),
+    )
     p_tunnels.add_argument(
         "--passive",
         action="store_true",
