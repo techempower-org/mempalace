@@ -1,197 +1,220 @@
-"""Tests for scripts/maintain-fork-changes.py.
+"""#476: entry commit shas are resolved AFTER the merge, by the merge
+step — not written by the lane.
 
-Covers the two passes the script provides (#316): HEAD-placeholder
-resolution by referenced #NN and id-based de-duplication. The script
-loads via ``importlib`` like ``tests/test_render_docs.py`` because
-the dotted filename can't be imported normally.
+The previous resolver scanned the 12 lines after a ``commit:`` line for
+any ``#NN`` and mapped that number to a recent commit. Measured on the 12
+entries this repo actually needed fixed, it resolved 3 and got all three
+wrong — one matched against an **upstream** issue number — and silently
+left 9 unresolved while reporting success.
+
+So the tests here mostly pin the *refusals*. Leaving an entry unresolved
+is harmless and visible; a confident wrong sha is neither, and
+``check-docs`` cannot catch it, because asserting a sha *resolves* is
+satisfied by any real commit.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
+import yaml
+
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+import fork_changes  # noqa: E402
+
+_spec = importlib.util.spec_from_file_location("mfc", SCRIPTS / "maintain-fork-changes.py")
+mfc = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(mfc)
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPT_PATH = REPO_ROOT / "scripts" / "maintain-fork-changes.py"
+def _entry(**kw):
+    e = {
+        "seq": 1,
+        "id": "an-entry",
+        "date": "2026-09-11",
+        "bucket": "Fixed",
+        "commit": "HEAD",
+        "area": "CLI",
+        "summary": "a thing changed",
+    }
+    e.update(kw)
+    return e
 
 
-@pytest.fixture(scope="module")
-def mfc():
-    spec = importlib.util.spec_from_file_location("_maintain_fork_changes", SCRIPT_PATH)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+class TestResolveHeadFromForkPr:
+    def test_uses_the_merge_commit_sha_from_the_api(self):
+        e = _entry(fork_pr=475)
+
+        changes, unresolved = mfc.resolve_head_entries([e], fetch=lambda pr: "abcdef1")
+
+        assert unresolved == []
+        assert changes == [(e, "abcdef1")]
+
+    def test_an_unmerged_pr_is_left_alone(self):
+        """The sha does not exist yet — that is not a defect."""
+        changes, unresolved = mfc.resolve_head_entries([_entry(fork_pr=999)], fetch=lambda pr: None)
+
+        assert changes == []
+        assert "not merged" in unresolved[0][1]
+
+    def test_without_fork_pr_it_refuses_rather_than_inferring(self):
+        """The old resolver inferred here, from prose, and was wrong."""
+        changes, unresolved = mfc.resolve_head_entries(
+            [_entry(body="fixes the thing from #433 and upstream #1829")],
+            fetch=lambda pr: "should-not-be-called",
+        )
+
+        assert changes == []
+        assert "no fork_pr" in unresolved[0][1]
+
+    def test_a_non_numeric_fork_pr_is_reported_not_crashed_on(self):
+        changes, unresolved = mfc.resolve_head_entries(
+            [_entry(fork_pr="not-a-number")], fetch=lambda pr: "x"
+        )
+
+        assert changes == []
+        assert "not a number" in unresolved[0][1]
+
+    def test_entries_with_a_concrete_sha_are_untouched(self):
+        changes, unresolved = mfc.resolve_head_entries(
+            [_entry(commit="1234567")], fetch=lambda pr: "nope"
+        )
+
+        assert (changes, unresolved) == ([], [])
 
 
-# ── dedup_by_id ────────────────────────────────────────────────────────
-
-
-def test_dedup_drops_second_occurrence_of_same_id(mfc):
-    """The rebase-chain pattern: same entry inserted twice keeps the first."""
-    lines = [
-        "entries:\n",
-        "\n",
-        "  - id: my-feature\n",
-        "    bucket: Added\n",
-        "    summary: first\n",
-        "\n",
-        "  - id: my-feature\n",
-        "    bucket: Added\n",
-        "    summary: second-duplicate\n",
-        "\n",
-        "  - id: other\n",
-        "    bucket: Fixed\n",
-        "    summary: keep\n",
+class TestSquashSubjectMatch:
+    SUBJECTS = [
+        ("aaaaaaa1", "fix(cli): do the thing (#418) (#457)"),
+        ("bbbbbbb2", "fix(cli): do the thing"),
+        ("ccccccc3", "feat(cli): something else (#460)"),
     ]
-    new, dropped = mfc.dedup_by_id(lines)
-    new_text = "".join(new)
-    assert dropped == ["my-feature"]
-    assert "first" in new_text
-    assert "second-duplicate" not in new_text
-    assert "other" in new_text
+
+    def test_matches_the_squash_subject_not_the_branch_commit_itself(self):
+        hits = mfc.squash_subject_match("fix(cli): do the thing", self.SUBJECTS)
+
+        assert hits == ["aaaaaaa1"], "the identical bare subject must not match"
+
+    def test_no_match_returns_empty_rather_than_a_near_miss(self):
+        assert mfc.squash_subject_match("fix(cli): do the THING differently", self.SUBJECTS) == []
 
 
-def test_dedup_is_idempotent_on_clean_yaml(mfc):
-    lines = [
-        "entries:\n",
-        "\n",
-        "  - id: a\n",
-        "    bucket: Added\n",
-        "\n",
-        "  - id: b\n",
-        "    bucket: Fixed\n",
-    ]
-    new, dropped = mfc.dedup_by_id(lines)
-    assert dropped == []
-    assert "".join(new) == "".join(lines)
+class TestRepairDangling:
+    def test_repoints_a_non_ancestor_to_its_squash_commit(self):
+        e = _entry(commit="dead123")
+        subjects = [("5555555", "fix(cli): do the thing (#457)")]
+
+        changes, unresolved = mfc.repair_dangling(
+            [e],
+            "origin/main",
+            is_ancestor=lambda sha, branch: False,
+            subject_of=lambda sha: "fix(cli): do the thing",
+            branch_subjects=subjects,
+        )
+
+        assert unresolved == []
+        assert changes == [(e, "5555555")]
+
+    def test_an_ancestor_is_left_alone(self):
+        changes, unresolved = mfc.repair_dangling(
+            [_entry(commit="abc1234")],
+            "origin/main",
+            is_ancestor=lambda sha, branch: True,
+            subject_of=lambda sha: pytest.fail("must not need a subject"),
+            branch_subjects=[],
+        )
+
+        assert (changes, unresolved) == ([], [])
+
+    def test_ambiguity_refuses_instead_of_picking(self):
+        subjects = [
+            ("1111111", "fix(cli): do the thing (#1)"),
+            ("2222222", "fix(cli): do the thing (#2)"),
+        ]
+
+        changes, unresolved = mfc.repair_dangling(
+            [_entry(commit="dead123")],
+            "origin/main",
+            is_ancestor=lambda sha, branch: False,
+            subject_of=lambda sha: "fix(cli): do the thing",
+            branch_subjects=subjects,
+        )
+
+        assert changes == []
+        assert "2 subject matches" in unresolved[0][1]
+
+    def test_a_vanished_object_is_reported_not_guessed(self):
+        changes, unresolved = mfc.repair_dangling(
+            [_entry(commit="dead123")],
+            "origin/main",
+            is_ancestor=lambda sha, branch: False,
+            subject_of=lambda sha: None,
+            branch_subjects=[],
+        )
+
+        assert changes == []
+        assert "object is gone" in unresolved[0][1]
+
+    def test_legacy_allowlisted_ids_are_skipped(self):
+        """Documented-unrecoverable entries must not re-report forever."""
+        changes, unresolved = mfc.repair_dangling(
+            [_entry(id="old-thing", commit="dead123")],
+            "origin/main",
+            is_ancestor=lambda sha, branch: False,
+            subject_of=lambda sha: pytest.fail("must not be consulted"),
+            branch_subjects=[],
+            legacy_ids=frozenset({"old-thing"}),
+        )
+
+        assert (changes, unresolved) == ([], [])
 
 
-def test_dedup_handles_three_copies(mfc):
-    lines = [
-        "  - id: x\n",
-        "    summary: one\n",
-        "  - id: x\n",
-        "    summary: two\n",
-        "  - id: x\n",
-        "    summary: three\n",
-    ]
-    new, dropped = mfc.dedup_by_id(lines)
-    assert dropped == ["x", "x"]
-    assert "one" in "".join(new)
-    assert "two" not in "".join(new)
-    assert "three" not in "".join(new)
+class TestLegacyFile:
+    def test_parses_ids_and_ignores_comments(self, tmp_path):
+        p = tmp_path / "legacy.txt"
+        p.write_text("# a comment\n\nfirst-id    # trailing note\nsecond-id\n")
+
+        assert mfc.load_legacy_ids(p) == frozenset({"first-id", "second-id"})
+
+    def test_absent_file_is_empty_not_an_error(self, tmp_path):
+        assert mfc.load_legacy_ids(tmp_path / "nope.txt") == frozenset()
 
 
-# ── resolve_head_placeholders ──────────────────────────────────────────
+class TestWriteBack:
+    def test_applying_a_change_rewrites_only_the_commit_field(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mfc, "gh_merge_commit_sha", lambda pr, repo=None: "fedcba9")
+        e = _entry(commit="HEAD", fork_pr=475, body="keep\nthis\n")
+        path = fork_changes.write_entry(e, tmp_path)
+
+        rc = mfc.main(
+            [
+                "--dir",
+                str(tmp_path),
+                "--no-repair",
+                "--legacy-file",
+                str(tmp_path / "none.txt"),
+            ]
+        )
+
+        after = yaml.safe_load(path.read_text())
+        assert rc == 0
+        assert after["body"] == "keep\nthis\n"
+        assert after["summary"] == e["summary"]
+        assert after["commit"] == "fedcba9"
 
 
-def test_resolve_head_replaces_when_issue_reference_found(mfc):
-    lines = [
-        "  - id: my-feature\n",
-        "    bucket: Added\n",
-        "    commit: HEAD\n",
-        "    area: MCP\n",
-        '    summary: "fixes the thing (#123)"\n',
-    ]
-    issue_to_sha = {"123": "abc1234"}
-    new, resolved = mfc.resolve_head_placeholders(lines, issue_to_sha)
-    new_text = "".join(new)
-    assert "    commit: abc1234\n" in new_text
-    assert "commit: HEAD" not in new_text
-    assert resolved == [("abc1234", "123")]
+def test_check_mode_fails_when_an_entry_is_unresolved(tmp_path, capsys):
+    fork_changes.write_entry(_entry(commit="HEAD"), tmp_path)
 
-
-def test_resolve_head_leaves_placeholder_when_no_match(mfc):
-    lines = [
-        "  - id: unknown\n",
-        "    commit: HEAD\n",
-        '    summary: "references no issues"\n',
-    ]
-    new, resolved = mfc.resolve_head_placeholders(lines, {"99": "deadbee"})
-    assert resolved == []
-    assert "".join(new) == "".join(lines)
-
-
-def test_resolve_head_dry_run_does_not_rewrite(mfc):
-    lines = [
-        "    commit: HEAD\n",
-        '    summary: "closes #5"\n',
-    ]
-    new, resolved = mfc.resolve_head_placeholders(lines, {"5": "f00ba12"}, dry_run=True)
-    assert resolved == [("f00ba12", "5")]
-    assert "".join(new) == "".join(lines)
-
-
-def test_resolve_head_picks_first_resolvable_issue_in_window(mfc):
-    """When the entry mentions multiple #NN within the 12-line lookahead, the
-    first one that resolves wins (closes/fixes have already been ranked
-    higher in build_issue_to_sha)."""
-    lines = [
-        "  - id: x\n",
-        "    commit: HEAD\n",
-        '    summary: "foo (#101)"\n',
-        '    body: "see also #102 and #103"\n',
-    ]
-    # Only #102 maps — so we should pick its sha even though #101 appears first
-    issue_to_sha = {"102": "bbbbbbb"}
-    new, resolved = mfc.resolve_head_placeholders(lines, issue_to_sha)
-    assert resolved == [("bbbbbbb", "102")]
-    assert "commit: bbbbbbb\n" in "".join(new)
-
-
-def test_resolve_head_first_resolvable_wins_when_multiple_match(mfc):
-    lines = [
-        "  - id: x\n",
-        "    commit: HEAD\n",
-        '    summary: "foo (#101) closes #102"\n',
-    ]
-    issue_to_sha = {"101": "aaaaaaa", "102": "bbbbbbb"}
-    new, resolved = mfc.resolve_head_placeholders(lines, issue_to_sha)
-    # #101 appears earlier in the line and resolves, so it wins
-    assert resolved == [("aaaaaaa", "101")]
-
-
-def test_resolve_head_indentation_preserved(mfc):
-    lines = [
-        "  - id: y\n",
-        "    commit:   HEAD\n",
-        '    summary: "foo (#7)"\n',
-    ]
-    issue_to_sha = {"7": "ccccccc"}
-    new, _ = mfc.resolve_head_placeholders(lines, issue_to_sha)
-    # The regex captures the "    commit:   " prefix; verify it's preserved
-    assert "    commit:   ccccccc\n" in "".join(new)
-
-
-# ── build_issue_to_sha ─────────────────────────────────────────────────
-
-
-def test_build_issue_to_sha_resolves_closing_phrase(mfc, monkeypatch, capfd):
-    """build_issue_to_sha walks git log; mock subprocess.check_output to feed
-    a synthetic log and verify priority ordering."""
-    sample = (
-        # PR #200 closes #100 — priority 2, should win
-        "abc1234deadbee\x00fix(thing): summary (#200)\x00Closes #100\x01"
-        # Another commit later mentions #100 but only via subject paren
-        "999deadbeef0000\x00chore: bump deps (#100)\x00body without explicit close\x01"
+    rc = mfc.main(
+        ["--check", "--dir", str(tmp_path), "--no-repair", "--legacy-file", str(tmp_path / "n.txt")]
     )
 
-    import subprocess as real_sp
-
-    monkeypatch.setattr(
-        real_sp,
-        "check_output",
-        lambda *args, **kwargs: sample,
-    )
-    monkeypatch.setattr(mfc.subprocess, "check_output", lambda *a, **k: sample)
-
-    mapping = mfc.build_issue_to_sha("origin/main", 50)
-    # #100: priority 2 (closes) should beat priority 1 (subject paren)
-    # Whichever sha was offered first at priority 2 wins
-    assert mapping["100"] == "abc1234"
-    # #200: only appeared in subject of first commit as "(#200)" — priority 1
-    assert mapping["200"] == "abc1234"
+    assert rc == 1, "an unresolved HEAD must not read as success"
+    assert "no fork_pr" in capsys.readouterr().err

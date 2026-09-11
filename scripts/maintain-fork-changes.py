@@ -1,227 +1,285 @@
 #!/usr/bin/env python3
-"""maintain-fork-changes.py — mechanical cleanup passes on docs/fork-changes.yaml.
+"""maintain-fork-changes.py — resolve fork-change entry commit shas.
 
-Two passes:
+A squash merge creates a NEW commit, so the sha an entry needs does not
+exist while the PR is open. The entry therefore carries ``commit: HEAD``
+on the branch and this script resolves it **after** the merge: the merge
+step records the final sha, not the lane. Writing a branch sha instead is
+what left 13 entries pointing at commits unreachable from ``main``
+(#472/#473) — they passed every check, because a dangling object still
+resolves locally and in GitHub's unreachable-object store until it is
+garbage-collected.
 
-1. **Resolve `commit: HEAD` placeholders** by looking up the closing commit
-   for each entry. Authors write `commit: HEAD` on the PR branch because
-   the squash-merge SHA isn't known yet; nothing in our flow rewrites it
-   post-merge. This pass scans the entry's text for `#NN` references and
-   matches them to the most recent commit on the configured branch using
-   priority order:
+Two passes, both entry-wise over ``docs/fork-changes/``:
 
-     2 — explicit `closes #NN` / `fixes #NN` (or repo-prefixed) in commit
-         subject or body
-     1 — trailing `(#NN)` in commit subject (the squash-merge marker)
-     0 — any other `#NN` mention
+1. **Resolve ``commit: HEAD``** from the entry's ``fork_pr:`` via the
+   GitHub REST API (``pulls/N`` → ``merge_commit_sha``). Exact, because
+   the API reports the commit the merge actually created. An entry with
+   no ``fork_pr`` is reported and left alone — there is nothing reliable
+   to infer from.
 
-   Highest priority wins. Entries without any resolvable `#NN` are left
-   on `commit: HEAD`.
+2. **Repair a stale sha** whose commit is no longer an ancestor of the
+   branch, by matching the dangling commit's *subject* to the squash
+   subject (a squash subject is the branch subject plus a trailing
+   ``(#PR)``). Content-based, and requires a UNIQUE match.
 
-2. **De-duplicate entries by `id:`**. Long rebase chains can re-insert
-   the same entry into a yaml block. This pass keeps the first occurrence
-   of each id slug and drops the rest, reporting what was removed.
+## Why not the previous resolver (#476)
 
-Both passes are idempotent — running on a clean tree produces no diff.
+It scanned the 12 lines following the ``commit:`` line for any ``#NN``
+and mapped that number to a recent commit. Those lines are prose, and the
+first issue number in an entry's prose is usually not that entry's PR.
+``#NN`` was also unqualified, so an upstream number was
+indistinguishable from a fork one. Measured on the 12 real entries this
+repo needed fixed: **3 resolved, all three wrong**, one of them matched
+against **upstream** ``#1829``, and the other 9 were silently left on
+``HEAD`` while the run reported success.
 
-Filed as #316. See #317 for the manual fix this script makes mechanical.
+The failure direction is the point. Leaving an entry unresolved is
+harmless and visible; writing a confident wrong sha is neither, and
+``check-docs.sh`` cannot catch it — asserting that a sha *resolves* is
+satisfied by any real commit. So both passes here refuse ambiguity
+instead of picking, and unresolved entries make the exit code non-zero
+under ``--check``.
+
+De-duplication is gone: one file per entry means a duplicate id is a hard
+error in ``scripts/fork_changes.py`` at load time, not something to clean
+up afterwards.
 
 Usage::
 
-    scripts/maintain-fork-changes.py            # apply both passes
-    scripts/maintain-fork-changes.py --check    # exit 1 if either pass
-                                                # would change anything
-    scripts/maintain-fork-changes.py --no-dedup
+    scripts/maintain-fork-changes.py                 # apply both passes
+    scripts/maintain-fork-changes.py --check         # exit 1 if anything
+                                                     # would change or is
+                                                     # unresolved
     scripts/maintain-fork-changes.py --no-resolve-head
-    scripts/maintain-fork-changes.py --branch=origin/main --depth=200
+    scripts/maintain-fork-changes.py --no-repair
+    scripts/maintain-fork-changes.py --branch=origin/main
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+import pathlib
 import re
 import subprocess
 import sys
-from pathlib import Path
+from typing import Callable, Iterable
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import fork_changes  # noqa: E402
+
+REPO = "techempower-org/mempalace"
+
+#: A squash-merge subject ends with one or more ``(#N)`` markers.
+PR_TAIL_RE = re.compile(r"(?:\s*\(#\d+\))+$")
 
 
-YAML_PATH = Path("docs/fork-changes.yaml")
-ENTRY_ID_RE = re.compile(r"^  - id: (\S+)$")
-HEAD_LINE_RE = re.compile(r"^(\s*commit:\s*)HEAD\s*$")
-ISSUE_REF_RE = re.compile(r"#(\d+)")
-CLOSES_RE = re.compile(r"(?:closes?|fix(?:es)?)\s+(?:[\w-]+/[\w-]+)?#(\d+)", re.IGNORECASE)
-SUBJECT_PR_RE = re.compile(r"\(#(\d+)\)\s*$")
+def _run(args: list[str]) -> str:
+    return subprocess.check_output(args, text=True, stderr=subprocess.DEVNULL)
 
 
-def build_issue_to_sha(branch: str, depth: int) -> dict[str, str]:
-    """Walk recent commits, build {issue_number: short_sha} with priority resolution."""
-    out = subprocess.check_output(
-        ["git", "log", "--format=%H%x00%s%x00%b%x01", f"-{depth}", branch],
-        text=True,
-    )
-    issue_to_sha: dict[str, tuple[int, str]] = {}
-
-    def offer(n: str, priority: int, sha: str) -> None:
-        cur = issue_to_sha.get(n)
-        if cur is None or priority > cur[0]:
-            issue_to_sha[n] = (priority, sha)
-
-    for chunk in out.split("\x01"):
-        if not chunk.strip():
-            continue
-        parts = chunk.strip().split("\x00")
-        if len(parts) < 3:
-            continue
-        sha = parts[0][:7]
-        subject = parts[1]
-        body = parts[2]
-        combined = subject + "\n" + body
-
-        # Priority 2: closes/fixes #N (with optional repo prefix)
-        for m in CLOSES_RE.finditer(combined):
-            offer(m.group(1), 2, sha)
-        # Priority 1: trailing "(#N)" in subject
-        m = SUBJECT_PR_RE.search(subject)
-        if m:
-            offer(m.group(1), 1, sha)
-        # Priority 0: any other #N mention
-        for m in ISSUE_REF_RE.finditer(combined):
-            offer(m.group(1), 0, sha)
-
-    return {k: v[1] for k, v in issue_to_sha.items()}
+def git_subject(sha: str) -> str | None:
+    """Subject line of ``sha``, or None when the object is gone."""
+    try:
+        return _run(["git", "log", "-1", "--format=%s", sha]).strip()
+    except subprocess.CalledProcessError:
+        return None
 
 
-def resolve_head_placeholders(
-    lines: list[str], issue_to_sha: dict[str, str], dry_run: bool = False
-) -> tuple[list[str], list[tuple[str, str]]]:
-    """Replace `commit: HEAD` lines with the resolved short SHA.
+def git_is_ancestor(sha: str, branch: str) -> bool:
+    """True when ``sha`` is reachable from ``branch``.
 
-    Returns (new_lines, resolved_pairs).
+    This — not ``git cat-file -e`` — is the honest test for "the commit
+    this entry names is on the branch we are documenting".
     """
-    out: list[str] = []
-    resolved: list[tuple[str, str]] = []
-    for i, line in enumerate(lines):
-        m = HEAD_LINE_RE.match(line.rstrip("\n"))
-        if not m:
-            out.append(line)
-            continue
-        # Look at the next 12 lines for a #NN reference
-        sha = None
-        ref = None
-        for j in range(i + 1, min(i + 13, len(lines))):
-            for issue_match in ISSUE_REF_RE.finditer(lines[j]):
-                n = issue_match.group(1)
-                if n in issue_to_sha:
-                    sha = issue_to_sha[n]
-                    ref = n
-                    break
-            if sha:
-                break
-        if sha and not dry_run:
-            prefix = m.group(1)
-            out.append(f"{prefix}{sha}\n")
-            resolved.append((sha, ref or "?"))
-        elif sha and dry_run:
-            out.append(line)
-            resolved.append((sha, ref or "?"))
-        else:
-            out.append(line)
-    return out, resolved
+    return (
+        subprocess.run(
+            ["git", "merge-base", "--is-ancestor", sha, branch],
+            capture_output=True,
+        ).returncode
+        == 0
+    )
 
 
-def dedup_by_id(lines: list[str]) -> tuple[list[str], list[str]]:
-    """Drop subsequent entries sharing an id with an earlier one.
+def git_subjects(branch: str) -> list[tuple[str, str]]:
+    """``(sha, subject)`` for every commit on ``branch``, newest first."""
+    out = _run(["git", "log", "--format=%H%x00%s", branch]).strip()
+    rows = []
+    for line in out.split("\n"):
+        if "\x00" in line:
+            sha, subject = line.split("\x00", 1)
+            rows.append((sha, subject))
+    return rows
 
-    Returns (new_lines, dropped_ids).
+
+def gh_merge_commit_sha(pr: int, repo: str = REPO) -> str | None:
+    """``merge_commit_sha`` for a MERGED pull request, else None.
+
+    REST rather than GraphQL on purpose: GraphQL has been rate-limited
+    for this account during waves, and this is the one lookup that must
+    work at merge time.
     """
-    seen: set[str] = set()
-    dropped: list[str] = []
-    out: list[str] = []
-    i = 0
-    while i < len(lines):
-        m = ENTRY_ID_RE.match(lines[i].rstrip("\n"))
-        if m:
-            slug = m.group(1)
-            if slug in seen:
-                # Find end of this entry block: next "  - id:" or EOF
-                j = i + 1
-                while j < len(lines):
-                    if ENTRY_ID_RE.match(lines[j].rstrip("\n")):
-                        break
-                    j += 1
-                # Strip any trailing blank lines that belonged to this block
-                while j > i + 1 and lines[j - 1].strip() == "":
-                    j -= 1
-                dropped.append(slug)
-                i = j
-                continue
-            else:
-                seen.add(slug)
-        out.append(lines[i])
-        i += 1
-
-    # Normalize triple-blank-line runs
-    text = "".join(out)
-    text = re.sub(r"\n\n\n+", "\n\n", text)
-    return text.splitlines(keepends=True), dropped
+    try:
+        raw = _run(["gh", "api", f"repos/{repo}/pulls/{pr}"])
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not data.get("merged_at"):
+        return None
+    sha = data.get("merge_commit_sha")
+    return sha[:7] if isinstance(sha, str) and sha else None
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    ap.add_argument("--check", action="store_true", help="report drift without writing")
-    ap.add_argument("--no-resolve-head", action="store_true", help="skip the HEAD-resolution pass")
-    ap.add_argument("--no-dedup", action="store_true", help="skip the de-duplication pass")
-    ap.add_argument(
-        "--branch",
-        default="origin/main",
-        help="branch to walk for commit lookup (default: origin/main)",
-    )
-    ap.add_argument(
-        "--depth", type=int, default=200, help="commit history depth to scan (default: 200)"
-    )
-    args = ap.parse_args()
+def resolve_head_entries(
+    entries: Iterable[dict],
+    fetch: Callable[[int], str | None] = gh_merge_commit_sha,
+) -> tuple[list[tuple[dict, str]], list[tuple[dict, str]]]:
+    """``commit: HEAD`` → the squash sha, via ``fork_pr``.
 
-    repo_root = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
-    yaml_path = Path(repo_root) / YAML_PATH
-    if not yaml_path.exists():
-        print(f"✗ {yaml_path} not found", file=sys.stderr)
+    Returns ``(changes, unresolved)`` where a change is
+    ``(entry, new_sha)`` and an unresolved item is ``(entry, reason)``.
+    """
+    changes: list[tuple[dict, str]] = []
+    unresolved: list[tuple[dict, str]] = []
+    for entry in entries:
+        if str(entry.get("commit", "")).strip() != "HEAD":
+            continue
+        pr = entry.get("fork_pr")
+        if not pr:
+            unresolved.append((entry, "no fork_pr: — cannot resolve HEAD"))
+            continue
+        try:
+            sha = fetch(int(pr))
+        except (TypeError, ValueError):
+            unresolved.append((entry, f"fork_pr: {pr!r} is not a number"))
+            continue
+        if not sha:
+            unresolved.append((entry, f"PR #{pr} is not merged (or unreachable)"))
+            continue
+        changes.append((entry, sha))
+    return changes, unresolved
+
+
+def squash_subject_match(subject: str, branch_subjects: Iterable[tuple[str, str]]) -> list[str]:
+    """Shas whose subject is ``subject`` plus a trailing ``(#PR)``.
+
+    Exact prefix, not fuzzy: a squash subject that merely *resembles* the
+    branch subject is not evidence, and a wrong sha is worse than none.
+    """
+    return [
+        sha
+        for sha, candidate in branch_subjects
+        if candidate != subject and PR_TAIL_RE.sub("", candidate).strip() == subject.strip()
+    ]
+
+
+def repair_dangling(
+    entries: Iterable[dict],
+    branch: str = "origin/main",
+    is_ancestor: Callable[[str, str], bool] = git_is_ancestor,
+    subject_of: Callable[[str], str | None] = git_subject,
+    branch_subjects: list[tuple[str, str]] | None = None,
+    legacy_ids: frozenset[str] = frozenset(),
+) -> tuple[list[tuple[dict, str]], list[tuple[dict, str]]]:
+    """Re-point entries whose commit is not an ancestor of ``branch``."""
+    subjects = branch_subjects if branch_subjects is not None else git_subjects(branch)
+    changes: list[tuple[dict, str]] = []
+    unresolved: list[tuple[dict, str]] = []
+    for entry in entries:
+        sha = str(entry.get("commit", "")).strip()
+        if not sha or sha == "HEAD" or entry.get("id") in legacy_ids:
+            continue
+        if is_ancestor(sha, branch):
+            continue
+        subject = subject_of(sha)
+        if subject is None:
+            unresolved.append((entry, f"{sha} is not an ancestor and the object is gone"))
+            continue
+        hits = squash_subject_match(subject, subjects)
+        if len(hits) != 1:
+            unresolved.append(
+                (entry, f"{sha} is not an ancestor; {len(hits)} subject matches — not guessing")
+            )
+            continue
+        changes.append((entry, hits[0][:7]))
+    return changes, unresolved
+
+
+def load_legacy_ids(path: pathlib.Path) -> frozenset[str]:
+    """Entry ids whose squash commit is documented as unrecoverable."""
+    if not path.is_file():
+        return frozenset()
+    ids = set()
+    for line in path.read_text().splitlines():
+        line = line.split("#", 1)[0].strip()
+        if line:
+            ids.add(line)
+    return frozenset(ids)
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--check", action="store_true", help="report only; exit 1 on work to do")
+    ap.add_argument("--no-resolve-head", action="store_true")
+    ap.add_argument("--no-repair", action="store_true")
+    ap.add_argument("--branch", default="origin/main")
+    ap.add_argument("--dir", default=str(fork_changes.ENTRIES_DIR))
+    ap.add_argument("--legacy-file", default="docs/fork-changes-legacy-shas.txt")
+    args = ap.parse_args(argv)
+
+    try:
+        entries = fork_changes.load_entries(args.dir)
+    except fork_changes.ManifestError as exc:
+        print(f"✗ {exc}", file=sys.stderr)
         return 2
 
-    original = yaml_path.read_text()
-    lines = original.splitlines(keepends=True)
-    changed = False
-
-    if not args.no_dedup:
-        lines, dropped = dedup_by_id(lines)
-        if dropped:
-            changed = True
-            for slug in dropped:
-                print(f"  dedup: removed duplicate entry id={slug!r}")
+    legacy = load_legacy_ids(pathlib.Path(args.legacy_file))
+    changes: list[tuple[dict, str]] = []
+    unresolved: list[tuple[dict, str]] = []
 
     if not args.no_resolve_head:
-        issue_to_sha = build_issue_to_sha(args.branch, args.depth)
-        lines, resolved = resolve_head_placeholders(lines, issue_to_sha, dry_run=args.check)
-        if resolved:
-            changed = True
-            for sha, issue in resolved:
-                print(f"  resolved: commit:HEAD → {sha} (matched #{issue})")
+        # Looked up on the module at call time (not bound as a default)
+        # so a test can substitute it and never touch the network.
+        c, u = resolve_head_entries(entries, fetch=gh_merge_commit_sha)
+        changes += c
+        unresolved += u
 
-    new_text = "".join(lines)
+    if not args.no_repair:
+        c, u = repair_dangling(entries, args.branch, legacy_ids=legacy)
+        changes += c
+        unresolved += u
+
+    for entry, sha in changes:
+        old = entry.get("commit")
+        print(f"  {entry['id']}: commit {old} → {sha}")
+    for entry, why in unresolved:
+        print(f"  ! {entry['id']}: {why}", file=sys.stderr)
+
     if args.check:
-        if new_text != original:
-            print("✗ docs/fork-changes.yaml would change — run without --check to apply")
+        if changes or unresolved:
+            print(
+                f"✗ {len(changes)} entry sha(s) to resolve, {len(unresolved)} unresolved",
+                file=sys.stderr,
+            )
             return 1
-        print("✦ docs/fork-changes.yaml is clean")
+        print("✦ fork-change entry shas are clean")
         return 0
 
-    if changed:
-        yaml_path.write_text(new_text)
-        print("✦ docs/fork-changes.yaml updated")
+    for entry, sha in changes:
+        path = pathlib.Path(entry["_path"])
+        payload = {k: v for k, v in entry.items() if k != "_path"}
+        payload["commit"] = sha
+        path.write_text(fork_changes.dump_entry(payload))
+
+    if changes:
+        print(f"✦ resolved {len(changes)} entry sha(s) — re-run the renderers")
     else:
-        print("✦ docs/fork-changes.yaml is clean")
-    return 0
+        print("✦ fork-change entry shas are clean")
+    return 1 if unresolved else 0
 
 
 if __name__ == "__main__":
