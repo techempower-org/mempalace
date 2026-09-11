@@ -151,6 +151,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Performance
 
 
+- **Batch tunnel persistence — a 2,000-tunnel rebuild goes from 37.9 s to 0.08 s** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  ``create_tunnel`` did a full ``_load_tunnels`` **and** a full atomic
+  ``_save_tunnels`` on every call, and it is called from inside two loops —
+  the per-entity loop in ``entity_tunnels_for_wing`` and the per-wing loop in
+  ``compute_topic_tunnels``. N tunnels therefore cost N loads and N rewrites,
+  with the per-tunnel cost rising linearly with what was already on disk.
+  Measured on a throwaway palace: 100 tunnels 0.61 s, 500 3.97 s, 1,000
+  11.54 s, 2,000 **37.87 s** — O(n²), extrapolating to ~16 min at 10K tunnels,
+  which is the 29-minute mine reported on #474.
+
+  The file was **837 KB at 2,000 tunnels**. This was never a big-file problem,
+  and the 993 MB ``hallways.json`` named in that issue is a red herring for
+  this cost: a 900K-record/396 MB hallways file parses in 3.1 s and writes in
+  8.4 s, about 37 s per mine at production size.
+
+  ``create_tunnels`` does one load and one save for a whole batch; the same
+  benchmark now completes 2,000 tunnels in **0.08 s**, and the curve is linear
+  — each block costs in proportion to its own size rather than to what is
+  already stored. ``create_tunnel`` is public API with callers outside those
+  loops, so its per-call semantics are deliberately unchanged: it is now a
+  one-element batch, and a control in the same run shows 500 one-at-a-time
+  calls still costing 3.77 s (was 3.97 s).
+
+  Two smaller per-call costs go with it. The dedupe was a linear rescan of the
+  whole tunnel list per call — reusing it inside a batch would have traded one
+  quadratic term for another, so it is an O(1) id index built once — and
+  ``kind="explicit"`` room validation opened a collection per call, now once
+  per batch and **before** the lock, so a rejected batch cannot half-write.
+  Undirected identity, create-or-refresh (``created_at`` kept,
+  ``updated_at`` stamped), L7 dynamics preservation and deterministic
+  ordering all hold inside a batch, pinned by an equivalence test that runs the
+  same specs through both routes into separate palaces and requires identical
+  files.
+
+  *Tests:* 10 (test_palace_graph_batch_tunnels)
+  *Files:* `mempalace/palace_graph.py`
+
+
 - **Hallways move from a 1 GB monolithic JSON file to an opt-in postgres table** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
   ``hallways.json`` on the production palace host grows fast enough that
   any single figure is stale on arrival: 479 MB early in the evening,
