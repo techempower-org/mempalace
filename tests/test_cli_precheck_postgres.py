@@ -199,7 +199,10 @@ class TestPruneOnServerBackend:
     def test_local_chroma_palace_still_refused_when_absent(self, tmp_path, capsys):
         from mempalace import cli
 
-        cli.cmd_prune(_prune_args(palace=str(tmp_path / "nonexistent"), stale_days=1))
+        # Exit 2 per cli.py's contract (#485); it used to return 0.
+        with pytest.raises(SystemExit) as exc:
+            cli.cmd_prune(_prune_args(palace=str(tmp_path / "nonexistent"), stale_days=1))
+        assert exc.value.code == 2
         assert "No palace found" in capsys.readouterr().out
 
     def test_prune_names_the_target_it_scanned(self, tmp_path, capsys):
@@ -215,29 +218,39 @@ class TestPruneOnServerBackend:
         assert str(palace) in out
         assert "chroma" in out
 
-    def test_prune_json_reports_the_target(self, tmp_path, capsys):
+    def test_prune_json_reports_the_target(self, tmp_path, monkeypatch, capsys):
+        """The SUCCESS payload names the target.
+
+        This test used to omit the backend env, so it resolved chroma against
+        a sidecar-only directory and asserted on the REFUSAL payload while
+        claiming to check the success one. It passed for the wrong reason
+        until #485 made that refusal exit 2.
+        """
         from mempalace import cli
 
         palace = _postgres_palace_dir(tmp_path)
+        monkeypatch.setenv("MEMPALACE_BACKEND", "postgres")
         col = _fake_collection(["d1"], [{"filed_at": "2020-01-01T00:00:00+00:00"}])
 
         with patch("mempalace.palace.get_collection", return_value=col):
-            cli.cmd_prune(
-                _prune_args(palace=str(palace), stale_days=1, json=True),
-            )
+            cli.cmd_prune(_prune_args(palace=str(palace), stale_days=1, json=True))
 
         payload = json.loads(capsys.readouterr().out)
         assert payload["palace"] == str(palace)
-        assert "backend" in payload
+        assert payload["backend"] == "postgres"
 
     def test_prune_json_error_path_also_names_the_target(self, tmp_path, capsys):
+        """One refusal envelope for every command that has --json (#485)."""
         from mempalace import cli
 
         missing = tmp_path / "nonexistent"
-        cli.cmd_prune(_prune_args(palace=str(missing), stale_days=1, json=True))
+        with pytest.raises(SystemExit) as exc:
+            cli.cmd_prune(_prune_args(palace=str(missing), stale_days=1, json=True))
 
+        assert exc.value.code == 2
         payload = json.loads(capsys.readouterr().out)
-        assert payload["palace"] == str(missing)
+        assert payload["error"] == "palace_unavailable"
+        assert payload["palace_path"] == str(missing)
         assert "backend" in payload
 
 

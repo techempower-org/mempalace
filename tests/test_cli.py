@@ -141,7 +141,11 @@ def test_cmd_purge_no_palace_found(mock_config_cls, capsys, tmp_path):
     missing = tmp_path / "nonexistent"
     mock_config_cls.return_value.palace_path = str(missing)
     args = _make_purge_args(wing="any", palace=str(missing))
-    cmd_purge(args)
+    # Exit 2 per cli.py's documented contract (#485): "palace unavailable".
+    # It used to return 0 — a refusal reported as a success.
+    with pytest.raises(SystemExit) as exc:
+        cmd_purge(args)
+    assert exc.value.code == 2
     out = capsys.readouterr().out
     assert "No palace found" in out
 

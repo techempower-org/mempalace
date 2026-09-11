@@ -4654,14 +4654,7 @@ def cmd_purge(args):
     resolved target is printed on every outcome, including the zero-match
     one, which exits 1 rather than 0.
     """
-    from .backends import detect_backend_for_path
-    from .migrate import confirm_destructive_action, contains_palace_database
-    from .palace import (
-        BackendMismatchError,
-        backend_stores_data_locally,
-        get_collection,
-        resolve_backend_name,
-    )
+    from .migrate import confirm_destructive_action
 
     source_file = getattr(args, "source_file", None)
     where, label = _purge_where(args.wing, args.room, source_file)
@@ -4683,52 +4676,16 @@ def cmd_purge(args):
         os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     )
 
-    try:
-        backend_name = resolve_backend_name(palace_path, explicit=_backend_arg(args))
-    except BackendMismatchError as exc:
-        print(f"\n  Backend mismatch at {palace_path}: {exc}")
-        print("  Select the matching backend or use a fresh palace directory.")
-        sys.exit(2)
-    except KeyError as exc:
-        print(f"\n  Unknown backend selected for {palace_path}: {exc.args[0] if exc.args else exc}")
-        print("  Set --backend or MEMPALACE_BACKEND to a registered backend.")
-        sys.exit(2)
-
-    stores_locally = backend_stores_data_locally(backend_name)
-    if stores_locally:
-        # ``contains_palace_database`` is chroma-specific (chroma.sqlite3);
-        # the artifact probe covers the other local backends, which this
-        # command used to reject outright for not being chroma.
-        has_db = os.path.isdir(palace_path) and (
-            contains_palace_database(palace_path)
-            or detect_backend_for_path(palace_path) is not None
-        )
-        if not has_db:
-            _print_retired_local_palace_or_default(palace_path)
-            return
-        target = f"{palace_path} ({backend_name})"
-    else:
-        target = f"{backend_name} backend (palace {palace_path})"
-
-    try:
-        col = get_collection(
-            palace_path,
-            collection_name="mempalace_drawers",
-            create=False,
-            backend=backend_name,
-        )
-    except Exception as e:
-        # Exit non-zero: an unreachable backend is a purge that did not
-        # happen, and #418 is precisely about those looking like success.
-        print(f"\n  Error reading palace: {e}")
-        sys.exit(1)
+    col, _backend_name, target = _open_drawers_or_refuse(
+        palace_path, explicit_backend=_backend_arg(args)
+    )
 
     # Probe match count via a `where=`-filtered get with no payload.
     try:
         matched = col.get(where=where, include=[])
     except Exception as e:
         print(f"\n  Error querying drawers: {e}")
-        sys.exit(1)
+        sys.exit(2)
 
     match_ids = matched.get("ids") if isinstance(matched, dict) else getattr(matched, "ids", [])
     match_ids = match_ids or []
@@ -4749,7 +4706,7 @@ def cmd_purge(args):
         col.delete(where=where)
     except Exception as e:
         print(f"\n  Delete failed: {e}\n")
-        sys.exit(1)
+        sys.exit(2)
 
     remaining = col.count()
     print(f"\n  Purged {match_count:,} drawers from {target}. Remaining: {remaining:,}\n")
@@ -4772,14 +4729,6 @@ def cmd_prune(args):
     """
     from datetime import datetime, timezone
 
-    from .backends import detect_backend_for_path
-    from .migrate import contains_palace_database
-    from .palace import (
-        BackendMismatchError,
-        backend_stores_data_locally,
-        get_collection,
-        resolve_backend_name,
-    )
     from .recency import age_days
 
     want_json = getattr(args, "json", False)
@@ -4799,44 +4748,6 @@ def cmd_prune(args):
     # service-backed palace has no database file in its directory by design,
     # and prune's copy of the precheck refused every Postgres palace with
     # exit 0 — the same defect #418 removed from purge and sync.
-    try:
-        backend_name = resolve_backend_name(palace_path, explicit=_backend_arg(args))
-    except BackendMismatchError as exc:
-        msg = f"backend mismatch at {palace_path}: {exc}"
-        print(json.dumps({"error": msg, "palace": palace_path}) if want_json else f"\n  {msg}")
-        sys.exit(2)
-    except KeyError as exc:
-        msg = f"unknown backend for {palace_path}: {exc.args[0] if exc.args else exc}"
-        print(json.dumps({"error": msg, "palace": palace_path}) if want_json else f"\n  {msg}")
-        sys.exit(2)
-
-    stores_locally = backend_stores_data_locally(backend_name)
-    if stores_locally:
-        # ``contains_palace_database`` is chroma-specific; the artifact probe
-        # covers the other local backends, which prune used to reject for not
-        # being chroma.
-        has_db = os.path.isdir(palace_path) and (
-            contains_palace_database(palace_path)
-            or detect_backend_for_path(palace_path) is not None
-        )
-        if not has_db:
-            if want_json:
-                print(
-                    json.dumps(
-                        {
-                            "error": "no palace database",
-                            "palace": palace_path,
-                            "backend": backend_name,
-                        }
-                    )
-                )
-            else:
-                _print_retired_local_palace_or_default(palace_path)
-            return
-        target = f"{palace_path} ({backend_name})"
-    else:
-        target = f"{backend_name} backend (palace {palace_path})"
-
     # Optional wing/room scope — without it, prune spans the whole palace.
     clauses = []
     if args.wing:
@@ -4847,20 +4758,9 @@ def cmd_prune(args):
     if clauses:
         where = clauses[0] if len(clauses) == 1 else {"$and": clauses}
 
-    try:
-        col = get_collection(
-            palace_path,
-            collection_name="mempalace_drawers",
-            create=False,
-            backend=backend_name,
-        )
-    except Exception as e:
-        print(
-            json.dumps({"error": str(e), "palace": palace_path, "backend": backend_name})
-            if want_json
-            else f"\n  Error reading palace: {e}"
-        )
-        sys.exit(1)
+    col, backend_name, target = _open_drawers_or_refuse(
+        palace_path, explicit_backend=_backend_arg(args), want_json=want_json
+    )
 
     # Pull ids + metadata for the scope; age is decided in Python.
     try:
@@ -5568,26 +5468,34 @@ def _emit_local_status_json(palace_path: str) -> None:
     )
 
 
-def _mined_open_drawers_or_exit(palace_path: str, *, explicit_backend, want_json: bool):
-    """Resolve the backend, gate the local precheck on it, open the drawers.
+def _open_drawers_or_refuse(
+    palace_path: str, *, explicit_backend=None, want_json: bool = False
+) -> tuple:
+    """Resolve the backend, gate the local precheck, open the drawers.
 
-    Exits 2 on every refusal rather than returning, on BOTH output paths:
-    the JSON path always did, and one condition must not hand a text caller
-    and a JSON caller different exit codes. ``mined``'s text path used to
-    print "No palace found" and return 0 — the "a refusal looks like a
-    success" shape #418 removed from purge and sync.
+    Returns ``(collection, backend_name, target_label)``. On any refusal it
+    prints ONE message and exits; it never returns a half-answer.
 
-    Resolution precedes the directory test (#459): a service-backed palace
-    has no local database file by design, so the test is not a question
-    about whether it exists. ``mined`` was the last ``cmd_*`` still carrying
-    its own copy; on a daemon-strict host its daemon route hides this path,
-    so the bug only surfaced with ``--palace`` or daemon-strict off.
+    One sequence for ``purge``, ``prune`` and ``mined``, which each grew
+    their own copy across #418 and #459 (#485). The policy was identical
+    every time; only the messages and the exit codes drifted, which is what
+    made the same condition report differently depending on which command
+    you happened to run.
 
-    Named for ``mined`` deliberately. ``cmd_purge`` and ``cmd_prune`` hold
-    their own near-identical resolve-gate-open sequences with different
-    message shapes; unifying all three is worth doing and is not worth
-    smuggling into a review-stage PR, so it is a follow-up rather than a
-    general-looking helper with one caller that a fourth command could miss.
+    **The exit codes are not a taste call.** ``cli.py`` has carried a
+    contract since #44 — 0 success, 1 no results, 2 palace unavailable, 64
+    bad args — and every refusal below is "palace unavailable", so every one
+    is 2. Two of the three commands were exiting **0** on a missing
+    database: a refusal reported as a success, which is the defect #418 and
+    #459 removed from the prose, still alive in the exit status.
+
+    ``1`` keeps meaning exactly what the contract says — the operation ran
+    and selected nothing. That is ``purge``'s zero-match case and nothing in
+    here.
+
+    Resolution precedes the directory test: a service-backed palace has no
+    local database file by design, so that test is not a question about
+    whether the palace exists (#459).
     """
     from .backends import detect_backend_for_path
     from .migrate import contains_palace_database
@@ -5598,17 +5506,14 @@ def _mined_open_drawers_or_exit(palace_path: str, *, explicit_backend, want_json
         resolve_backend_name,
     )
 
-    def _refuse(hint: str, *, backend_name=None, palace_state: bool = False) -> None:
+    def _refuse(hint, *, backend_name=None, palace_state=False):
         """Emit one refusal and exit 2.
 
-        ``palace_state`` selects the renderer for the text path, and it is a
-        separate argument on purpose: an earlier draft inferred it from
-        whether ``backend_name`` was known, so a real connection error —
-        which knows its backend — printed "No palace found at <dir>" and hid
-        the actual reason. Caught by running the CLI against a Postgres
-        palace whose DSN pointed at a closed port; the unit tests missed it
-        because they assert on the JSON payload, where the hint is carried
-        either way.
+        ``palace_state`` picks the renderer and is a separate argument on
+        purpose: an earlier draft inferred it from whether the backend was
+        known, so a connection error — which knows its backend — printed "No
+        palace found at <dir>" and hid the real cause. A refusal naming the
+        wrong reason is this same defect family in miniature.
         """
         if want_json:
             payload = {
@@ -5627,11 +5532,16 @@ def _mined_open_drawers_or_exit(palace_path: str, *, explicit_backend, want_json
 
     try:
         backend_name = resolve_backend_name(palace_path, explicit=explicit_backend)
-    except (BackendMismatchError, KeyError) as exc:
+    except BackendMismatchError as exc:
+        _refuse(f"Backend mismatch at {palace_path}: {exc}")
+    except KeyError as exc:
         detail = exc.args[0] if exc.args else exc
-        _refuse(f"Could not resolve backend for {palace_path}: {detail}")
+        _refuse(f"Unknown backend selected for {palace_path}: {detail}")
 
     if backend_stores_data_locally(backend_name):
+        # ``contains_palace_database`` is chroma-specific (chroma.sqlite3);
+        # the artifact probe covers the other local backends, which these
+        # commands used to reject for not being chroma.
         has_db = os.path.isdir(palace_path) and (
             contains_palace_database(palace_path)
             or detect_backend_for_path(palace_path) is not None
@@ -5642,16 +5552,20 @@ def _mined_open_drawers_or_exit(palace_path: str, *, explicit_backend, want_json
                 backend_name=backend_name,
                 palace_state=True,
             )
+        target = f"{palace_path} ({backend_name})"
+    else:
+        target = f"{backend_name} backend (palace {palace_path})"
 
     try:
-        return get_collection(
+        col = get_collection(
             palace_path,
             collection_name="mempalace_drawers",
             create=False,
             backend=backend_name,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — backend exceptions vary by backend
         _refuse(f"Error reading palace: {e}", backend_name=backend_name)
+    return col, backend_name, target
 
 
 def cmd_mined(args):
@@ -5693,7 +5607,7 @@ def cmd_mined(args):
     palace_path = os.path.abspath(
         os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     )
-    col = _mined_open_drawers_or_exit(
+    col, _backend_name, _target = _open_drawers_or_refuse(
         palace_path, explicit_backend=_backend_arg(args), want_json=want_json_early
     )
 

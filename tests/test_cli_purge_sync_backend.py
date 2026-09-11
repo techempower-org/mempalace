@@ -185,8 +185,12 @@ class TestPurgeOnServerBackend:
 
     def test_local_chroma_palace_still_refuses_a_missing_database(self, tmp_path, capsys):
         missing = tmp_path / "nonexistent"
-        with patch("mempalace.cli._daemon_strict", return_value=False):
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=False),
+            pytest.raises(SystemExit) as exc,
+        ):
             mempalace_cli_purge(_purge_args(wing="any", palace=str(missing)))
+        assert exc.value.code == 2, "palace unavailable, per cli.py's contract (#485)"
         assert "No palace found" in capsys.readouterr().out
 
     def test_purge_routes_through_the_resolved_backend_not_hardcoded_chroma(
@@ -283,7 +287,7 @@ class TestPurgeFailuresAreNotSuccesses:
         ):
             mempalace_cli_purge(_purge_args(wing="w", palace=str(palace)))
 
-        assert exc.value.code == 1
+        assert exc.value.code == 2
         assert "connection refused" in capsys.readouterr().out
 
     def test_query_failure_exits_non_zero(self, tmp_path):
@@ -297,7 +301,7 @@ class TestPurgeFailuresAreNotSuccesses:
         ):
             mempalace_cli_purge(_purge_args(wing="w", palace=str(palace)))
 
-        assert exc.value.code == 1
+        assert exc.value.code == 2
 
     def test_delete_failure_exits_non_zero(self, tmp_path):
         palace = self._chroma_palace(tmp_path)
@@ -310,7 +314,7 @@ class TestPurgeFailuresAreNotSuccesses:
         ):
             mempalace_cli_purge(_purge_args(wing="w", palace=str(palace)))
 
-        assert exc.value.code == 1
+        assert exc.value.code == 2
 
     def test_backend_mismatch_is_a_usage_error(self, tmp_path, capsys):
         from mempalace.palace import BackendMismatchError
