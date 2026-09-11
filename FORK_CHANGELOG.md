@@ -4,7 +4,7 @@ Fork-ahead changes that aren't yet in upstream `MemPalace/mempalace`.
 Upstream's release history lives in [`CHANGELOG.md`](CHANGELOG.md);
 this file is the supplement.
 
-> **This file is generated.** Edit `docs/fork-changes.yaml` and run
+> **This file is generated.** Add or edit a file in `docs/fork-changes/` and run
 > `scripts/render-docs.py` to regenerate. Hand-edits will be
 > overwritten on the next render.
 

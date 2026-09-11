@@ -59,7 +59,7 @@ if [ -z "$pytest_bin" ] || [ ! -x "$pytest_bin" ]; then
     exit 2
 fi
 
-# ── 1. fork-changes.yaml maintenance (HEAD resolution + de-dup, #316) ──
+# ── 1. fork-changes entry maintenance (resolve commit: HEAD, #476) ─────
 step "1/6  docs/fork-changes/ maintenance"
 python scripts/maintain-fork-changes.py || fail "maintain-fork-changes.py failed"
 ok "fork-changes entries clean"

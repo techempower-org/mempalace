@@ -22,7 +22,7 @@ This fork carries the integration surface ahead of upstream because the canonica
 | [#297](https://github.com/MemPalace/mempalace/pull/297) | Milofax's auto-plugin | OPEN — codebase-mining + protocol injection design; not what this fork uses |
 | [#1524](https://github.com/MemPalace/mempalace/pull/1524) | geco's npm-plugin integration guide | OPEN — uses opinionated 5-wing taxonomy that doesn't fit project-keyed palaces |
 
-The cherry-picks land #1484 + #1567 onto this fork's `main` so the fork ships with OpenCode support immediately. When upstream merges happen, the cherry-picked commits become no-ops and the fork-changes.yaml entries can be retired.
+The cherry-picks land #1484 + #1567 onto this fork's `main` so the fork ships with OpenCode support immediately. When upstream merges happen, the cherry-picked commits become no-ops and the fork-changes entries can be retired.
 
 ## Setup recipe
 
@@ -254,5 +254,5 @@ If `mempalace_status` (via MCP) and `mempalace status` (via CLI) disagree on dra
 ## Coordination notes
 
 - Upstream PR #1484 carries co-authored credit to JakobSachs for the original DB-schema spadework on PR #23.
-- This fork-ahead carries 5 commits from #1484 + 2 commits from #1567 (see `docs/fork-changes.yaml` `opencode-adapter-cherry-pick` and `opencode-mcp-config-cherry-pick` entries).
+- This fork-ahead carries 5 commits from #1484 + 2 commits from #1567 (see the `opencode-adapter-cherry-pick` and `opencode-mcp-config-cherry-pick` entries under `docs/fork-changes/`).
 - option-K's plugin v1.2.1 has three open issues filed by JP — [#1](https://github.com/option-K/opencode-plugin-mempalace/issues/1) (daemon-routing), [#4](https://github.com/option-K/opencode-plugin-mempalace/issues/4) (`chat.message` vs `message.updated`), and [#5](https://github.com/option-K/opencode-plugin-mempalace/issues/5) (remote-daemon path mismatch). #1 and #4 have patches in `examples/opencode/`; #5 is architectural — the bundled `examples/opencode/live-capture/` plugin sidesteps it by reading OpenCode's SQLite DB client-side and POSTing drawers via the daemon's `/silent-save` endpoint.

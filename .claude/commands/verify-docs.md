@@ -19,7 +19,7 @@ Run all checks; do not stop on first failure. Collect results into a summary tab
 scripts/check-docs.sh
 ```
 
-That script covers the deterministic checks: test count, fork commit hashes, FORK_CHANGELOG.md ↔ docs/fork-changes.yaml render parity, and upstream PR state drift. Capture its exit code and per-check output.
+That script covers the deterministic checks: test count, fork commit hashes, FORK_CHANGELOG.md ↔ docs/fork-changes/ render parity, and upstream PR state drift. Capture its exit code and per-check output.
 
 ### 2. Version-string drift
 
@@ -87,15 +87,16 @@ Compare against any `\b\d{2,3}K\+? drawers?\b` or `\b\d{5,7} drawers?\b` mention
 
 If the daemon isn't reachable, warn and skip — don't fail.
 
-### 9. `docs/fork-changes.yaml` PR-state cross-check
+### 9. `docs/fork-changes/` PR-state cross-check
 
-For each `pr:` field in `docs/fork-changes.yaml` that has a `pr_state:`, query the actual upstream state and flag mismatches. The deterministic check in step 4 covers `#NNNN` in prose; this step covers the structured YAML which the renderer trusts.
+For each `pr:` field that has a `pr_state:`, query the actual upstream state and flag mismatches. `pr:` is the **UPSTREAM** PR number (`MemPalace/mempalace`); `fork_pr:` is this repo's and is not checked here. The deterministic check in step 4 covers `#NNNN` in prose; this step covers the structured entries the renderer trusts.
 
 ```bash
 python3 -c "
 import yaml, subprocess, sys
-data = yaml.safe_load(open('docs/fork-changes.yaml'))
-for e in data.get('entries', []):
+sys.path.insert(0, 'scripts')
+import fork_changes
+for e in fork_changes.load_entries():
     pr = e.get('pr')
     claimed = e.get('pr_state')
     if not pr or not claimed: continue
@@ -124,7 +125,7 @@ After running all checks, emit a single summary table the operator can scan in 5
 │ 6. URLs reachable                    │ WARN   │ 2 timed out     │
 │ 7. test count (docs/)                │ PASS   │                 │
 │ 8. drawer count                      │ SKIP   │ daemon offline  │
-│ 9. fork-changes.yaml pr_state        │ PASS   │                 │
+│ 9. fork-changes pr_state             │ PASS   │                 │
 └──────────────────────────────────────┴────────┴─────────────────┘
 ```
 

@@ -121,11 +121,19 @@ Always run `python -m pytest tests/ -x -q` after changes. Benchmark and stress t
 The fork-ahead narrative was previously hand-maintained in four places
 (README's fork-change-queue table, this file's row inventory,
 `FORK_CHANGELOG.md`, and `scratch/promises.md`). Drift was inevitable.
-As of 2026-04-26 the **canonical source** is `docs/fork-changes/`
-(one file per entry since #473);
-render targets are generated. The inline row inventory in this file was
-retired 2026-05-11 — see [Fork-ahead state](#fork-ahead-state) above
-for current pointers.
+As of 2026-04-26 the **canonical source** is a manifest and every render
+target is generated; the inline row inventory here was retired
+2026-05-11 — see [Fork-ahead state](#fork-ahead-state) for current
+pointers.
+
+Since #473 that manifest is a **directory**, `docs/fork-changes/`, with
+**one file per entry**. It was a single `docs/fork-changes.yaml` whose
+`entries:` list every PR inserted at the top of, which made every PR in
+a wave conflict with every other one on that file and the four artefacts
+rendered from it — measured across a 10-PR wave with *zero* source
+conflicts. `docs/fork-changes/README.md` documents the schema, the
+ordering rule and why it is not a date sort; `scripts/fork_changes.py`
+is the loader every consumer goes through.
 
 ### Workflow for new fork-ahead changes
 
@@ -157,7 +165,7 @@ when present, otherwise by matching the commit subject.
 | Target | Status |
 |--------|--------|
 | `FORK_CHANGELOG.md` | rendered from YAML (today) |
-| README fork-change-queue table | hand-maintained for now |
+| README fork-change-queue table | rendered from `docs/fork-changes/` (unnumbered since #473) |
 | `scratch/promises.md` (in-repo) | hand-maintained, kept short — durable items move to `techempower-org/mempalace` issues |
 | techempower-org/mempalace issues | hand-filed as work surfaces |
 
@@ -170,9 +178,19 @@ renderers land.
 Two CI workflows guard doc quality. `check-docs.yml` runs the semantic
 checks in `scripts/check-docs.sh`:
 
-1. README test count vs `pytest --collect-only`
-2. every fork commit hash referenced in docs resolves via `git cat-file -e`
-3. `FORK_CHANGELOG.md` matches the YAML (re-render idempotent)
+1. the test count, **derived** from `pytest --collect-only` and reported.
+   There is no committed literal to compare against: a number in README
+   and CLAUDE.md meant every test-adding PR edited the same two lines
+   (#473). A literal that creeps back is warned about, not failed.
+2. every fork commit hash referenced in prose resolves via
+   `git cat-file -e`
+2b. every **entry's** `commit:` is an *ancestor* of HEAD (#472).
+   Resolving is not enough — a rebase or squash rewrites the commit, the
+   entry keeps the old sha, and `cat-file -e` still passes on the
+   dangling object. Entries that genuinely cannot be resolved are listed
+   as `<id> <sha>` pairs in `docs/fork-changes-legacy-shas.txt` and
+   skipped only for that exact pair.
+3. `FORK_CHANGELOG.md` matches `docs/fork-changes/` (re-render idempotent)
 4. every `#NNNN` reference has an upstream state matching the doc's claim
 
 Run `scripts/check-docs.sh` before committing any doc change. Exit

@@ -191,7 +191,7 @@ The complete current-state map of code divergence from `upstream/develop` (as of
 | **Embedding** | `adaptmem_ft` SentenceTransformer encoder option, ORT intra-op thread cap + lazy-download fix for the capped session | Fork-only (thread-cap issue upstream #1068) |
 | **Daemon routing** | `auto_wake.py` (WoL for a sleeping palace host), `PALACE_DAEMON_URL` strict routing in CLI/hooks/MCP with startup announce, daemon-strict skip of local probes | Fork-specific (assumes [palace-daemon](https://github.com/techempower-org/palace-daemon)); portable pieces could upstream |
 | **Hooks** | Silent deterministic saves (`hook_silent_save`), PostCompact + SessionStart compact-recovery wiring, ms-scale timeouts, `hooks/palace-auto-query.sh` | Fork-only; upstream moved toward non-blocking saves in v3.3.0 — direction already aligned |
-| **Docs/CI machinery** | `docs/fork-changes.yaml` + renderers, `check-docs.sh` drift gate, lint-docs workflow, ARCHITECTURE/ECOSYSTEM/BIBLIOGRAPHY, benchmark corpora + eval scripts (fusion A/B, rerank, chunk ablation) | Fork-specific (eval scripts upstreamable) |
+| **Docs/CI machinery** | `docs/fork-changes/` + renderers, `check-docs.sh` drift gate, lint-docs workflow, ARCHITECTURE/ECOSYSTEM/BIBLIOGRAPHY, benchmark corpora + eval scripts (fusion A/B, rerank, chunk ablation) | Fork-specific (eval scripts upstreamable) |
 
 Not divergence: everything else — the fork tracks upstream verbatim and re-syncs regularly (last: 213 commits, [#369](https://github.com/techempower-org/mempalace/pull/369)).
 
@@ -272,7 +272,7 @@ uv run mempalace status                   # palace health
 uv run ruff check . && uv run ruff format --check .
 
 # Doc maintenance (canonical YAML + renderer, see CLAUDE.md)
-./scripts/render-docs.py                  # regenerate FORK_CHANGELOG from docs/fork-changes.yaml
+./scripts/render-docs.py                  # regenerate FORK_CHANGELOG from docs/fork-changes/
 ./scripts/check-docs.sh                   # lint test count, fork hashes, render parity, upstream PR states
 
 # Deploy fork main → palace-daemon on familiar.jphe.in:8085
@@ -281,7 +281,7 @@ uv run ruff check . && uv run ruff format --check .
 
 ## Fork change inventory
 
-The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-changes.yaml`](docs/fork-changes.yaml); [`FORK_CHANGELOG.md`](FORK_CHANGELOG.md) is regenerated from it and contains the complete open/pending table. Run `./scripts/check-docs.sh` to verify everything resolves to live state.
+The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-changes/`](docs/fork-changes/README.md) — one file per entry; [`FORK_CHANGELOG.md`](FORK_CHANGELOG.md) is regenerated from it and contains the complete open/pending table. Run `./scripts/check-docs.sh` to verify everything resolves to live state.
 
 ### Fork-change queue
 

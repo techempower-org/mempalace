@@ -79,7 +79,7 @@ Complete index of fork documentation and external references.
 - [**format-coverage.md**](format-coverage.md) — Format coverage for `mempalace mine --mode extract` (shipped in 3.3.6).
 - [**virtual-line-numbering.md**](virtual-line-numbering.md) — Virtual line numbering for drawers (proposed).
 - [**mempalace-config.yaml.example**](mempalace-config.yaml.example) — Example mining config.
-- [**fork-changes.yaml**](fork-changes.yaml) — Canonical source for fork-ahead changes (renders to FORK_CHANGELOG.md).
+- [**fork-changes/**](fork-changes/README.md) — Canonical source for fork-ahead changes, one file per entry (renders to FORK_CHANGELOG.md).
 
 ### Benchmarks
 

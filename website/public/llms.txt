@@ -9,7 +9,7 @@
 - [Ecosystem](https://github.com/techempower-org/mempalace/blob/main/docs/ECOSYSTEM.md): Peer builds (Familiar, CampaignGenerator, Kent, adaptmem), companion tools (palace-daemon, engram), evaluation frameworks (SME), adjacent memory systems.
 - [Bibliography](https://github.com/techempower-org/mempalace/blob/main/docs/BIBLIOGRAPHY.md): Research grounding for the fork's design choices.
 - [CLAUDE.md](https://github.com/techempower-org/mempalace/blob/main/CLAUDE.md): The mission, design principles, and contribution guidelines.
-- [Fork changelog](https://github.com/techempower-org/mempalace/blob/main/FORK_CHANGELOG.md): Every fork-ahead change, rendered from `docs/fork-changes.yaml`.
+- [Fork changelog](https://github.com/techempower-org/mempalace/blob/main/FORK_CHANGELOG.md): Every fork-ahead change, rendered from `docs/fork-changes/`.
 
 ## Optional
 
