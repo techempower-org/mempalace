@@ -215,6 +215,19 @@ def normalize_conversations(filepath: str, verbatim: bool = False) -> list:
     always normalize to one conversation, so this returns a one-element
     list for those — identical dedup granularity to before.
     """
+    # LOCAL PATCH (normalize_streaming): stream .jsonl before the whole-file read.
+    # _try_normalize_json_split tries claude_code_jsonl FIRST, so when this
+    # succeeds it returns exactly what the eager path would have returned --
+    # and when it returns None we fall through to that path untouched.
+    if Path(filepath).suffix.lower() == ".jsonl" and not os.path.islink(filepath):
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="replace") as _fh:
+                _streamed = _try_claude_code_jsonl_lines(_fh, verbatim=verbatim)
+        except OSError:
+            _streamed = None
+        if _streamed:
+            return [_streamed]
+
     content = _read_transcript_file(filepath)
 
     if not content.strip():
@@ -294,7 +307,20 @@ def _try_normalize_json_split(content: str, verbatim: bool = False) -> Optional[
 
 def _try_claude_code_jsonl(content: str, verbatim: bool = False) -> Optional[str]:
     """Claude Code JSONL sessions."""
-    lines = [line.strip() for line in content.strip().split("\n") if line.strip()]
+    # LOCAL PATCH (normalize_streaming): delegate to the line-iterator form so the
+    # streaming caller and the string caller run byte-identical logic.
+    return _try_claude_code_jsonl_lines(content.strip().split("\n"), verbatim=verbatim)
+
+
+def _try_claude_code_jsonl_lines(line_iter, verbatim: bool = False) -> Optional[str]:
+    """Claude Code JSONL sessions, from any iterable of lines.
+
+    LOCAL PATCH (normalize_streaming): this is the original body of
+    _try_claude_code_jsonl, unchanged except that it consumes an iterator
+    rather than a pre-split string. Feeding it an open file avoids holding
+    the whole transcript (and a second split copy) in memory.
+    """
+    lines = (line.strip() for line in line_iter if line.strip())
     messages = []
     tool_use_map = {}  # tool_use_id → tool_name
 
