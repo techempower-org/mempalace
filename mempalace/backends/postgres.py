@@ -242,6 +242,137 @@ def _scrub_unstorable(
             meta.update(scrubbed_meta)
 
 
+def _is_connection_error(exc: BaseException) -> bool:
+    """True when the socket is gone, false when the statement was merely bad.
+
+    Only connection errors are worth retrying. A statement error means the
+    caller's query was wrong or too slow and the connection is perfectly
+    healthy; re-running it would mask a real fault, cost a second failure and
+    churn a good connection for nothing.
+
+    This classification does *not* establish that a retry is safe — see
+    :class:`_RetryingCursor` for the invariant that does. A connection error
+    does not imply the statement never ran.
+
+    Classified the same way ``knowledge_graph_age`` does (#405) — by
+    ``OperationalError``/``InterfaceError`` class, with a message fallback for
+    the wrappers that do not inherit from either. ``AdminShutdown``, which is
+    what a ``pg_terminate_backend`` or a smart shutdown actually raises,
+    subclasses ``OperationalError``.
+    """
+    try:
+        psycopg2, _sql = _load_psycopg2()
+    except Exception:  # pragma: no cover - the driver is a hard dependency here
+        psycopg2 = None
+    if psycopg2 is not None:
+        conn_errors = tuple(
+            candidate
+            for candidate in (
+                getattr(psycopg2, name, None) for name in ("OperationalError", "InterfaceError")
+            )
+            if isinstance(candidate, type) and issubclass(candidate, BaseException)
+        )
+        if conn_errors and isinstance(exc, conn_errors):
+            return True
+    message = str(exc)
+    return "connection is closed" in message or "server closed the connection" in message
+
+
+class _RetryingCursor:
+    """A cursor that reconnects once when the cached connection turns out dead.
+
+    psycopg's ``.closed`` is a client-side flag updated only on I/O, so after
+    a server-side disconnect (DB restart, ``pg_terminate_backend``, or the
+    ``idle_session_timeout`` the production palace now sets) it stays ``False``
+    and ``_get_conn()`` hands the dead connection straight back. Measured live
+    2026-08-08::
+
+        closed before:                              False
+        closed immediately after server-side kill:  False | broken: False
+        query after kill raised:                    AdminShutdown
+        closed AFTER failed query:                  True  | broken: True
+
+    So the connection is only *discovered* dead by the statement that fails on
+    it, and every restart cost one raw 500 per cached-connection path —
+    observed on ``count()`` → ``tool_status`` and on ``graph_stats``.
+
+    **Retry safety — read this before routing anything new through**
+    ``_cursor()``.
+
+    A connection error does *not* mean the statement never ran. This
+    connection is ``autocommit``, so each statement commits on its own, and
+    the socket can die after the server committed and before the
+    acknowledgement reaches the client. A retry in that window re-runs a
+    statement that already took effect. Autocommit buys only that there is no
+    half-applied multi-statement transaction to unwind; it says nothing about
+    the ambiguous window. (``knowledge_graph_age`` needs a ``rollback``
+    companion for the opposite reason: its connection is *not* autocommit, so
+    a statement error leaves the transaction aborted.)
+
+    So the retry is safe because of an invariant this class cannot enforce,
+    not because of anything the driver guarantees: **every statement routed
+    through this seam must be idempotent.** Today all of them are —
+
+    - ``_insert_rows`` — ``INSERT ... ON CONFLICT DO UPDATE``/``DO NOTHING``;
+    - ``update`` — ``SET metadata = metadata || %s::jsonb WHERE id = %s``, a
+      fixed point under re-application;
+    - ``delete`` — ``DELETE ... WHERE id IN (...)``, keyed;
+    - ``rename_wing`` — each batch is ``WHERE wing = <from> LIMIT n``, so a
+      re-run simply matches the rows still to move. A lost acknowledgement
+      under-counts the returned ``renamed`` total; it does not leave the
+      rename unfinished, because the loop keeps going while rows remain;
+    - ``count``, ``_estimated_count``, ``_table_exists``, ``get``,
+      ``_query_one`` — read-only;
+    - ``_detect_extensions`` — ``CREATE EXTENSION IF NOT EXISTS``.
+
+    The one exception is the DDL in ``_create_table``: those are bare
+    ``CREATE TABLE``/``CREATE INDEX``, guarded by a preceding
+    ``_table_exists()`` rather than by ``IF NOT EXISTS``. A disconnect in the
+    ambiguous window during *first* creation therefore fails loudly on the
+    retry with "relation already exists" instead of silently doing the wrong
+    thing — acceptable, and the next call succeeds because the guard now sees
+    the table.
+
+    Adding a non-idempotent statement here (a bare ``INSERT``, a
+    ``SET x = x + 1``, anything whose second application differs from its
+    first) would make this seam unsafe. Give it a fresh connection instead.
+
+    Reconnecting through ``_get_conn()`` rather than by hand also re-applies
+    the session GUCs — losing ``hnsw.iterative_scan`` (#446) on a silently
+    replaced connection would turn wing-scoped search back into zero rows.
+    """
+
+    def __init__(self, collection: "PostgresCollection"):
+        self._collection = collection
+        self._cur = collection._get_conn().cursor()
+
+    def execute(self, query, params=None):
+        try:
+            return self._run(query, params)
+        except Exception as exc:  # noqa: BLE001 — classified, then re-raised or retried
+            if not _is_connection_error(exc):
+                raise
+            logger.info(
+                "postgres: cached connection was dead (%s); reconnecting once",
+                str(exc).splitlines()[0][:120],
+            )
+            self._collection._drop_conn()
+            self._cur = self._collection._get_conn().cursor()
+            return self._run(query, params)
+
+    def _run(self, query, params):
+        if params is None:
+            return self._cur.execute(query)
+        return self._cur.execute(query, params)
+
+    def __getattr__(self, name):
+        # Guard the two real attributes so a lookup during __init__ cannot
+        # recurse into this delegate.
+        if name in ("_collection", "_cur"):
+            raise AttributeError(name)
+        return getattr(self._cur, name)
+
+
 def _validate_write_lengths(
     *,
     documents: list[str],
@@ -412,7 +543,7 @@ class PostgresCollection(BaseCollection):
         row_embeddings = [row[4] for row in rows]
         row_metadatas = [row[5] for row in rows]
 
-        cur = self._get_conn().cursor()
+        cur = self._cursor()
         if self._table_am == "sorted_heap":
             cur.execute(
                 self._sql.SQL(
@@ -555,7 +686,7 @@ class PostgresCollection(BaseCollection):
         )
         embedding = _vec_literal(query_embedding)
 
-        cur = self._get_conn().cursor()
+        cur = self._cursor()
         cur.execute(
             self._sql.SQL(
                 "SELECT id, document, wing, room, metadata, "
@@ -644,7 +775,7 @@ class PostgresCollection(BaseCollection):
             self._sql.SQL(", embedding::text") if spec.embeddings else self._sql.SQL("")
         )
 
-        cur = self._get_conn().cursor()
+        cur = self._cursor()
         cur.execute(
             self._sql.SQL("SELECT id, document, wing, room, metadata{} FROM {} {} {} {}").format(
                 embedding_select,
@@ -694,7 +825,7 @@ class PostgresCollection(BaseCollection):
 
         if not clauses:
             return
-        cur = self._get_conn().cursor()
+        cur = self._cursor()
         # Resolve the doomed ids BEFORE the DELETE so the delete-through
         # hook can propagate them to AGE. For id-only deletes this is just
         # ``ids``; for where-based deletes we have to query first because
@@ -769,7 +900,7 @@ class PostgresCollection(BaseCollection):
         _scrub_unstorable(ids=ids, metadatas=metadatas)
         self._ensure_setup(create=True)
 
-        cur = self._get_conn().cursor()
+        cur = self._cursor()
         for i, doc_id in enumerate(ids):
             meta = dict(metadatas[i]) if metadatas else {}
             raw_wing = meta.pop("wing", None)
@@ -799,7 +930,7 @@ class PostgresCollection(BaseCollection):
         # same guard as writes so a rename can't mint a new malformed wing.
         to_wing = _coerce_wing(to_wing)
         self._ensure_setup(create=True)
-        cur = self._get_conn().cursor()
+        cur = self._cursor()
         renamed = 0
         # Batch the UPDATE to stay within statement_timeout. Each batch
         # auto-commits independently (connection has autocommit=True).
@@ -820,7 +951,7 @@ class PostgresCollection(BaseCollection):
 
     def count(self) -> int:
         self._ensure_setup(create=True)
-        cur = self._get_conn().cursor()
+        cur = self._cursor()
         # Public collection API: keep this exact. Use estimated_count() for
         # status/heuristic paths where stale PostgreSQL catalog stats are acceptable.
         cur.execute(self._sql.SQL("SELECT COUNT(*) FROM {}").format(self._table_id))
@@ -861,6 +992,31 @@ class PostgresCollection(BaseCollection):
             self._conn.autocommit = True
             self._apply_session_settings(self._conn)
         return self._conn
+
+    def _drop_conn(self) -> None:
+        """Release a connection we have established is dead.
+
+        Abandoning it instead of closing it is how two forever-cached idle
+        connections pinned a smart shutdown open for 37.5 hours on
+        2026-08-07; the close is best-effort because the socket is already
+        gone by definition.
+        """
+        conn, self._conn = self._conn, None
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001 - the socket is already gone
+            logger.debug("postgres: closing a dead connection failed", exc_info=True)
+
+    def _cursor(self) -> _RetryingCursor:
+        """Every statement on the cached connection goes through here.
+
+        One seam rather than a guard at each call site: the failure is a
+        property of the cached connection, not of any particular query, so
+        anything that reaches the database through ``_conn`` needs it.
+        """
+        return _RetryingCursor(self)
 
     def _apply_session_settings(self, conn) -> None:
         """Per-connection GUCs the kNN path depends on.
@@ -907,7 +1063,7 @@ class PostgresCollection(BaseCollection):
         if self._vec_type:
             return
 
-        cur = self._get_conn().cursor()
+        cur = self._cursor()
         cur.execute(
             "SELECT extname FROM pg_extension WHERE extname IN ('pg_sorted_heap', 'vector')"
         )
@@ -958,7 +1114,7 @@ class PostgresCollection(BaseCollection):
         self._setup_done = True
 
     def _table_exists(self) -> bool:
-        cur = self._get_conn().cursor()
+        cur = self._cursor()
         cur.execute(
             "SELECT 1 FROM information_schema.tables "
             "WHERE table_schema = 'public' AND table_name = %s",
@@ -975,7 +1131,7 @@ class PostgresCollection(BaseCollection):
             raise PalaceNotFoundError(f"PostgreSQL collection does not exist: {self.table_name}")
 
         if create:
-            cur = self._get_conn().cursor()
+            cur = self._cursor()
             self._create_table(cur)
         self._setup_done = True
 
@@ -1178,7 +1334,7 @@ class PostgresCollection(BaseCollection):
             ix_conn.close()
 
     def _estimated_count(self) -> int:
-        cur = self._get_conn().cursor()
+        cur = self._cursor()
         cur.execute(
             """
             SELECT GREATEST(
