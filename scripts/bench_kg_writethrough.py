@@ -31,6 +31,10 @@ import argparse
 import sys
 import time
 
+# Named explicitly rather than pattern-matched: the point is that this
+# exact string must never be accepted as a scratch database.
+_KNOWN_PRODUCTION_DBS = frozenset({"mempalace_2026_05_13"})
+
 
 class _Entity:
     __slots__ = ("name", "type", "count")
@@ -180,6 +184,17 @@ def main(argv=None) -> int:
     # DSN straight through. The operator must name the scratch database and
     # the DSN must agree -- and there is deliberately no override flag,
     # because an override is the thing that gets typed at 2am.
+    # Belt as well as braces: the allowlist above already refuses anything
+    # the operator has not named, but naming the production database is the
+    # one mistake it cannot catch. Costs a line, closes the residual.
+    if args.scratch_db in _KNOWN_PRODUCTION_DBS:
+        print(
+            f"refusing: {args.scratch_db!r} is a known production database. "
+            "This benchmark writes thousands of graph edges.",
+            file=sys.stderr,
+        )
+        return 2
+
     dbname = _dbname(args.dsn)
     if dbname != args.scratch_db:
         print(
