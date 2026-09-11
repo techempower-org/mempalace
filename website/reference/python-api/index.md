@@ -83,6 +83,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.recency`](./recency) — Recency weighting for search results (#158).
 - [`mempalace.repair`](./repair) — repair.py — Scan, prune corrupt entries, and rebuild HNSW index
 - [`mempalace.replica`](./replica) — replica.py — Per-palace replica identity (RFC 004 transport seam / provenance)
+- [`mempalace.result_ordering`](./result_ordering) — Curated-over-transcript ordering for near-duplicate search hits.
 - [`mempalace.room_detector_local`](./room_detector_local) — room_detector_local.py — Local setup, no API required.
 - [`mempalace.room_taxonomy`](./room_taxonomy) — Canonical room taxonomy — soft-warn validation.
 - [`mempalace.rrf`](./rrf) — Reciprocal Rank Fusion — combine ranked lists from N retrievers.

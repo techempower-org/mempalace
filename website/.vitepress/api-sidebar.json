@@ -300,6 +300,10 @@
         "link": "/reference/python-api/replica"
       },
       {
+        "text": "mempalace.result_ordering",
+        "link": "/reference/python-api/result_ordering"
+      },
+      {
         "text": "mempalace.room_detector_local",
         "link": "/reference/python-api/room_detector_local"
       },

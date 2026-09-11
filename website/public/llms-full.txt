@@ -309,6 +309,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| Curated hits order above the transcripts that quote them; diary hits say they have no source | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | Wake-up L1 stops leading with harness prompt-echo, diff fragments and tool-call receipts | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | mempalace tunnels --rebuild --wing W — refresh the derived graph on purpose | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | Batch tunnel persistence — a 2,000-tunnel rebuild goes from 37.9 s to 0.08 s | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |

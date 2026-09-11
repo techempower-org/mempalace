@@ -605,6 +605,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **Curated hits order above the transcripts that quote them; diary hits say they have no source** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  A paraphrased question ranked session transcripts above the curated card
+  that answers it, so a reader at the default limit never reached the
+  correction. Measured on production (wing ``2g``, limit 20): the
+  ``CLAUDE.md`` chunk carrying the REFUTED banner came back at rank 13 on
+  ``bm25-fast`` and 14 on hybrid while a transcript quoting the same claim sat
+  at rank 1 — the class the reporting librarian named **FAIL-D**: right file,
+  right chunk, right markers, ranked below the cut. Its sibling: palace diary
+  summaries ranked first with no citable source at all.
+
+  New ``mempalace/result_ordering.py`` raises each hit to the earliest
+  position it has EARNED — the topmost hit it directly duplicates — searching
+  back no further than the nearest earlier hit it does not outrank by kind
+  (curated document, then transcript, then diary). Near-duplicate is the
+  overlap coefficient over word 3-grams at 0.35, chosen by measurement over
+  134 cross-kind pairs: bare token overlap is 0.63 even for merely same-topic
+  chunks, 3-gram Jaccard peaks at 0.16 for TRUE quoting pairs, and 3-gram
+  overlap gives 0.373/0.473/0.491 for the genuine buried-card pairs against
+  <= 0.323 for same-topic non-quoting pairs. A transcript quotes a card and
+  surrounds it with conversation, so the two differ wildly in length: overlap
+  asks "is most of the shorter inside the longer", which is the real question,
+  while Jaccard is punished by exactly the conversation that makes a quote a
+  quote.
+
+  Two bounds, both found by review rather than by design, and each needing a
+  case the original tests did not contain. Grouping by connected component
+  makes near-duplicate transitive, so a chain A~B~C let A clear C with no
+  shared 3-gram — that needs three hits, and every test used two. Testing rank
+  only against the hit earned FROM let a hit sail past one it duplicates and
+  does NOT outrank on the way, demoting a curated card below a transcript
+  quoting it — that needs one hit duplicating two others of different kinds,
+  which nothing covered. Both are now tests, alongside property tests over
+  4,000 randomised three-kind inputs each for idempotence and for the bound as
+  a pairwise invariant. Passes repeat until the order settles because a single
+  pass is not idempotent; exhausting the pass cap is logged rather than
+  swallowed, since an under-settled order is otherwise indistinguishable from
+  a settled one.
+
+  Reordering can only promote a hit the ranker actually returned, so when
+  nothing curated came back at all exactly one wider fetch is made (2x the
+  limit, capped at 40) before reordering and truncating to the requested
+  limit. The common case makes no extra call: this wave is cutting daemon
+  load, so the round trip is spent only where the search is broken.
+
+  Applied to the CLI's bm25-fast, hybrid and MCP-envelope routes and to
+  ``searcher.search_memories``. Verified drift-free on production — one fetch,
+  ranks recorded, the reorder applied to a copy of that same response, because
+  a re-mine moved curated ranks repeatedly during the session and a
+  two-process before/after credited the corpus's work to the code. Diary hits
+  now render "palace diary summary — no source file" and sort below curated
+  hits.
+
+  *Tests:* 47 new (test_result_ordering x35 incl. the transitivity triple, the pass-what-you-outrank repro, the stabilise-cap pin and property tests for idempotence and the bound over 4,000 randomised three-kind inputs each; test_cli_daemon route-ordering + conditional widen + diary tag x10; test_provenance diary note x2)
+  *Files:* `mempalace/result_ordering.py`, `mempalace/cli.py`, `mempalace/searcher.py`, `mempalace/provenance.py`
+
+
 - **Postgres backend embeds through get_embedding_function() instead of rebuilding an ONNX session per call** ([`4975b0a`](https://github.com/techempower-org/mempalace/commit/4975b0a))
   ``backends/postgres.py::_embed`` constructed its own
   ``DefaultEmbeddingFunction`` and never called
