@@ -49,10 +49,32 @@ branch sha becomes unreachable from `main` the moment it merges. Thirteen
 entries shipped pointing at commits that exist in nobody's clone that
 way (#472).
 
-Write `commit: HEAD` and add `fork_pr: <your PR number>`. After the merge,
-`scripts/maintain-fork-changes.py` resolves it from the API
-(`pulls/N` → `merge_commit_sha`). The merge step records the final sha;
-the lane does not.
+Write `commit: HEAD`. After the merge,
+`scripts/maintain-fork-changes.py` resolves it from **the commit that
+added this file** — which is the squash commit by construction, since
+the file arrives with the pull request:
+
+    git log --follow --diff-filter=A --format=%H -- docs/fork-changes/<file>
+
+That needs nothing from you: a lane cannot know its own PR number while
+writing the entry, which is the same chicken-and-egg as the sha. It is
+also deterministic, offline, and immune to a squash subject reworded at
+merge time — which defeated 4 of the 27 cases in the #472 sweep.
+
+`fork_pr: <your PR number>` is therefore **documentation and a
+cross-check, not load-bearing**. Add it if you know it; when present the
+resolver compares it against the file-add answer and refuses to resolve
+if the two disagree, since two independent mechanisms disagreeing is the
+worst case in which to guess.
+
+⚠️ The resolver only ever does this for an entry whose `commit` is
+literally `HEAD`. Every entry file that predates the one-file-per-entry
+split was created by the split's own commit, so asking "what added this
+file" about an already-resolved entry returns the migration commit — it
+would rewrite 137 correct historical shas to one wrong value, and that
+value is an ancestor of `main`, so it would pass the ancestry check
+forever and look right. The merge step records the final sha; the lane
+does not.
 
 `scripts/check-docs.sh` step 2b then requires every entry's commit to be
 an **ancestor** of `HEAD` — not merely to resolve, which a dangling

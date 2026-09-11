@@ -169,7 +169,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`
 
 
-- **Fork-change entries split one-per-file; entry shas verified by ancestry and resolved after merge** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+- **Fork-change entries split one-per-file; entry shas verified by ancestry and resolved after merge** ([`6da8775`](https://github.com/techempower-org/mempalace/commit/6da8775))
   Every PR in a wave inserted at the top of `entries:` in one
   `docs/fork-changes.yaml`, so every PR conflicted with every other one on that
   file plus the four artefacts rendered from it — measured across a 10-PR wave

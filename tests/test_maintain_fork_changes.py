@@ -254,3 +254,84 @@ def test_check_mode_fails_when_an_entry_is_unresolved(tmp_path, capsys):
 
     assert rc == 1, "an unresolved HEAD must not read as success"
     assert "no fork_pr" in capsys.readouterr().err
+
+
+class TestResolveHeadByFileAdd:
+    """#476: `commit: HEAD` resolves from the commit that ADDED the entry
+    file — the squash commit by construction, since the file arrives with
+    the PR. Deterministic, offline, and needs nothing from the author,
+    who cannot know the PR number when writing the entry.
+    """
+
+    def test_resolves_from_the_adding_commit(self, tmp_path):
+        e = _entry(commit="HEAD")
+        e["_path"] = str(tmp_path / "x.yaml")
+
+        changes, unresolved = mfc.resolve_head_by_file_add(
+            [e], "HEAD", adding_commit=lambda path, branch: "cafe123"
+        )
+
+        assert unresolved == []
+        assert changes == [(e, "cafe123")]
+
+    def test_NEVER_touches_an_entry_that_already_has_a_sha(self, tmp_path):
+        """The boundary that makes this mechanism safe.
+
+        Every entry file that predates the one-file-per-entry split was
+        created by the SPLIT's own commit. So asking "what added this
+        file" about an already-resolved entry returns the migration
+        commit — which would rewrite 137 correct historical shas to one
+        wrong value, and that value is an ancestor of main, so it would
+        pass the ancestry check forever and look right.
+        """
+        e = _entry(commit="9060e09")
+        e["_path"] = str(tmp_path / "old.yaml")
+
+        changes, unresolved = mfc.resolve_head_by_file_add(
+            [e],
+            "HEAD",
+            adding_commit=lambda path, branch: pytest.fail(
+                "must not ask about an entry that already has a sha"
+            ),
+        )
+
+        assert (changes, unresolved) == ([], [])
+
+    def test_disagreement_with_the_api_refuses_rather_than_choosing(self, tmp_path):
+        e = _entry(commit="HEAD", fork_pr=480)
+        e["_path"] = str(tmp_path / "x.yaml")
+
+        changes, unresolved = mfc.resolve_head_by_file_add(
+            [e],
+            "HEAD",
+            adding_commit=lambda path, branch: "aaaaaaa",
+            fetch=lambda pr: "bbbbbbb",
+        )
+
+        assert changes == []
+        assert "refusing to choose" in unresolved[0][1]
+
+    def test_agreement_with_the_api_resolves(self, tmp_path):
+        e = _entry(commit="HEAD", fork_pr=480)
+        e["_path"] = str(tmp_path / "x.yaml")
+
+        changes, unresolved = mfc.resolve_head_by_file_add(
+            [e],
+            "HEAD",
+            adding_commit=lambda path, branch: "aaaaaaa",
+            fetch=lambda pr: "aaaaaaa",
+        )
+
+        assert unresolved == []
+        assert changes == [(e, "aaaaaaa")]
+
+    def test_a_missing_adding_commit_is_reported_not_guessed(self, tmp_path):
+        e = _entry(commit="HEAD")
+        e["_path"] = str(tmp_path / "x.yaml")
+
+        changes, unresolved = mfc.resolve_head_by_file_add(
+            [e], "HEAD", adding_commit=lambda path, branch: None
+        )
+
+        assert changes == []
+        assert "could not find the commit" in unresolved[0][1]

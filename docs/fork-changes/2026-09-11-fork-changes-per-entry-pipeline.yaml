@@ -2,10 +2,9 @@ seq: 138
 id: fork-changes-per-entry-pipeline
 date: '2026-09-11'
 bucket: Changed
-commit: HEAD
+commit: 6da8775
 area: Docs
-summary: Fork-change entries split one-per-file; entry shas verified by ancestry and
-  resolved after merge
+summary: Fork-change entries split one-per-file; entry shas verified by ancestry and resolved after merge
 body: |
   Every PR in a wave inserted at the top of `entries:` in one
   `docs/fork-changes.yaml`, so every PR conflicted with every other one on that

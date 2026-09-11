@@ -134,6 +134,90 @@ def gh_merge_commit_sha(pr: int, repo: str = REPO) -> str | None:
     return sha[:7] if isinstance(sha, str) and sha else None
 
 
+def git_file_add_commit(path: str, branch: str = "HEAD") -> str | None:
+    """The commit that ADDED ``path``, following renames.
+
+    For a fork-change entry this is the squash-merge commit by
+    construction: the entry file arrives with the pull request that
+    describes the change. No API call, no author bookkeeping, and immune
+    to a squash subject reworded at merge time — which defeated 4 of the
+    27 cases in the #472 sweep.
+    """
+    try:
+        out = _run(
+            [
+                "git",
+                "log",
+                "--follow",
+                "--diff-filter=A",
+                "--format=%H",
+                branch,
+                "--",
+                path,
+            ]
+        ).strip()
+    except subprocess.CalledProcessError:
+        return None
+    shas = [ln.strip() for ln in out.split("\n") if ln.strip()]
+    # A rename history can list several adds; the ORIGINAL add is last.
+    return shas[-1][:7] if shas else None
+
+
+def resolve_head_by_file_add(
+    entries: Iterable[dict],
+    branch: str = "HEAD",
+    adding_commit: Callable[[str, str], str | None] = git_file_add_commit,
+    fetch: Callable[[int], str | None] | None = None,
+) -> tuple[list[tuple[dict, str]], list[tuple[dict, str]]]:
+    """Resolve ``commit: HEAD`` from the commit that added the entry file.
+
+    ⚠️ ONLY ever applied to an entry whose ``commit`` is exactly
+    ``HEAD``, and that boundary is load-bearing rather than an
+    optimisation. Every one of the 137 entry files that existed before
+    the one-file-per-entry split was created by the SPLIT's own commit,
+    so asking "what added this file" about an already-resolved entry
+    returns the migration commit — rewriting 137 correct historical
+    shas to a single wrong one. That wrong value would be an ancestor of
+    main, so it would pass the ancestry check forever and read as
+    correct. A test pins this boundary in both directions.
+
+    When the entry also carries ``fork_pr``, the API answer is used as a
+    CROSS-CHECK: if the two disagree the entry is reported rather than
+    resolved, because two independent mechanisms disagreeing is exactly
+    the case where guessing is least defensible.
+    """
+    changes: list[tuple[dict, str]] = []
+    unresolved: list[tuple[dict, str]] = []
+    for entry in entries:
+        if str(entry.get("commit", "")).strip() != "HEAD":
+            continue  # HARD BOUNDARY — see the docstring.
+        path = entry.get("_path")
+        if not path:
+            unresolved.append((entry, "no file path on the loaded entry"))
+            continue
+        sha = adding_commit(str(path), branch)
+        if not sha:
+            unresolved.append((entry, "could not find the commit that added the entry file"))
+            continue
+        pr = entry.get("fork_pr")
+        if pr and fetch is not None:
+            try:
+                via_api = fetch(int(pr))
+            except (TypeError, ValueError):
+                via_api = None
+            if via_api and not (via_api.startswith(sha) or sha.startswith(via_api)):
+                unresolved.append(
+                    (
+                        entry,
+                        f"file-add says {sha} but PR #{pr} merge_commit_sha says "
+                        f"{via_api} — refusing to choose",
+                    )
+                )
+                continue
+        changes.append((entry, sha))
+    return changes, unresolved
+
+
 def resolve_head_entries(
     entries: Iterable[dict],
     fetch: Callable[[int], str | None] = gh_merge_commit_sha,
@@ -270,11 +354,22 @@ def main(argv: list[str] | None = None) -> int:
     unresolved: list[tuple[dict, str]] = []
 
     if not args.no_resolve_head:
-        # Looked up on the module at call time (not bound as a default)
-        # so a test can substitute it and never touch the network.
-        c, u = resolve_head_entries(entries, fetch=gh_merge_commit_sha)
+        # PRIMARY: the commit that added the entry's own file. Deterministic,
+        # offline, and needs nothing from the author — a lane cannot know its
+        # PR number when it writes the entry, which is the same chicken-and-egg
+        # as the sha itself. `fork_pr` is a cross-check here, not the key.
+        c, u = resolve_head_by_file_add(entries, args.branch, fetch=gh_merge_commit_sha)
         changes += c
         unresolved += u
+        # FALLBACK: anything file-add could not answer, try fork_pr via the API.
+        # Looked up on the module at call time (not bound as a default) so a
+        # test can substitute it and never touch the network.
+        still_head = [e for e, _ in u]
+        if still_head:
+            c2, u2 = resolve_head_entries(still_head, fetch=gh_merge_commit_sha)
+            changes += c2
+            unresolved = [(e, why) for e, why in unresolved if e not in [x for x, _ in c2]]
+            unresolved += u2
 
     if not args.no_repair:
         c, u = repair_dangling(entries, args.branch, legacy_ids=legacy)
