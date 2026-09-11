@@ -89,6 +89,7 @@ def _sync_args(**overrides):
         "dry_run": True,
         "daemon": False,
         "background": False,
+        "yes": True,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -110,6 +111,21 @@ def _fake_collection(ids):
     col.count.return_value = 0
     return col
 
+
+_REMOVABLE_DAEMON = {
+    "scanned": 12,
+    "kept": 2,
+    "gitignored": 7,
+    "missing": 3,
+    "unresolved": 0,
+    "no_source": 0,
+    "out_of_scope": 0,
+    "removed_drawers": 0,
+    "removed_closets": 0,
+    "dry_run": True,
+    "by_source": {},
+    "unresolved_by_source": {},
+}
 
 _SYNC_REPORT = {
     "scanned": 3,
@@ -411,6 +427,62 @@ class TestPurgeUnderDaemonStrict:
         calls.assert_not_called()
         col.delete.assert_called_once_with(where={"wing": "w"})
 
+    def test_wing_combined_with_source_file_is_refused_not_widened(self, capsys):
+        """The daemon's bulk delete has no wing filter — refuse, never widen.
+
+        ``mempalace_delete_by_source`` matches ``source_file`` across every
+        wing. Passing ``--wing W --source-file F`` to it deletes F everywhere
+        while the receipt says "wing=W source-file=F": a NARROWING flag
+        silently dropped on a destructive command, which is the same
+        output-disagrees-with-reality defect this PR exists to fix, with a
+        blast radius. 27 of 5,477 sampled production sources live in more
+        than one wing, so the flag is doing real work when it is given.
+        """
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=True),
+            patch("mempalace.cli._daemon_url", return_value="http://familiar:8085"),
+            patch("mempalace.cli._call_daemon_tool") as calls,
+            patch("mempalace.palace.get_collection") as local,
+            pytest.raises(SystemExit) as exc,
+        ):
+            mempalace_cli_purge(_purge_args(wing="memorypalace", source_file="/p/F.md"))
+
+        assert exc.value.code == 2
+        calls.assert_not_called()
+        local.assert_not_called()
+        err = capsys.readouterr().err
+        assert "--source-file" in err
+        assert "--palace" in err
+
+    def test_room_combined_with_source_file_is_refused(self, capsys):
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=True),
+            patch("mempalace.cli._daemon_url", return_value="http://familiar:8085"),
+            patch("mempalace.cli._call_daemon_tool") as calls,
+            pytest.raises(SystemExit) as exc,
+        ):
+            mempalace_cli_purge(_purge_args(room="2026-09", source_file="/p/F.md"))
+
+        assert exc.value.code == 2
+        calls.assert_not_called()
+
+    def test_source_file_alone_is_still_routed(self):
+        """The refusal must not swallow the case the daemon CAN do."""
+        calls = MagicMock(
+            side_effect=[
+                {"success": True, "dry_run": True, "match_count": 2},
+                {"success": True, "dry_run": False, "deleted": 2},
+            ]
+        )
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=True),
+            patch("mempalace.cli._daemon_url", return_value="http://familiar:8085"),
+            patch("mempalace.cli._call_daemon_tool", calls),
+        ):
+            mempalace_cli_purge(_purge_args(source_file="/p/F.md"))
+
+        assert calls.call_count == 2
+
     def test_daemon_confirmation_is_required_without_yes(self):
         calls = MagicMock(
             return_value={"success": True, "dry_run": True, "match_count": 9},
@@ -494,6 +566,178 @@ class TestSyncOnServerBackend:
 
         assert "has no" in capsys.readouterr().out
         synced.assert_not_called()
+
+
+class TestSyncApplyAsksFirst:
+    """`sync --apply` deletes; it must say so before it does (#418 review).
+
+    Before this PR, `--apply` on a Postgres palace was a guaranteed no-op —
+    the directory precheck refused it. Making it work turns it into a live,
+    unconfirmed bulk delete: the reviewer ran the real classifier over one
+    wing's top 400 sources and got 2,619 drawers deleted unconditionally.
+    `purge` has always confirmed; `sync` now does too, on both routes.
+    """
+
+    _REMOVABLE = {**_SYNC_REPORT, "gitignored": 7, "missing": 3}
+
+    def test_local_apply_confirms_before_deleting(self, tmp_path):
+        palace = tmp_path / "palace"
+        palace.mkdir()
+        (palace / "chroma.sqlite3").write_bytes(b"SQLite format 3\x00")
+        synced = MagicMock(return_value=dict(self._REMOVABLE))
+
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=False),
+            patch("mempalace.sync.sync_palace", synced),
+            patch("mempalace.migrate.confirm_destructive_action", return_value=True) as confirm,
+        ):
+            mempalace_cli_sync(
+                _sync_args(palace=str(palace), wing="demo", dry_run=False, yes=False)
+            )
+
+        confirm.assert_called_once()
+        # A preview pass, then the real one.
+        assert [c.kwargs["dry_run"] for c in synced.call_args_list] == [True, False]
+
+    def test_local_apply_aborts_when_declined(self, tmp_path):
+        palace = tmp_path / "palace"
+        palace.mkdir()
+        (palace / "chroma.sqlite3").write_bytes(b"SQLite format 3\x00")
+        synced = MagicMock(return_value=dict(self._REMOVABLE))
+
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=False),
+            patch("mempalace.sync.sync_palace", synced),
+            patch("mempalace.migrate.confirm_destructive_action", return_value=False),
+        ):
+            mempalace_cli_sync(
+                _sync_args(palace=str(palace), wing="demo", dry_run=False, yes=False)
+            )
+
+        # Only the preview ran; nothing was deleted.
+        assert [c.kwargs["dry_run"] for c in synced.call_args_list] == [True]
+
+    def test_yes_skips_the_prompt_and_the_extra_scan(self, tmp_path):
+        palace = tmp_path / "palace"
+        palace.mkdir()
+        (palace / "chroma.sqlite3").write_bytes(b"SQLite format 3\x00")
+        synced = MagicMock(return_value=dict(self._REMOVABLE))
+
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=False),
+            patch("mempalace.sync.sync_palace", synced),
+            patch("mempalace.migrate.confirm_destructive_action") as confirm,
+        ):
+            mempalace_cli_sync(_sync_args(palace=str(palace), wing="demo", dry_run=False, yes=True))
+
+        confirm.assert_not_called()
+        assert [c.kwargs["dry_run"] for c in synced.call_args_list] == [False]
+
+    def test_dry_run_never_prompts(self, tmp_path):
+        palace = tmp_path / "palace"
+        palace.mkdir()
+        (palace / "chroma.sqlite3").write_bytes(b"SQLite format 3\x00")
+        synced = MagicMock(return_value=dict(_SYNC_REPORT))
+
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=False),
+            patch("mempalace.sync.sync_palace", synced),
+            patch("mempalace.migrate.confirm_destructive_action") as confirm,
+        ):
+            mempalace_cli_sync(_sync_args(palace=str(palace), wing="demo", dry_run=True, yes=False))
+
+        confirm.assert_not_called()
+        assert synced.call_count == 1
+
+    def test_nothing_removable_does_not_prompt_or_apply(self, tmp_path):
+        """A preview showing zero removals needs no confirmation and no run."""
+        palace = tmp_path / "palace"
+        palace.mkdir()
+        (palace / "chroma.sqlite3").write_bytes(b"SQLite format 3\x00")
+        synced = MagicMock(return_value=dict(_SYNC_REPORT, gitignored=0, missing=0))
+
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=False),
+            patch("mempalace.sync.sync_palace", synced),
+            patch("mempalace.migrate.confirm_destructive_action") as confirm,
+        ):
+            mempalace_cli_sync(
+                _sync_args(palace=str(palace), wing="demo", dry_run=False, yes=False)
+            )
+
+        confirm.assert_not_called()
+        assert [c.kwargs["dry_run"] for c in synced.call_args_list] == [True]
+
+    def test_unscoped_apply_exits_2_without_prompting(self, tmp_path, capsys):
+        """The preview must not launder away the apply-scope rule.
+
+        ``sync_palace`` refuses an unscoped apply so it cannot auto-prune
+        every wing. The confirmation preview runs with ``dry_run=True``,
+        which passes that guard — so the rule has to be evaluated before the
+        preview, or an unscoped ``--apply`` reaches an interactive prompt
+        instead of exiting 2. Caught by an existing test when this prompt
+        was first added.
+        """
+        palace = tmp_path / "palace"
+        palace.mkdir()
+        (palace / "chroma.sqlite3").write_bytes(b"SQLite format 3\x00")
+        synced = MagicMock(return_value=dict(_SYNC_REPORT))
+
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=False),
+            patch("mempalace.sync.sync_palace", synced),
+            patch("mempalace.migrate.confirm_destructive_action") as confirm,
+            pytest.raises(SystemExit) as exc,
+        ):
+            mempalace_cli_sync(_sync_args(palace=str(palace), dry_run=False, yes=False))
+
+        assert exc.value.code == 2
+        confirm.assert_not_called()
+        synced.assert_not_called()
+        assert "wing" in capsys.readouterr().err
+
+    def test_unscoped_apply_over_the_daemon_also_exits_2(self, capsys):
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=True),
+            patch("mempalace.cli._daemon_url", return_value="http://familiar:8085"),
+            patch("mempalace.cli._call_daemon_tool") as calls,
+            pytest.raises(SystemExit) as exc,
+        ):
+            mempalace_cli_sync(_sync_args(dry_run=False, yes=False))
+
+        assert exc.value.code == 2
+        calls.assert_not_called()
+
+    def test_daemon_apply_confirms_before_deleting(self):
+        calls = MagicMock(
+            side_effect=[
+                {"success": True, **self._REMOVABLE},
+                {"success": True, **self._REMOVABLE},
+            ]
+        )
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=True),
+            patch("mempalace.cli._daemon_url", return_value="http://familiar:8085"),
+            patch("mempalace.cli._call_daemon_tool", calls),
+            patch("mempalace.migrate.confirm_destructive_action", return_value=True) as confirm,
+        ):
+            mempalace_cli_sync(_sync_args(wing="x", dry_run=False, yes=False))
+
+        confirm.assert_called_once()
+        assert [c[0][1]["apply"] for c in calls.call_args_list] == [False, True]
+
+    def test_daemon_apply_aborts_when_declined(self):
+        calls = MagicMock(return_value={"success": True, **_REMOVABLE_DAEMON})
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=True),
+            patch("mempalace.cli._daemon_url", return_value="http://familiar:8085"),
+            patch("mempalace.cli._call_daemon_tool", calls),
+            patch("mempalace.migrate.confirm_destructive_action", return_value=False),
+        ):
+            mempalace_cli_sync(_sync_args(wing="x", dry_run=False, yes=False))
+
+        assert calls.call_count == 1
+        assert calls.call_args[0][1]["apply"] is False
 
 
 class TestSyncUnderDaemonStrict:

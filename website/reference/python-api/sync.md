@@ -19,6 +19,24 @@ Usage:
 
 ## Functions
 
+### `validate_apply_scope`
+
+```python
+def validate_apply_scope(wing, project_dirs) -> None
+```
+
+Raise ``ValueError`` unless a destructive sync is explicitly scoped.
+
+On apply, at least one of ``wing`` or ``project_dirs`` must be set so a
+caller cannot accidentally prune every wing in a multi-project palace via
+auto-detected roots.
+
+Split out of :func:`sync_palace` so a caller that previews with
+``dry_run=True`` before applying can run the *apply* rule first. The CLI
+does exactly that for its confirmation prompt, and without this the
+preview passed the guard (it is a dry run) and an unscoped ``--apply``
+reached the prompt instead of exiting 2.
+
 ### `sync_palace`
 
 ```python

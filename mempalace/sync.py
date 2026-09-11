@@ -309,6 +309,27 @@ def _delete_in_batches(col, ids: list, batch_size: int, wal_log: Optional[Callab
     return deleted
 
 
+def validate_apply_scope(wing, project_dirs) -> None:
+    """Raise ``ValueError`` unless a destructive sync is explicitly scoped.
+
+    On apply, at least one of ``wing`` or ``project_dirs`` must be set so a
+    caller cannot accidentally prune every wing in a multi-project palace via
+    auto-detected roots.
+
+    Split out of :func:`sync_palace` so a caller that previews with
+    ``dry_run=True`` before applying can run the *apply* rule first. The CLI
+    does exactly that for its confirmation prompt, and without this the
+    preview passed the guard (it is a dry run) and an unscoped ``--apply``
+    reached the prompt instead of exiting 2.
+    """
+    if not wing and not project_dirs:
+        raise ValueError(
+            "sync apply requires explicit wing= or project_dirs= so it cannot "
+            "auto-prune every wing in a multi-project palace; pass --wing or "
+            "a project directory"
+        )
+
+
 def sync_palace(
     palace_path: str,
     project_dirs: Optional[list] = None,
@@ -358,12 +379,8 @@ def sync_palace(
     ``project_dirs`` must be set so a caller cannot accidentally prune
     every wing in a multi-project palace via auto-detected roots.
     """
-    if not dry_run and not wing and not project_dirs:
-        raise ValueError(
-            "sync apply requires explicit wing= or project_dirs= so it cannot "
-            "auto-prune every wing in a multi-project palace; pass --wing or "
-            "a project directory"
-        )
+    if not dry_run:
+        validate_apply_scope(wing, project_dirs)
     if project_dirs is not None and not project_dirs:
         raise ValueError(
             "project_dirs was provided but is empty; pass at least one project "

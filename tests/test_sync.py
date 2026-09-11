@@ -1341,6 +1341,9 @@ class TestSyncCli:
             "--apply",
             "--wing",
             "demo",
+            # --apply now confirms before deleting (#418 review); these two
+            # tests cover the deletion and the WAL trail, not the prompt.
+            "--yes",
         ]
         monkeypatch.setattr("sys.argv", argv)
         cli.main()
@@ -1383,6 +1386,9 @@ class TestSyncCli:
             "--apply",
             "--wing",
             "demo",
+            # --apply now confirms before deleting (#418 review); these two
+            # tests cover the deletion and the WAL trail, not the prompt.
+            "--yes",
         ]
         monkeypatch.setattr("sys.argv", argv)
         cli.main()

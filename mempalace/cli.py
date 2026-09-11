@@ -2311,6 +2311,25 @@ def _print_sync_report(report: dict, *, dry_run: bool) -> None:
     print(f"\n{'=' * 55}\n")
 
 
+def _sync_should_apply(preview: dict, *, target: str, label: str) -> bool:
+    """Confirm a destructive sync after showing what it would remove (#418 review).
+
+    ``sync --apply`` deletes drawers. Until the backend-resolution fix it was
+    a guaranteed no-op on a service-backed palace — the directory precheck
+    refused it — so nothing ever asked. Making it work turns it into a live
+    bulk delete, and one wing's top 400 sources were measured at 2,619
+    drawers removed unconditionally. ``purge`` has always confirmed; this is
+    the same gate, reading the preview pass for the count.
+    """
+    from .migrate import confirm_destructive_action
+
+    removable = int(preview.get("gitignored") or 0) + int(preview.get("missing") or 0)
+    if removable == 0:
+        print("  Nothing to remove — no scanned drawer is gitignored or missing.\n")
+        return False
+    return confirm_destructive_action(f"Sync removal of {removable:,} drawers from {label}", target)
+
+
 def _sync_via_daemon(args) -> None:
     """Run `sync` against the daemon's palace under daemon-strict (#418).
 
@@ -2330,20 +2349,19 @@ def _sync_via_daemon(args) -> None:
         )
         sys.exit(2)
 
-    payload = {
-        "project_dir": project_dirs[0] if project_dirs else None,
-        "wing": args.wing,
-        "apply": not args.dry_run,
-    }
-    try:
-        data = _call_daemon_tool("mempalace_sync", payload)
-    except DaemonError as exc:
-        print(f"mempalace: {exc}", file=sys.stderr)
-        sys.exit(1)
+    project_dir = project_dirs[0] if project_dirs else None
 
-    if not data.get("success", False):
-        print(f"mempalace: {data.get('error', 'sync failed')}", file=sys.stderr)
-        sys.exit(1)
+    def _call(apply_: bool) -> dict:
+        payload = {"project_dir": project_dir, "wing": args.wing, "apply": apply_}
+        try:
+            data = _call_daemon_tool("mempalace_sync", payload)
+        except DaemonError as exc:
+            print(f"mempalace: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if not data.get("success", False):
+            print(f"mempalace: {data.get('error', 'sync failed')}", file=sys.stderr)
+            sys.exit(1)
+        return data
 
     print(f"\n{'=' * 55}")
     print("  MemPalace Sync -- Gitignore-aware drawer prune")
@@ -2351,15 +2369,31 @@ def _sync_via_daemon(args) -> None:
     print(f"  Target:   {target}")
     if args.wing:
         print(f"  Wing:     {args.wing}")
-    if payload["project_dir"]:
-        print(f"  Project:  {payload['project_dir']}")
+    if project_dir:
+        print(f"  Project:  {project_dir}")
     print(
         "  Mode:     DRY RUN (no deletions)"
         if args.dry_run
         else "  Mode:     APPLY (deleting drawers)"
     )
     print(f"{'-' * 55}\n")
-    _print_sync_report(data, dry_run=args.dry_run)
+
+    if not args.dry_run:
+        from .sync import validate_apply_scope
+
+        try:
+            validate_apply_scope(args.wing, project_dirs)
+        except ValueError as exc:
+            print(f"mempalace: {exc}", file=sys.stderr)
+            sys.exit(2)
+
+    if not args.dry_run and not getattr(args, "yes", False):
+        preview = _call(False)
+        _print_sync_report(preview, dry_run=True)
+        if not _sync_should_apply(preview, target=target, label=args.wing or "this palace"):
+            return
+
+    _print_sync_report(_call(not args.dry_run), dry_run=args.dry_run)
 
 
 def cmd_sync(args):
@@ -2444,25 +2478,47 @@ def cmd_sync(args):
         print("  Mode:     APPLY (deleting drawers)")
     print(f"{'-' * 55}\n")
 
-    try:
-        report = sync_palace(
-            palace_path=palace_path,
-            project_dirs=project_dirs,
-            wing=args.wing,
-            dry_run=args.dry_run,
-            wal_log=_wal_log,
-        )
-    except MineAlreadyRunning as exc:
-        print(f"mempalace: {exc}", file=sys.stderr)
-        sys.exit(1)
-    except ValueError as exc:
-        print(f"mempalace: {exc}", file=sys.stderr)
-        sys.exit(2)
-    except Exception as exc:
-        print(f"mempalace: sync failed: {exc}", file=sys.stderr)
-        sys.exit(1)
+    def _run(dry_run: bool) -> dict:
+        try:
+            return sync_palace(
+                palace_path=palace_path,
+                project_dirs=project_dirs,
+                wing=args.wing,
+                dry_run=dry_run,
+                wal_log=_wal_log,
+            )
+        except MineAlreadyRunning as exc:
+            print(f"mempalace: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except ValueError as exc:
+            print(f"mempalace: {exc}", file=sys.stderr)
+            sys.exit(2)
+        except Exception as exc:
+            print(f"mempalace: sync failed: {exc}", file=sys.stderr)
+            sys.exit(1)
 
-    _print_sync_report(report, dry_run=args.dry_run)
+    # --apply deletes, so show the blast radius and ask first. The preview
+    # costs a second scan, which is why --yes skips both the prompt and the
+    # scan rather than only the prompt.
+    if not args.dry_run:
+        # The apply-scope rule has to run BEFORE the preview: the preview is a
+        # dry run, so it passes that guard, and an unscoped --apply would
+        # reach the prompt instead of exiting 2.
+        from .sync import validate_apply_scope
+
+        try:
+            validate_apply_scope(args.wing, project_dirs)
+        except ValueError as exc:
+            print(f"mempalace: {exc}", file=sys.stderr)
+            sys.exit(2)
+
+    if not args.dry_run and not getattr(args, "yes", False):
+        preview = _run(True)
+        _print_sync_report(preview, dry_run=True)
+        if not _sync_should_apply(preview, target=palace_path, label=args.wing or "this palace"):
+            return
+
+    _print_sync_report(_run(args.dry_run), dry_run=args.dry_run)
 
 
 def _resolve_search_format(args) -> str:
@@ -4366,13 +4422,22 @@ def _purge_no_match(label: str, target: str) -> None:
 def _purge_via_daemon(*, wing, room, source_file, label, assume_yes) -> None:
     """Run a purge against the daemon's palace under daemon-strict (#418).
 
-    The daemon exposes a source-file bulk delete
-    (``mempalace_delete_by_source``, which also clears the matching closets)
-    and nothing equivalent for wing/room. So a wing/room purge is refused
-    here rather than quietly falling through to whatever local palace
-    directory happens to exist — that silent retarget is the dangerous half
-    of #418, and "it deleted nothing from the wrong palace" is not a safer
-    failure than an error, it is a less visible one.
+    The daemon exposes exactly one bulk delete, ``mempalace_delete_by_source``
+    (which also clears the matching closets), and it filters on
+    ``source_file`` ALONE. So two selections are refused here rather than
+    approximated:
+
+    * ``--wing``/``--room`` on their own — there is no wing/room bulk delete
+      to route to. Falling through to whatever local palace directory happens
+      to exist is the dangerous half of #418: "it deleted nothing from the
+      wrong palace" is not a safer failure than an error, only a less visible
+      one.
+    * ``--wing``/``--room`` **combined with** ``--source-file`` — the daemon
+      would match that source across EVERY wing while the receipt printed
+      ``wing=W source-file=F``. A narrowing flag silently dropped on a
+      destructive command is the same output-disagrees-with-reality defect
+      this command was fixed for, with a blast radius: sources really do live
+      in more than one wing (27 of 5,477 sampled in production).
 
     Shape mirrors the local path: probe with ``dry_run`` for the blast
     radius, confirm, then commit.
@@ -4380,12 +4445,20 @@ def _purge_via_daemon(*, wing, room, source_file, label, assume_yes) -> None:
     from .migrate import confirm_destructive_action
 
     target = _daemon_url() or "the palace daemon"
-    if not source_file:
-        print(
-            "mempalace: purge --wing/--room is not available over the palace daemon "
-            "(no bulk wing/room delete is exposed).",
-            file=sys.stderr,
-        )
+    if wing or room:
+        if source_file:
+            print(
+                "mempalace: purge --wing/--room cannot be combined with --source-file over "
+                "the palace daemon: its bulk delete matches source_file across every wing, "
+                "so the narrowing flag would be silently dropped.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "mempalace: purge --wing/--room is not available over the palace daemon "
+                "(no bulk wing/room delete is exposed).",
+                file=sys.stderr,
+            )
         print(
             f"mempalace: run it on the palace host, or pass --palace <dir> to purge a "
             f"local palace instead of {target}.",
@@ -9954,6 +10027,12 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         dest="dry_run",
         action="store_false",
         help="Actually delete drawers (overrides --dry-run; requires --wing or a project root)",
+    )
+    p_sync.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip the confirmation prompt --apply shows before deleting",
     )
     p_sync.add_argument(
         "--daemon",
