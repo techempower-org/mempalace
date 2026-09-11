@@ -509,6 +509,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/backends/postgres.py`, `tests/test_postgres_unstorable_bytes.py`, `tests/test_postgres_nul_bytes.py`
 
 
+### Performance
+
+
+- **mempalace mine --no-tunnels — skip the post-mine derived-graph rebuild on small targeted mines** ([`98ce2f3`](https://github.com/techempower-org/mempalace/commit/98ce2f3))
+  Every projects-mode mine recomputes three derived analytics for the whole
+  wing however few files changed — cross-wing topic tunnels, within-wing
+  hallways, cross-wing entity tunnels — so the cost scales with the WING,
+  not with the change. Measured on the palace host: a 31-file (148 KB)
+  memory sweep spent **29+ minutes of CPU and 1.6-4.1 GB RSS** in that
+  block, wrote zero drawers in that window, and held the exclusive mine
+  lock throughout, with twelve more sweeps queued behind it.
+  ``mine(compute_derived=False)`` / ``mempalace mine --no-tunnels`` skips
+  it; the drawers filed are byte-identical either way (pinned by a test)
+  and only the derived graph is left un-refreshed until the next full mine.
+  All three steps are gated together deliberately: they are a dependency
+  chain (entity tunnels read the hallways the step above wrote), so gating
+  only the two ``_compute_*_tunnels_*`` calls would leave the hallways load
+  and full rewrite — most of the I/O — in place. The default is unchanged
+  and pinned in three places so a silent flip fails loudly. In
+  daemon-strict mode the flag joins the existing ignored-local-flags
+  warning until the daemon carries a ``tunnels`` body field.
+  Root cause note for the follow-up: the 29 minutes is **not** the 993 MB
+  ``hallways.json``. Measured on katana, a 900K-record/396 MB hallways file
+  parses in 3.1 s and writes in 8.4 s (~37 s per mine at the production
+  size). The time is ``create_tunnel`` doing a full load **and** atomic
+  rewrite of ``tunnels.json`` on every call, from inside the per-entity and
+  per-wing loops: 100 tunnels 0.61 s, 1000 tunnels 11.5 s, 2000 tunnels
+  37.9 s — per-tunnel cost rising linearly with tunnels already on disk, so
+  O(n²), extrapolating to ~16 min at 10K tunnels. Batching that persist is
+  tracked separately; this entry is the skip, not the fix.
+
+  *Tests:* 10 (test_miner_no_tunnels x5, test_cli_mine_no_tunnels x5)
+  *Files:* `mempalace/miner.py`, `mempalace/cli.py`
+
+
 ## [2026-09-03]
 
 

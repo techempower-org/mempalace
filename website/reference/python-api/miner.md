@@ -351,7 +351,7 @@ have accumulated by the time it reached that directory.
 ### `mine`
 
 ```python
-def mine(project_dir: str, palace_path: str, wing_override: str = None, agent: str = 'mempalace', limit: int = 0, dry_run: bool = False, respect_gitignore: bool = True, include_ignored: list = None, files: list = None, max_chunks_per_file: Optional[int] = None, workers: int = 1, *, collection = None, closets_collection = None)
+def mine(project_dir: str, palace_path: str, wing_override: str = None, agent: str = 'mempalace', limit: int = 0, dry_run: bool = False, respect_gitignore: bool = True, include_ignored: list = None, files: list = None, max_chunks_per_file: Optional[int] = None, workers: int = 1, compute_derived: bool = True, *, collection = None, closets_collection = None)
 ```
 
 Mine a project directory — or one file inside a project — into the palace.
@@ -380,6 +380,16 @@ and issue #330 for why the encoder must stay single-threaded.
 caller (e.g. ``init`` showing a file-count estimate before the mine
 prompt) avoids walking the tree twice. When ``None`` (the default),
 ``mine`` walks the tree itself just like before.
+
+``compute_derived`` controls the post-mine derived-analytics block
+(cross-wing topic tunnels, within-wing hallways, cross-wing entity
+tunnels). It defaults to ``True`` -- existing callers see no change.
+Pass ``False`` when the mine is small and targeted: those three steps
+cost O(wing), not O(change), so a hook-driven sweep of a handful of
+files otherwise pays for the whole wing (#474 measured 29+ min of CPU
+and 1.6-4.1 GB of RSS for a 31-file memory sweep, holding the
+exclusive mine lock throughout). The drawers written are identical
+either way; only the derived graph is left un-refreshed.
 
 ``max_chunks_per_file`` overrides the per-file chunk cap (see
 :func:`_resolve_max_chunks_per_file`). ``None`` defers to
