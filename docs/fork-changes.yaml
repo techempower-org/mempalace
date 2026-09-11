@@ -23,6 +23,53 @@
 # Order in this file is presentation order in the changelog (newest first).
 
 entries:
+  - id: postgres-cached-conn-reconnect
+    date: 2026-09-10
+    bucket: Fixed
+    commit: 4d15803
+    area: Reliability
+    summary: "Cached postgres connection reconnects once after a server-side disconnect instead of raising raw"
+    body: |
+      After any server-side disconnect — a DB restart, a
+      ``pg_terminate_backend``, or the ``idle_session_timeout = 10min`` set on
+      the production palace DB after the 2026-08-07 incident — the *first* call
+      on an unguarded cached-connection path raised raw and surfaced as a 500;
+      the call after that healed. Verified live on the prod daemon 2026-08-08,
+      and observed during the outage itself on ``count()`` → ``tool_status``
+      and on ``graph_stats``.
+
+      psycopg's ``.closed`` is a client-side flag updated only on I/O, so it
+      stays ``False`` after a server-side kill and ``_get_conn()`` hands the
+      dead connection straight back; the statement that runs on it is what
+      discovers the socket is gone (``closed`` and ``broken`` both flip only
+      *after* the failed query).
+
+      Fixed at the seam rather than per call site: every statement on the
+      cached connection now goes through ``_cursor()``, a ``_RetryingCursor``
+      that classifies the failure and — only for a connection-class error —
+      drops the socket, reconnects and re-runs once. Statement errors (a bad
+      query, a ``statement_timeout``) are re-raised untouched and do not churn
+      the connection. The retry is safe because of an invariant, not because
+      of the driver: a connection error does *not* mean the statement never
+      ran — this connection is ``autocommit``, so the socket can die after the
+      server committed and before the acknowledgement arrives — but every
+      statement routed through the seam is idempotent (``ON CONFLICT`` upserts,
+      keyed ``DELETE``/``UPDATE``, a jsonb merge that is a fixed point, and
+      reads). The docstring states that as a requirement for anything new
+      routed through ``_cursor()``, and records the one exception: the bare
+      ``CREATE TABLE``/``CREATE INDEX`` in ``_create_table`` are guarded by
+      ``_table_exists()`` rather than ``IF NOT EXISTS``, so a disconnect in the
+      ambiguous window during first creation fails loudly on the retry rather
+      than silently. Reconnecting through
+      ``_get_conn()`` also re-applies the session GUCs — a hand-rolled
+      reconnect that dropped ``hnsw.iterative_scan`` (#446) would have turned
+      wing-scoped search silently back into zero rows, so a test pins it.
+      ``_drop_conn()`` closes the dead socket rather than abandoning it: two
+      forever-cached idle connections are what pinned a smart shutdown open
+      for 37.5 hours.
+    tests: "7 (test_postgres_reconnect: count + get survive a kill, dead socket closed not leaked, statement error re-raised without reconnecting, exactly one retry, message-based classification, session settings re-applied)"
+    files: [mempalace/backends/postgres.py, tests/test_postgres_reconnect.py]
+
   - id: cli-mine-background-replay-drain
     date: 2026-09-10
     bucket: Fixed
