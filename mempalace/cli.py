@@ -5286,6 +5286,92 @@ def _emit_local_status_json(palace_path: str) -> None:
     )
 
 
+def _mined_open_drawers_or_exit(palace_path: str, *, explicit_backend, want_json: bool):
+    """Resolve the backend, gate the local precheck on it, open the drawers.
+
+    Exits 2 on every refusal rather than returning, on BOTH output paths:
+    the JSON path always did, and one condition must not hand a text caller
+    and a JSON caller different exit codes. ``mined``'s text path used to
+    print "No palace found" and return 0 — the "a refusal looks like a
+    success" shape #418 removed from purge and sync.
+
+    Resolution precedes the directory test (#459): a service-backed palace
+    has no local database file by design, so the test is not a question
+    about whether it exists. ``mined`` was the last ``cmd_*`` still carrying
+    its own copy; on a daemon-strict host its daemon route hides this path,
+    so the bug only surfaced with ``--palace`` or daemon-strict off.
+
+    Named for ``mined`` deliberately. ``cmd_purge`` and ``cmd_prune`` hold
+    their own near-identical resolve-gate-open sequences with different
+    message shapes; unifying all three is worth doing and is not worth
+    smuggling into a review-stage PR, so it is a follow-up rather than a
+    general-looking helper with one caller that a fourth command could miss.
+    """
+    from .backends import detect_backend_for_path
+    from .migrate import contains_palace_database
+    from .palace import (
+        BackendMismatchError,
+        backend_stores_data_locally,
+        get_collection,
+        resolve_backend_name,
+    )
+
+    def _refuse(hint: str, *, backend_name=None, palace_state: bool = False) -> None:
+        """Emit one refusal and exit 2.
+
+        ``palace_state`` selects the renderer for the text path, and it is a
+        separate argument on purpose: an earlier draft inferred it from
+        whether ``backend_name`` was known, so a real connection error —
+        which knows its backend — printed "No palace found at <dir>" and hid
+        the actual reason. Caught by running the CLI against a Postgres
+        palace whose DSN pointed at a closed port; the unit tests missed it
+        because they assert on the JSON payload, where the hint is carried
+        either way.
+        """
+        if want_json:
+            payload = {
+                "error": "palace_unavailable",
+                "hint": hint,
+                "palace_path": palace_path,
+            }
+            if backend_name:
+                payload["backend"] = backend_name
+            _emit_json(payload)
+        elif palace_state:
+            _print_retired_local_palace_or_default(palace_path)
+        else:
+            print(f"\n  {hint}")
+        sys.exit(2)
+
+    try:
+        backend_name = resolve_backend_name(palace_path, explicit=explicit_backend)
+    except (BackendMismatchError, KeyError) as exc:
+        detail = exc.args[0] if exc.args else exc
+        _refuse(f"Could not resolve backend for {palace_path}: {detail}")
+
+    if backend_stores_data_locally(backend_name):
+        has_db = os.path.isdir(palace_path) and (
+            contains_palace_database(palace_path)
+            or detect_backend_for_path(palace_path) is not None
+        )
+        if not has_db:
+            _refuse(
+                f"No palace database at {palace_path}",
+                backend_name=backend_name,
+                palace_state=True,
+            )
+
+    try:
+        return get_collection(
+            palace_path,
+            collection_name="mempalace_drawers",
+            create=False,
+            backend=backend_name,
+        )
+    except Exception as e:
+        _refuse(f"Error reading palace: {e}", backend_name=backend_name)
+
+
 def cmd_mined(args):
     """List mined source files grouped by wing.
 
@@ -5322,46 +5408,12 @@ def cmd_mined(args):
 
     from collections import defaultdict
 
-    from .backends.chroma import ChromaBackend
-    from .migrate import contains_palace_database
-
     palace_path = os.path.abspath(
         os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     )
-
-    if not os.path.isdir(palace_path) or not contains_palace_database(palace_path):
-        if want_json_early:
-            _emit_json(
-                {
-                    "error": "palace_unavailable",
-                    "hint": f"No palace database at {palace_path}",
-                    "palace_path": palace_path,
-                }
-            )
-            sys.exit(2)
-        _print_retired_local_palace_or_default(palace_path)
-        return
-
-    backend = ChromaBackend()
-    from .backends.base import PalaceRef
-
-    try:
-        col = backend.get_collection(
-            palace=PalaceRef(id=palace_path, local_path=palace_path),
-            collection_name="mempalace_drawers",
-        )
-    except Exception as e:
-        if want_json_early:
-            _emit_json(
-                {
-                    "error": "palace_unavailable",
-                    "hint": f"Error reading palace: {e}",
-                    "palace_path": palace_path,
-                }
-            )
-            sys.exit(2)
-        print(f"\n  Error reading palace: {e}")
-        return
+    col = _mined_open_drawers_or_exit(
+        palace_path, explicit_backend=_backend_arg(args), want_json=want_json_early
+    )
 
     # Wing-by-source aggregation. Pagination mirrors miner.status so
     # palaces with hundreds of thousands of drawers don't trip SQLite's

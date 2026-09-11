@@ -478,7 +478,11 @@ def test_cmd_mined_no_palace(mock_config_cls, capsys, tmp_path):
     mock_config_cls.return_value.palace_path = str(missing)
     from mempalace.cli import cmd_mined
 
-    cmd_mined(_make_mined_args(palace=str(missing)))
+    # Exit 2, not 0 (#459): mined's text path used to print this and return
+    # 0 while its --json path exited 2 for the same condition.
+    with pytest.raises(SystemExit) as exc_info:
+        cmd_mined(_make_mined_args(palace=str(missing)))
+    assert exc_info.value.code == 2
     assert "No palace found" in capsys.readouterr().out
 
 

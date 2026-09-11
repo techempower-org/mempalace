@@ -128,7 +128,10 @@ class TestOpenCollectionOrExplainResolvesBackendFirst:
 
         assert got is None
         assert any("has no" in m for m in messages)
-        opened.assert_not_called(), "State B exists so a read-only probe cannot create a DB"
+        # State B exists so a read-only probe cannot create a DB. (Written as
+        # a real assert: `opened.assert_not_called(), "msg"` is a tuple
+        # expression whose message can never be reached.)
+        assert not opened.called, "State B must not open the backend: it would create files"
 
     def test_local_backend_opens_a_healthy_palace(self, tmp_path):
         from mempalace.palace import _open_collection_or_explain
@@ -239,6 +242,137 @@ class TestPruneOnServerBackend:
 
 
 # ── status --json and compress, through the shared seam ────────────────
+
+
+def _mined_args(**overrides):
+    defaults = {"palace": None, "wing": None, "limit": None, "json": False, "quiet": False}
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+class TestMinedOnServerBackend:
+    """`mined` was the last cmd_* carrying its own copy of the precheck.
+
+    Masked on the operator's host by its daemon-strict route, so the local
+    path's refusal only surfaces with `--palace` or daemon-strict off — and
+    it refused with exit 0, which is the shape #418 exists to eliminate.
+    """
+
+    def test_postgres_palace_is_not_refused(self, tmp_path, monkeypatch, capsys):
+        from mempalace import cli
+
+        palace = _postgres_palace_dir(tmp_path)
+        monkeypatch.setenv("MEMPALACE_BACKEND", "postgres")
+        col = MagicMock()
+        col.count.return_value = 1
+        col.get.side_effect = [
+            {"metadatas": [{"wing": "w", "source_file": "/a/b.md"}]},
+            {"metadatas": []},
+        ]
+
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=False),
+            patch("mempalace.palace.get_collection", return_value=col) as opener,
+        ):
+            cli.cmd_mined(_mined_args(palace=str(palace)))
+
+        out = capsys.readouterr().out
+        assert "No palace found" not in out
+        assert opener.call_args.kwargs["backend"] == "postgres"
+
+    def test_resolved_backend_is_used_not_hardcoded_chroma(self, tmp_path, monkeypatch):
+        from mempalace import cli
+
+        palace = _postgres_palace_dir(tmp_path)
+        monkeypatch.setenv("MEMPALACE_BACKEND", "postgres")
+        col = MagicMock()
+        col.count.return_value = 0
+        col.get.return_value = {"metadatas": []}
+        chroma = MagicMock()
+
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=False),
+            patch("mempalace.palace.get_collection", return_value=col),
+            patch("mempalace.backends.chroma.ChromaBackend", chroma),
+        ):
+            cli.cmd_mined(_mined_args(palace=str(palace)))
+
+        chroma.assert_not_called()
+
+    def test_absent_local_palace_exits_non_zero(self, tmp_path, capsys):
+        """The text path used to print and return 0; the JSON path exited 2.
+
+        One condition must not hand a text caller and a JSON caller
+        different exit codes.
+        """
+        from mempalace import cli
+
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=False),
+            pytest.raises(SystemExit) as exc,
+        ):
+            cli.cmd_mined(_mined_args(palace=str(tmp_path / "nonexistent")))
+
+        assert exc.value.code == 2
+        assert "No palace found" in capsys.readouterr().out
+
+    def test_absent_local_palace_json_still_exits_2(self, tmp_path, capsys):
+        from mempalace import cli
+
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=False),
+            pytest.raises(SystemExit) as exc,
+        ):
+            cli.cmd_mined(_mined_args(palace=str(tmp_path / "nonexistent"), json=True))
+
+        assert exc.value.code == 2
+        assert "palace_unavailable" in capsys.readouterr().out
+
+    def test_an_open_failure_says_why_instead_of_no_palace_found(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """A refusal must not borrow the wrong message.
+
+        An earlier draft of the extracted helper chose the text renderer by
+        whether the backend was known, so a connection error — which knows
+        its backend — printed "No palace found at <dir>". That is a refusal
+        naming the wrong cause, which is the defect family #418/#459 are
+        about. Found by running the CLI against a closed port, not by a
+        unit test: the JSON payload carries the hint either way.
+        """
+        from mempalace import cli
+
+        palace = _postgres_palace_dir(tmp_path)
+        monkeypatch.setenv("MEMPALACE_BACKEND", "postgres")
+
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=False),
+            patch(
+                "mempalace.palace.get_collection",
+                side_effect=RuntimeError("connection refused"),
+            ),
+            pytest.raises(SystemExit) as exc,
+        ):
+            cli.cmd_mined(_mined_args(palace=str(palace)))
+
+        assert exc.value.code == 2
+        out = capsys.readouterr().out
+        assert "connection refused" in out
+        assert "No palace found" not in out
+
+    def test_daemon_route_is_unaffected(self):
+        from mempalace import cli
+
+        calls = MagicMock(return_value={"sources_by_wing": {}, "total_sources": 0})
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=True),
+            patch("mempalace.cli._call_daemon_tool", calls),
+            patch("mempalace.palace.get_collection") as local,
+        ):
+            cli.cmd_mined(_mined_args())
+
+        assert calls.call_args[0][0] == "mempalace_mined"
+        local.assert_not_called()
 
 
 class TestStatusJsonOnServerBackend:

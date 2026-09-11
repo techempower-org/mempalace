@@ -421,14 +421,13 @@ class TestCmdMinedJson:
 
         fake_col = MagicMock()
         fake_col.get.return_value = {"metadatas": []}
-        fake_backend_cls = MagicMock()
-        fake_backend_cls.return_value.get_collection.return_value = fake_col
-
         args = argparse.Namespace(palace=str(palace), json=True, quiet=False, wing=None, limit=50)
 
+        # `mined` opens through palace.get_collection since #459 (it used to
+        # construct ChromaBackend directly); patch the seam it actually uses.
         with patch("mempalace.cli.MempalaceConfig") as mock_cfg:
             mock_cfg.return_value.palace_path = str(palace)
-            with patch("mempalace.backends.chroma.ChromaBackend", fake_backend_cls):
+            with patch("mempalace.palace.get_collection", return_value=fake_col):
                 with patch("mempalace.migrate.contains_palace_database", return_value=True):
                     with pytest.raises(SystemExit) as exc_info:
                         cmd_mined(args)
@@ -462,14 +461,13 @@ class TestCmdMinedJson:
             },
             {"metadatas": []},  # next batch empty → terminate loop
         ]
-        fake_backend_cls = MagicMock()
-        fake_backend_cls.return_value.get_collection.return_value = fake_col
-
         args = argparse.Namespace(palace=str(palace), json=True, quiet=False, wing=None, limit=50)
 
+        # `mined` opens through palace.get_collection since #459 (it used to
+        # construct ChromaBackend directly); patch the seam it actually uses.
         with patch("mempalace.cli.MempalaceConfig") as mock_cfg:
             mock_cfg.return_value.palace_path = str(palace)
-            with patch("mempalace.backends.chroma.ChromaBackend", fake_backend_cls):
+            with patch("mempalace.palace.get_collection", return_value=fake_col):
                 with patch("mempalace.migrate.contains_palace_database", return_value=True):
                     cmd_mined(args)
 
