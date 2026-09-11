@@ -134,6 +134,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **Postgres backend embeds through get_embedding_function() instead of rebuilding an ONNX session per call** ([`fe9e049`](https://github.com/techempower-org/mempalace/commit/fe9e049))
+  ``backends/postgres.py::_embed`` constructed its own
+  ``DefaultEmbeddingFunction`` and never called
+  ``mempalace.embedding.get_embedding_function()``. Every embedding-layer
+  improvement in the project lands inside that resolver, so this backend
+  silently missed all of them — three defects compounding in one eight-line
+  function.
+
+  ``MEMPALACE_EMBEDDING_MODEL`` was ignored on this backend's write and
+  query paths: the config layer resolved correctly, but ``_embed`` never
+  asked, so a configured remote embedding server served **9 texts in 18.3
+  hours** of near-continuous mining while a local CPU embedder did the
+  work. The ORT ``intra_op_num_threads`` cap (#1068) is wired up only
+  inside the resolver, so this path spawned the ~47-thread pool that fix
+  exists to prevent — daemon CPU averaged 210-265% over 18 hours, sampled
+  at 2550% mid-mine on a 48-core host. And in chromadb 1.5.9
+  ``DefaultEmbeddingFunction`` is not ``ONNXMiniLM_L6_V2``: its whole
+  ``__call__`` is ``return ONNXMiniLM_L6_V2()(input)`` and ``.model`` is a
+  per-*instance* ``cached_property``, so the module-global cached an object
+  holding no model and every call rebuilt the entire ONNX session —
+  0.706s / 0.711s / 0.713s across three identical calls, perfectly flat,
+  against 1.257s / 0.532s / 0.539s for a genuinely reused instance. At
+  ``DRAWER_UPSERT_BATCH_SIZE = 1000`` that is one session rebuild per 1000
+  chunks. Per-batch embed time after delegating: **0.706s → 0.016s**.
+
+  Default behaviour is unchanged — with no embedding configuration set the
+  resolver still returns a local ONNX MiniLM embedder and adds no
+  dependency. The ``requires_explicit_embeddings`` capability was
+  deliberately *not* declared: it only takes effect at
+  ``palace.get_collection()``, which ``mcp_server._get_collection_postgres``
+  and ``convo_miner.mine_sessions`` both bypass, so it would break the MCP
+  server and the miner while delegation inside ``_embed`` fixes every route.
+  Routing through the resolver does make one new failure mode reachable —
+  a configured model of a width the ``vector(384)`` column cannot take — so
+  ``_warn_on_dimension_mismatch`` names the model, the produced width and
+  the column width once; postgres stays the authority on the write. The
+  remaining same-width gap (this is the only vector backend with no stored
+  embedder identity) is tracked in #468.
+
+  *Tests:* 6 (test_postgres_embedding_resolver: embedder constructed once across three embeds, DefaultEmbeddingFunction never constructed, configured EF is the one that runs, plain Python floats, empty batch loads no model, dimension mismatch named once)
+  *Files:* `mempalace/backends/postgres.py`, `tests/test_postgres_embedding_resolver.py`
+
+
 - **Cached postgres connection reconnects once after a server-side disconnect instead of raising raw** ([`4d15803`](https://github.com/techempower-org/mempalace/commit/4d15803))
   After any server-side disconnect — a DB restart, a
   ``pg_terminate_backend``, or the ``idle_session_timeout = 10min`` set on
