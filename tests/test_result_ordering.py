@@ -355,6 +355,52 @@ class TestOrderingProperties:
                         )
 
 
+class TestStabilisationCap:
+    """The loop promises a fixed point. If it ever runs out of passes it must
+    SAY so — a silently under-settled order contradicts the docstring and, at
+    the old cap of 8, happened routinely on dense inputs at n=40 (the widen
+    cap). Raised to 32, which measured zero non-fixed-points at that width."""
+
+    def test_cap_is_high_enough_for_the_widest_window_we_fetch(self):
+        from mempalace.result_ordering import _MAX_STABILISE_PASSES
+        from mempalace.cli import _WIDEN_CAP
+
+        # 32 still left 2/600 non-fixed-points on a dense generator at n=40;
+        # 48 measured zero, at identical cost (the loop exits as soon as a
+        # pass moves nothing). Pinned so a future trim re-measures first.
+        assert _MAX_STABILISE_PASSES >= 48, (
+            f"cap must clear the densest window the widen can produce (_WIDEN_CAP={_WIDEN_CAP})"
+        )
+
+    def test_warns_when_the_cap_is_exhausted(self, caplog, monkeypatch):
+        import logging
+
+        import mempalace.result_ordering as ro
+
+        # One pass is provably not enough for this input, so the cap is hit.
+        monkeypatch.setattr(ro, "_MAX_STABILISE_PASSES", 1)
+        hits = [
+            _hit("transcript", CHUNK_C, id="C"),
+            _hit("transcript", CHUNK_B, id="B"),
+            _hit("file", CHUNK_A, id="A"),
+        ]
+        with caplog.at_level(logging.WARNING, logger="mempalace.result_ordering"):
+            ro.prefer_curated(hits)
+        assert any("did not settle" in r.message for r in caplog.records), (
+            f"cap exhaustion must not be silent; got {[r.message for r in caplog.records]}"
+        )
+
+    def test_silent_when_the_order_settles(self, caplog):
+        import logging
+
+        import mempalace.result_ordering as ro
+
+        hits = [_hit("transcript", TRANSCRIPT, id="t"), _hit("file", CARD, id="f")]
+        with caplog.at_level(logging.WARNING, logger="mempalace.result_ordering"):
+            ro.prefer_curated(hits)
+        assert not caplog.records, "a settled order must log nothing"
+
+
 # ── wiring: every interactive route applies the preference ──────────────
 
 

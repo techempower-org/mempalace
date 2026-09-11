@@ -38,10 +38,13 @@ than bare tokens because same-topic chunks share vocabulary but not word
 order. No embeddings: this runs on every interactive search.
 """
 
+import logging
 import re
 from typing import Optional
 
 from .provenance import source_kind
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "NEAR_DUP_THRESHOLD",
@@ -69,9 +72,21 @@ _MAX_PAIRWISE_RESULTS = 200
 # Passes are repeated until the order stops changing, so the value returned is
 # always a fixed point and a second call is a no-op. Termination is not merely
 # hoped for: a hit only ever moves up past hits it strictly outranks, which
-# strictly increases sum(rank * position), and that sum is bounded. The cap is
-# a belt-and-braces stop, never reached in the randomised property tests.
-_MAX_STABILISE_PASSES = 8
+# strictly increases sum(rank * position), and that sum is bounded.
+#
+# The cap is the belt-and-braces stop, and 8 was too low. Measured on a dense
+# stress generator at n=40 — the widest window ``_WIDEN_CAP`` can fetch, and
+# far denser than a real search window — over 600 inputs:
+#
+#     cap   8 -> 591/600 non-fixed-points      cap  32 -> 2/600
+#     cap  48 -> 0/600                         cap 128 -> 0/600
+#
+# Below the cap the loop returned a NON-fixed-point silently, contradicting
+# the promise above. A higher cap is free: every row above ran in the same
+# 1.22s, because the loop exits on the first pass that moves nothing. 48 is
+# the smallest value that measured zero here, and exhausting it is logged
+# rather than swallowed.
+_MAX_STABILISE_PASSES = 48
 
 # Lower sorts earlier. Curated documents a human maintains outrank a quoted
 # copy; a palace diary summary sorts last because it carries no citable
@@ -218,11 +233,23 @@ def prefer_curated(results, threshold: Optional[float] = None):
     order = [i for i, _ in indexed]
     original = list(order)
 
+    settled = False
     for _ in range(_MAX_STABILISE_PASSES):
         nxt = _stabilise_once(order, ranks, shingles, thr)
         if nxt is None:
+            settled = True
             break
         order = nxt
+    if not settled:
+        # The returned order is usable but is NOT a fixed point, so a second
+        # call could still move it. Never silent: an under-settled result
+        # would otherwise look identical to a settled one.
+        logger.warning(
+            "result ordering did not settle within %d passes for %d hits; "
+            "returning the last order (not a fixed point)",
+            _MAX_STABILISE_PASSES,
+            len(order),
+        )
 
     if order == original:
         return results
