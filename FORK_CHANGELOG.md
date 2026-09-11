@@ -18,6 +18,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-09-10]
+
+
+### Fixed
+
+
+- **Postgres write path scrubs lone surrogates, nested metadata and ids, not just top-level NULs** ([`66ca19f`](https://github.com/techempower-org/mempalace/commit/66ca19f))
+  ``backends/pgvector.py`` has stripped both byte classes Postgres refuses
+  since upstream #1829/#1833 — NUL and lone UTF-16 surrogates — because one
+  stray byte anywhere in a mined corpus aborts the whole batch.
+  ``backends/postgres.py`` only ever grew the NUL half (#417), and only over
+  documents and top-level metadata values, leaving three live ways for a
+  single transcript to take down a mine: a lone surrogate (psycopg cannot
+  UTF-8-encode the parameter, and ``json.dumps`` escapes it to a ``\udXXX``
+  sequence the ``::jsonb`` cast rejects); a NUL nested one level down in a
+  list, a sub-dict or a dict key, which serialized to an escape the same
+  cast rejects; and ids, which bind into a ``text`` column unscrubbed.
+
+  ``_replace_nul_bytes`` is widened into ``_scrub_unstorable``, keeping
+  #417's contract exactly — U+FFFD substitution plus a counted
+  ``nul_bytes_replaced``, so the substitution stays provenanced and never
+  silent — and adding the symmetric ``lone_surrogates_replaced``. It now
+  runs at all four bind sites rather than only ``add``/``upsert``:
+  ``update()`` serializes metadata into its own ``::jsonb`` cast, and
+  ``get()``/``delete()`` bind ids into text comparisons, so scrubbing writes
+  alone would have filed a drawer under an id its own caller could no longer
+  look up.
+
+  ``pgvector.py`` is byte-identical to ``upstream/develop`` and is left that
+  way — sharing a helper would make every future upstream sync conflict on
+  it. The drift the issue was filed about is caught instead by a parity test
+  driven by pgvector's own sanitizers: after our scrub, ``_strip_nul`` and
+  ``strip_lone_surrogates`` must both find nothing left to do. The
+  substitution policies differ on purpose (pgvector deletes the byte, this
+  fork replaces and counts it), so the compared invariant is storability,
+  not equality.
+
+  *Tests:* 21 (test_postgres_unstorable_bytes: surrogate replace + count, astral pairs intact, id scrub, nested metadata + keys, scalars unchanged, #417 contract, four bind sites, 8-case pgvector parity sweep)
+  *Files:* `mempalace/backends/postgres.py`, `tests/test_postgres_unstorable_bytes.py`, `tests/test_postgres_nul_bytes.py`
+
+
 ## [2026-09-03]
 
 
