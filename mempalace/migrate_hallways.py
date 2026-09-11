@@ -92,10 +92,21 @@ def iter_hallway_records(path: str, chunk_size: int = _DEFAULT_CHUNK) -> Iterato
             while idx < len(buf) and buf[idx] in " \t\r\n,":
                 idx += 1
             if idx < len(buf) and buf[idx] == "]":
-                return
+                return  # the only clean exit: we saw the array close
             if idx >= len(buf):
                 if exhausted:
-                    return
+                    # Ran out of input without ever seeing "]". The file was
+                    # cut between records — killed transfer, full disk,
+                    # interrupted write. Returning here would report a short
+                    # read as a complete one, and migrate() would then record
+                    # that count as a finished resume point: silent tail loss
+                    # on a 1 GB import. Mid-record truncation already raises
+                    # below; this is the boundary case that did not.
+                    raise ValueError(
+                        "hallways file ends with an unterminated record array "
+                        "(no closing ']'): the file is truncated. Refusing to "
+                        "report a partial read as complete."
+                    )
                 chunk = handle.read(chunk_size)
                 if not chunk:
                     exhausted = True
@@ -111,8 +122,8 @@ def iter_hallway_records(path: str, chunk_size: int = _DEFAULT_CHUNK) -> Iterato
                 chunk = handle.read(chunk_size)
                 if not chunk:
                     raise ValueError(
-                        f"hallways file is malformed near byte offset {idx} of the "
-                        "current buffer; the record array does not parse"
+                        f"hallways file is truncated or malformed near byte offset "
+                        f"{idx} of the current buffer; the record array does not parse"
                     ) from None
                 buf = buf[idx:] + chunk
                 idx = 0
@@ -127,8 +138,18 @@ def iter_hallway_records(path: str, chunk_size: int = _DEFAULT_CHUNK) -> Iterato
 
 
 def _source_fingerprint(path: str) -> dict:
+    """Cheap identity for the source file: size + mtime.
+
+    Not a content hash on purpose — hashing 1 GB costs a full read, which is
+    most of what resuming exists to avoid. Size alone misses a same-length
+    rewrite, so mtime carries the rest. Both are O(1) from one stat.
+    """
     stat = os.stat(path)
-    return {"source_path": os.path.abspath(path), "source_size": stat.st_size}
+    return {
+        "source_path": os.path.abspath(path),
+        "source_size": stat.st_size,
+        "source_mtime_ns": stat.st_mtime_ns,
+    }
 
 
 def _write_state(state_path: str, source_path: str, imported: int) -> None:
@@ -159,13 +180,23 @@ def _read_state(state_path: str, source_path: str) -> int:
         logger.warning("hallway migration: unreadable state at %s; starting over", state_path)
         return 0
     current = _source_fingerprint(source_path)
-    if saved.get("source_size") != current["source_size"]:
+    changed = [
+        field
+        for field in ("source_size", "source_mtime_ns")
+        # A state file written before mtime was tracked has no mtime to
+        # compare; fall back to size alone rather than refusing every
+        # in-flight resume.
+        if field in saved and saved.get(field) != current[field]
+    ]
+    if changed:
         raise MigrationStateMismatch(
-            f"resume state at {state_path} was recorded for a "
-            f"{saved.get('source_size')}-byte file, but {source_path} is now "
-            f"{current['source_size']} bytes. The saved position is an ordinal into the "
-            "record sequence, so resuming would skip the wrong records. Re-run with "
-            "--restart to import from the beginning (the upsert makes that safe)."
+            f"resume state at {state_path} does not describe {source_path} any more "
+            f"({', '.join(changed)} differ: recorded "
+            f"{ {f: saved.get(f) for f in changed} }, now "
+            f"{ {f: current[f] for f in changed} }). The saved position is an ordinal "
+            "into the record sequence, so resuming would skip the wrong records. "
+            "Re-run with --restart to import from the beginning (the upsert makes "
+            "that safe)."
         )
     return int(saved.get("imported") or 0)
 

@@ -345,3 +345,80 @@ def test_migration_never_filters_entities(tmp_path):
     )
 
     assert set(store.rows) == {"1", "2"}
+
+
+# ---------------------------------------------------------------------------
+# Truncated input — silent tail loss is the worst failure this can have
+# ---------------------------------------------------------------------------
+
+
+def test_unterminated_array_raises_instead_of_returning_short(tmp_path):
+    """A file cut off at a record boundary must not read as complete.
+
+    Killed scp, full disk, interrupted write: the array simply ends with no
+    closing ``]``. Mid-record truncation already raises, but a cut exactly
+    between records used to yield N records and no error — and the migration
+    would then write a resume state recording N as the whole file. Silent
+    tail loss on a 1 GB import, invisible until someone noticed hallways
+    missing.
+    """
+    path = tmp_path / "cut.json"
+    path.write_text(
+        '{"schema_version": 1, "hallways": [{"id": "h1", "wing": "w"}, {"id": "h2", "wing": "w"}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unterminated|truncat"):
+        list(mh.iter_hallway_records(str(path)))
+
+
+def test_unterminated_array_with_trailing_comma_also_raises(tmp_path):
+    """The other boundary shape: cut right after a separator."""
+    path = tmp_path / "cut2.json"
+    path.write_text(
+        '{"schema_version": 1, "hallways": [{"id": "h1", "wing": "w"}, ',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unterminated|truncat"):
+        list(mh.iter_hallway_records(str(path)))
+
+
+def test_truncation_prevents_a_resume_state_being_written(tmp_path):
+    """The compounding half: a short read must not be recorded as complete."""
+    path = tmp_path / "cut3.json"
+    path.write_text('{"hallways": [{"id": "h1", "wing": "w"}', encoding="utf-8")
+    state = tmp_path / "s.json"
+
+    with pytest.raises(ValueError):
+        mh.migrate(str(path), store=_FakeStore(), state_path=str(state), batch_size=1000)
+
+    assert not state.exists(), "a failed read must not leave a resume point behind"
+
+
+def test_a_properly_terminated_array_still_reads_clean(tmp_path):
+    """Control for the two tests above — the guard must not fire on good input."""
+    assert list(mh.iter_hallway_records(_write(tmp_path, {"hallways": RECORDS}))) == RECORDS
+    assert list(mh.iter_hallway_records(_write(tmp_path, RECORDS))) == RECORDS
+
+
+# ---------------------------------------------------------------------------
+# Resume fingerprint
+# ---------------------------------------------------------------------------
+
+
+def test_resume_refuses_when_mtime_changed_at_the_same_size(tmp_path):
+    """Size alone misses a same-length rewrite; mtime catches it cheaply."""
+    path = _write(tmp_path, {"hallways": RECORDS})
+    state = tmp_path / "s.json"
+    mh._write_state(str(state), path, imported=2)
+
+    import os
+    import time
+
+    stat = os.stat(path)
+    os.utime(path, (stat.st_atime, stat.st_mtime + 1000))
+    time.sleep(0)
+
+    with pytest.raises(mh.MigrationStateMismatch):
+        mh.migrate(path, store=_FakeStore(), state_path=str(state))
