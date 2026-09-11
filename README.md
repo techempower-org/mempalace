@@ -97,6 +97,38 @@ uv run mempalace mine ~/Projects/myproject
 uv run mempalace search "why did we switch to GraphQL"
 ```
 
+### MCP bridge on PATH
+
+One step the install above does not cover, and the one that breaks most often. The
+plugin manifests (`.claude-plugin/plugin.json`, `.mcp.json`, `mcp.json`,
+`.cursor-plugin/mcp.json`, `.antigravity-plugin/mcp_config.json`) declare the MCP server
+as the **bare command** `mempalace-mcp`, so that console script has to resolve on the
+PATH *the editor was launched with*. A GUI-launched editor does not inherit the shell
+PATH that has your project venv active, so a working `uv run mempalace` and a working
+MCP bridge are two different questions.
+
+```bash
+ln -s "$PWD/.venv/bin/mempalace-mcp" ~/.local/bin/mempalace-mcp   # or anywhere already on PATH
+mempalace doctor
+```
+
+`mempalace doctor`'s first check is `shutil.which("mempalace-mcp")` and reports at error
+level when it misses, so it answers this directly.
+
+For a daemon-fronted install, point the symlink at palace-daemon's wrapper instead — it
+sources `PALACE_DAEMON_URL` / `PALACE_API_KEY` from `~/.config/palace-daemon/env` and
+`exec`s the bridge, which keeps the API key out of both your shell rc and the editor's
+config file:
+
+```bash
+ln -s ~/Projects/palace-daemon/clients/mempalace-mcp-wrapper.sh ~/.local/bin/mempalace-mcp
+```
+
+Skip it and every session fails with `Executable not found in $PATH: mempalace-mcp`.
+That failure is quiet: the search tool is rarely called directly, so nothing surfaces it
+until someone asks the palace a question and gets nothing — it went unnoticed
+fleet-wide for days in #425.
+
 For a daemon-fronted deployment (recommended once palace size reaches the multi-thousand-drawer range), see [palace-daemon](https://github.com/techempower-org/palace-daemon)'s setup. The fork's `scripts/deploy.sh` is a one-command Syncthing-aware redeploy: push fork main, restart palace-daemon, post-restart import-check that the new fork-ahead surface is loaded.
 
 ## What it looks like in production
