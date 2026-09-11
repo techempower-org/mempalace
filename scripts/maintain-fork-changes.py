@@ -168,6 +168,8 @@ def resolve_head_by_file_add(
     branch: str = "HEAD",
     adding_commit: Callable[[str, str], str | None] = git_file_add_commit,
     fetch: Callable[[int], str | None] | None = None,
+    is_ancestor: Callable[[str, str], bool] = git_is_ancestor,
+    verify_ref: str = "origin/main",
 ) -> tuple[list[tuple[dict, str]], list[tuple[dict, str]], list[tuple[dict, str]]]:
     """Resolve ``commit: HEAD`` from the commit that added the entry file.
 
@@ -193,6 +195,16 @@ def resolve_head_by_file_add(
     The second case is still wrong *documentation*, so it is surfaced as
     a note rather than ignored -- a guessed number is how an entry
     acquires a confidently wrong field.
+
+    Every candidate sha is checked against ``verify_ref``
+    (``origin/main``) before it can be written, and refused otherwise.
+    That is what makes a branch commit *impossible* to write rather than
+    merely unlikely: the ``--branch=origin/main`` default already made it
+    hard, but a default is an argument away from being wrong, and the
+    honest question here is not "which ref did you ask about" but "is
+    this commit actually on main". Asked about a feature branch,
+    ``git log --diff-filter=A`` truthfully returns the BRANCH commit —
+    which the squash orphans moments later (#472 through a new door).
 
     Returns ``(changes, unresolved, notes)``. ``notes`` are advisory and
     deliberately NOT folded into ``unresolved``: an advisory must not make
@@ -227,14 +239,26 @@ def resolve_head_by_file_add(
                     )
                 )
                 continue
-            if via_api is None:
-                # A `fork_pr` that cannot be verified is usually a number
-                # GUESSED before `gh pr create` returned. It cannot corrupt
-                # the result -- file-add already has the answer -- but it is
-                # wrong documentation, so say so instead of ignoring it.
-                notes.append(
-                    (entry, f"resolved from file-add; fork_pr #{pr} is unverifiable — check it")
+        if not is_ancestor(sha, verify_ref):
+            # Refuse, never write. A sha that is not on main is either a
+            # branch commit (about to be orphaned by the squash) or a
+            # typo; both are the failure this mechanism exists to end.
+            unresolved.append(
+                (
+                    entry,
+                    f"{sha} is not an ancestor of {verify_ref} — refusing to write it "
+                    "(run the sweep against origin/main AFTER the merge)",
                 )
+            )
+            continue
+        if pr and fetch is not None and not via_api:
+            # A `fork_pr` that cannot be verified is usually a number
+            # GUESSED before `gh pr create` returned. It cannot corrupt
+            # the result -- file-add already has the answer -- but it is
+            # wrong documentation, so say so instead of ignoring it.
+            notes.append(
+                (entry, f"resolved from file-add; fork_pr #{pr} is unverifiable — check it")
+            )
         changes.append((entry, sha))
     return changes, unresolved, notes
 

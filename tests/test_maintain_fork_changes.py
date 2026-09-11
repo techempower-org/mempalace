@@ -268,7 +268,10 @@ class TestResolveHeadByFileAdd:
         e["_path"] = str(tmp_path / "x.yaml")
 
         changes, unresolved, _notes = mfc.resolve_head_by_file_add(
-            [e], "HEAD", adding_commit=lambda path, branch: "cafe123"
+            [e],
+            "HEAD",
+            adding_commit=lambda path, branch: "cafe123",
+            is_ancestor=lambda sha, ref: True,
         )
 
         assert unresolved == []
@@ -306,6 +309,7 @@ class TestResolveHeadByFileAdd:
             "HEAD",
             adding_commit=lambda path, branch: "aaaaaaa",
             fetch=lambda pr: "bbbbbbb",
+            is_ancestor=lambda sha, ref: True,
         )
 
         assert changes == []
@@ -320,6 +324,7 @@ class TestResolveHeadByFileAdd:
             "HEAD",
             adding_commit=lambda path, branch: "aaaaaaa",
             fetch=lambda pr: "aaaaaaa",
+            is_ancestor=lambda sha, ref: True,
         )
 
         assert unresolved == []
@@ -354,6 +359,7 @@ class TestResolveHeadByFileAdd:
             "HEAD",
             adding_commit=lambda path, branch: "e4d52a3",
             fetch=lambda pr: None,
+            is_ancestor=lambda sha, ref: True,
         )
 
         assert changes == [(e, "e4d52a3")], "file-add still resolves correctly"
@@ -411,7 +417,10 @@ class TestFileAddAgainstRealGit:
         e["_path"] = rel
         assert "fork_pr" not in e, "this is the no-fork_pr case"
 
-        changes, unresolved, notes = mfc.resolve_head_by_file_add([e], "HEAD")
+        # verify_ref="HEAD": the temp repo has no origin/main, and this test
+        # is about file-add, not the ancestry gate (covered separately). The
+        # REAL git_is_ancestor still runs — against this repo's HEAD.
+        changes, unresolved, notes = mfc.resolve_head_by_file_add([e], "HEAD", verify_ref="HEAD")
 
         assert unresolved == [], unresolved
         assert notes == [], "no fork_pr means nothing to cross-check or warn about"
@@ -476,7 +485,62 @@ class TestFileAddAgainstRealGit:
 
         e = _entry(commit="HEAD")
         e["_path"] = rel
-        changes, unresolved, _notes = mfc.resolve_head_by_file_add([e], "main")
+        changes, unresolved, _notes = mfc.resolve_head_by_file_add([e], "main", verify_ref="main")
 
         assert changes == [], "an unmerged entry must not be resolved"
         assert "could not find the commit" in unresolved[0][1]
+
+
+class TestAncestryGateBeforeWrite:
+    """Oracle's rider on #492: a candidate sha is checked against
+    `origin/main` BEFORE it can be written, and refused otherwise.
+
+    The `--branch=origin/main` default already made a branch commit hard
+    to write, but a default is one argument away from being wrong. The
+    question the caller actually needs answered is not "which ref did you
+    ask about" but "is this commit on main" — so that is what gets
+    asserted, which makes the hazard impossible rather than unlikely.
+    """
+
+    def test_a_branch_only_sha_is_refused_not_written(self, tmp_path):
+        e = _entry(commit="HEAD")
+        e["_path"] = str(tmp_path / "x.yaml")
+
+        changes, unresolved, _notes = mfc.resolve_head_by_file_add(
+            [e],
+            "some-feature-branch",
+            adding_commit=lambda path, branch: "b4a9c11",
+            is_ancestor=lambda sha, ref: False,  # not on origin/main
+        )
+
+        assert changes == [], "a sha that is not on main must never be written"
+        assert "not an ancestor of origin/main" in unresolved[0][1]
+        assert "refusing to write it" in unresolved[0][1]
+
+    def test_the_gate_verifies_against_origin_main_regardless_of_branch(self, tmp_path):
+        """Even asked about a branch, the VERIFY ref stays origin/main."""
+        seen = []
+        e = _entry(commit="HEAD")
+        e["_path"] = str(tmp_path / "x.yaml")
+
+        mfc.resolve_head_by_file_add(
+            [e],
+            "a-feature-branch",
+            adding_commit=lambda path, branch: "abc1234",
+            is_ancestor=lambda sha, ref: seen.append((sha, ref)) or True,
+        )
+
+        assert seen == [("abc1234", "origin/main")]
+
+    def test_an_ancestor_sha_still_resolves(self, tmp_path):
+        e = _entry(commit="HEAD")
+        e["_path"] = str(tmp_path / "x.yaml")
+
+        changes, unresolved, _notes = mfc.resolve_head_by_file_add(
+            [e],
+            "HEAD",
+            adding_commit=lambda path, branch: "abc1234",
+            is_ancestor=lambda sha, ref: True,
+        )
+
+        assert (changes, unresolved) == ([(e, "abc1234")], [])
