@@ -34,7 +34,20 @@ def test_init_filters_sys_path_from_leaked_pythonpath(pythonpath):
     Asserts on the sentinel substring directly so the test does not
     couple to the production normalization logic. The dot/empty/unset
     cases additionally exercise the early-return / collision paths
-    without crashing."""
+    without crashing.
+
+    The parent-retained assertion resolves relative ``sys.path`` entries
+    against the child's cwd before comparing (#454). ``python -c`` puts the
+    cwd on ``sys.path`` as the empty string, and that entry is what actually
+    makes the package importable here — the child imports the tree it was
+    launched from. Comparing only ABSOLUTE entries made the assertion pass
+    for an incidental reason: in the main tree the editable install happens
+    to add that exact directory, so the check succeeded; from a linked
+    worktree the editable entry points at the main tree instead, the
+    absolute match failed, and all five sentinel params went red while the
+    behaviour under test was working perfectly. Measured both ways; every
+    lane on 2026-09-10 paid that false red.
+    """
     env = os.environ.copy()
     if pythonpath is None:
         env.pop("PYTHONPATH", None)
@@ -44,11 +57,12 @@ def test_init_filters_sys_path_from_leaked_pythonpath(pythonpath):
         "import mempalace, os, sys; "
         f"prefix = {_LEAK_PREFIX!r}; "
         "mempalace_parent = os.path.dirname(os.path.dirname(mempalace.__file__)); "
+        "norm = lambda p: os.path.normcase(os.path.normpath(os.path.abspath(p or os.curdir))); "
         "print('ENV:', repr(os.environ.get('PYTHONPATH'))); "
         "print('SENTINEL_IN_PATH:', any(prefix in (p or '') for p in sys.path)); "
         "print('MEMPALACE_PARENT_PRESENT:', any("
-        "os.path.normcase(os.path.normpath(p)) == os.path.normcase(os.path.normpath(mempalace_parent)) "
-        "for p in sys.path if p))"
+        "norm(p) == norm(mempalace_parent) for p in sys.path)); "
+        "print('MEMPALACE_IMPORTED_FROM:', mempalace_parent)"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],
@@ -74,6 +88,10 @@ def test_init_filters_sys_path_from_leaked_pythonpath(pythonpath):
     assert "MEMPALACE_PARENT_PRESENT: True" in out, (
         f"filter over-stripped sys.path (mempalace parent gone): {diag}"
     )
+    # MEMPALACE_IMPORTED_FROM is printed for diagnosis and deliberately NOT
+    # asserted on: which tree the child resolves depends on its cwd, and
+    # pinning that is the very coupling #454 was about. It belongs in the
+    # failure output, not in the contract.
 
 
 def test_init_preserves_cwd_marker_when_pythonpath_collides():
