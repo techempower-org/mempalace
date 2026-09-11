@@ -161,7 +161,7 @@ class TestRepairDangling:
         assert changes == []
         assert "object is gone" in unresolved[0][1]
 
-    def test_legacy_allowlisted_ids_are_skipped(self):
+    def test_an_allowlisted_id_with_the_matching_sha_is_skipped(self):
         """Documented-unrecoverable entries must not re-report forever."""
         changes, unresolved = mfc.repair_dangling(
             [_entry(id="old-thing", commit="dead123")],
@@ -169,21 +169,57 @@ class TestRepairDangling:
             is_ancestor=lambda sha, branch: False,
             subject_of=lambda sha: pytest.fail("must not be consulted"),
             branch_subjects=[],
-            legacy_ids=frozenset({"old-thing"}),
+            legacy_ids={"old-thing": "dead123"},
         )
 
         assert (changes, unresolved) == ([], [])
 
+    def test_an_allowlisted_id_whose_sha_CHANGED_is_no_longer_skipped(self):
+        """The exemption covers one known-bad sha, not the entry forever.
+
+        Otherwise an allowlisted entry could be edited to any sha at all
+        — including a plausible wrong one, which would be an ancestor and
+        pass every check — and never be looked at again.
+        """
+        changes, unresolved = mfc.repair_dangling(
+            [_entry(id="old-thing", commit="beef999")],
+            "origin/main",
+            is_ancestor=lambda sha, branch: False,
+            subject_of=lambda sha: "some subject",
+            branch_subjects=[],
+            legacy_ids={"old-thing": "dead123"},
+        )
+
+        assert changes == []
+        assert "not an ancestor" in unresolved[0][1], "must be reported, not skipped"
+
 
 class TestLegacyFile:
-    def test_parses_ids_and_ignores_comments(self, tmp_path):
-        p = tmp_path / "legacy.txt"
-        p.write_text("# a comment\n\nfirst-id    # trailing note\nsecond-id\n")
+    """The allowlist is keyed on ``(id, sha)``, never on id alone.
 
-        assert mfc.load_legacy_ids(p) == frozenset({"first-id", "second-id"})
+    Keyed on the id only, an allowlisted entry's ``commit:`` could later
+    be changed to anything at all and stay skipped forever — the file
+    would grant a permanent exemption to the entry rather than recording
+    one known-bad sha. Pinning the sha means a resolved (or corrupted)
+    entry starts failing the check until its line is removed, which is
+    exactly the prompt we want.
+    """
+
+    def test_parses_id_and_sha_pairs(self, tmp_path):
+        p = tmp_path / "legacy.txt"
+        p.write_text("# a comment\n\nfirst-id  abc1234   # note\nsecond-id\tdef5678\n")
+
+        assert mfc.load_legacy_ids(p) == {"first-id": "abc1234", "second-id": "def5678"}
+
+    def test_an_id_without_a_sha_is_rejected_not_silently_exempted(self, tmp_path):
+        p = tmp_path / "legacy.txt"
+        p.write_text("lonely-id\n")
+
+        with pytest.raises(ValueError, match="needs '<id> <sha>'"):
+            mfc.load_legacy_ids(p)
 
     def test_absent_file_is_empty_not_an_error(self, tmp_path):
-        assert mfc.load_legacy_ids(tmp_path / "nope.txt") == frozenset()
+        assert mfc.load_legacy_ids(tmp_path / "nope.txt") == {}
 
 
 class TestWriteBack:

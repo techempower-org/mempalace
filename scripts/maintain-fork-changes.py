@@ -183,15 +183,23 @@ def repair_dangling(
     is_ancestor: Callable[[str, str], bool] = git_is_ancestor,
     subject_of: Callable[[str], str | None] = git_subject,
     branch_subjects: list[tuple[str, str]] | None = None,
-    legacy_ids: frozenset[str] = frozenset(),
+    legacy_ids: dict[str, str] | None = None,
 ) -> tuple[list[tuple[dict, str]], list[tuple[dict, str]]]:
-    """Re-point entries whose commit is not an ancestor of ``branch``."""
+    """Re-point entries whose commit is not an ancestor of ``branch``.
+
+    ``legacy_ids`` maps an entry id to the ONE sha it is exempt for; any
+    other value reports normally.
+    """
+    legacy_ids = legacy_ids or {}
     subjects = branch_subjects if branch_subjects is not None else git_subjects(branch)
     changes: list[tuple[dict, str]] = []
     unresolved: list[tuple[dict, str]] = []
     for entry in entries:
         sha = str(entry.get("commit", "")).strip()
-        if not sha or sha == "HEAD" or entry.get("id") in legacy_ids:
+        if not sha or sha == "HEAD":
+            continue
+        # Exempt only for the exact sha recorded beside the id.
+        if legacy_ids.get(str(entry.get("id"))) == sha:
             continue
         if is_ancestor(sha, branch):
             continue
@@ -209,16 +217,32 @@ def repair_dangling(
     return changes, unresolved
 
 
-def load_legacy_ids(path: pathlib.Path) -> frozenset[str]:
-    """Entry ids whose squash commit is documented as unrecoverable."""
+def load_legacy_ids(path: pathlib.Path) -> dict[str, str]:
+    """``{entry_id: known_bad_sha}`` for documented-unrecoverable entries.
+
+    Keyed on the PAIR on purpose. Keyed on the id alone, the file would
+    grant an entry a permanent exemption rather than record one
+    known-bad sha: its ``commit:`` could later be changed to anything —
+    including a plausible wrong sha, which *is* an ancestor and so passes
+    every check — and never be looked at again. Pinning the sha makes a
+    resolved or altered entry start failing until its line is removed,
+    which is the prompt we actually want.
+    """
     if not path.is_file():
-        return frozenset()
-    ids = set()
-    for line in path.read_text().splitlines():
-        line = line.split("#", 1)[0].strip()
-        if line:
-            ids.add(line)
-    return frozenset(ids)
+        return {}
+    out: dict[str, str] = {}
+    for lineno, raw in enumerate(path.read_text().splitlines(), start=1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) != 2:
+            raise ValueError(
+                f"{path.name}:{lineno}: needs '<id> <sha>', got {line!r} — "
+                "an id alone would exempt the entry forever"
+            )
+        out[parts[0]] = parts[1]
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -237,7 +261,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"✗ {exc}", file=sys.stderr)
         return 2
 
-    legacy = load_legacy_ids(pathlib.Path(args.legacy_file))
+    try:
+        legacy = load_legacy_ids(pathlib.Path(args.legacy_file))
+    except ValueError as exc:
+        print(f"✗ {exc}", file=sys.stderr)
+        return 2
     changes: list[tuple[dict, str]] = []
     unresolved: list[tuple[dict, str]] = []
 

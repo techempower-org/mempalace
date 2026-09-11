@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# ship-prep.sh — one command that bumps the README test count and
-# regenerates every derived doc so a fork-ahead PR passes check-docs
-# without manual rebase-side work.
+# ship-prep.sh — one command that regenerates every derived doc so a
+# fork-ahead PR passes check-docs without manual rebase-side work.
 #
 # What it does:
-#   1. Run scripts/maintain-fork-changes.py to resolve any stuck
-#      `commit: HEAD` placeholders and de-duplicate id-clashes (#316).
+#   1. Run scripts/maintain-fork-changes.py to resolve `commit: HEAD`
+#      placeholders from each entry's `fork_pr` after merge (#476).
 #   2. Find pytest (same fallback chain as scripts/check-docs.sh — main
 #      checkout's venv when the worktree has none).
-#   3. Count tests via `pytest --collect-only -q`.
-#   4. Rewrite the "<N> tests pass on `main`" phrase in README.md to
-#      match (idempotent — does nothing if already correct).
+#   3. Count tests via `pytest --collect-only -q` and REPORT it. The
+#      committed "<N> tests pass on `main`" literal was removed in #473
+#      (every test-adding PR edited the same two lines), so there is
+#      nothing to rewrite — a literal that creeps back is flagged.
 #   5. Run scripts/render-docs.py --target all  (FORK_CHANGELOG + README table)
 #   6. Run scripts/render-llms-full.py          (llms-full.txt)
 #   7. Run scripts/render-api-docs.py           (website/reference/python-api/)
@@ -64,8 +64,8 @@ step "1/6  docs/fork-changes/ maintenance"
 python scripts/maintain-fork-changes.py || fail "maintain-fork-changes.py failed"
 ok "fork-changes entries clean"
 
-# ── 2. test count bump ──────────────────────────────────────────────────
-step "2/6  README test count"
+# ── 2. test count (derived; nothing to bump since #473) ─────────────────
+step "2/6  test count (derived, not committed)"
 actual_count=$("$pytest_bin" --collect-only -q 2>/dev/null \
     | grep -E "[0-9]+/[0-9]+ tests collected" \
     | head -1 | awk -F'/' '{print $1}' || echo "")
@@ -76,15 +76,20 @@ if [ -z "$actual_count" ]; then
 fi
 [ -n "$actual_count" ] || fail "could not parse pytest --collect-only output"
 
+# The committed literal is gone (#473): a number in README/CLAUDE.md meant every
+# test-adding PR edited the same two lines. This step used to fail when the
+# phrase was missing and `sed` the number in place — both jobs are obsolete, and
+# the hard failure would have fired on the very commit that removed the phrase.
+# The count is reported here because it is useful during release prep, and a
+# literal that creeps back is flagged, but nothing depends on one existing.
 readme_count=$(grep -oE '[0-9]+ tests pass on `main`' README.md \
     | grep -oE '^[0-9]+' || echo "")
 if [ -z "$readme_count" ]; then
-    fail "README.md has no '<N> tests pass on \`main\`' phrase — was the wording changed?"
+    ok "suite collects $actual_count tests (no committed literal — derived, per #473)"
 elif [ "$readme_count" = "$actual_count" ]; then
-    ok "README $readme_count == pytest $actual_count (no change)"
+    warn "README carries a hard-coded count ($readme_count) that happens to match; prefer removing it (#473)"
 else
-    sed -i -E "s/${readme_count} tests pass on \`main\`/${actual_count} tests pass on \`main\`/" README.md
-    ok "bumped README $readme_count → $actual_count"
+    warn "README carries a STALE hard-coded count ($readme_count, suite collects $actual_count) — remove it rather than bumping it (#473)"
 fi
 
 # ── 3. render-docs.py (FORK_CHANGELOG + README table) ───────────────────

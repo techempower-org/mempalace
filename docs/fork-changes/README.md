@@ -58,6 +58,14 @@ the lane does not.
 an **ancestor** of `HEAD` — not merely to resolve, which a dangling
 object does.
 
+A handful of pre-#472 entries cannot be resolved at all: their change is
+on `main`, but the squash subject was rewritten at merge so the commit
+cannot be named. Those are listed in `docs/fork-changes-legacy-shas.txt`
+as `<id> <known-bad sha>` pairs, and step 2b skips **only** that exact
+pair. Editing such an entry's `commit:` to any other value makes it fail
+the check again — the exemption covers one recorded sha, not the entry
+forever.
+
 ## Fields
 
 | field | required | notes |

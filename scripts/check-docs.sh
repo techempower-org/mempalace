@@ -151,7 +151,12 @@ if [ -n "$py_entries" ] && [ -d "$REPO_ROOT/docs/fork-changes" ]; then
     while IFS=$'\t' read -r entry_id sha; do
         [ -n "$sha" ] || continue
         # Documented-unrecoverable entries: see the header of that file.
-        if [ -f "$legacy_file" ] && grep -qE "^[[:space:]]*${entry_id}([[:space:]]|#|$)" "$legacy_file"; then
+        # Matched on the PAIR (id AND sha). Matching the id alone would
+        # exempt the entry forever, so its commit could later be edited to
+        # any value — including a plausible wrong sha, which is a real
+        # ancestor and passes — without anyone being prompted again.
+        if [ -f "$legacy_file" ] \
+           && grep -qE "^[[:space:]]*${entry_id}[[:space:]]+${sha}([[:space:]]|#|$)" "$legacy_file"; then
             ((skipped++))
             continue
         fi

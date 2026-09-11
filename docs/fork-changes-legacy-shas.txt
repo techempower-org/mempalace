@@ -27,29 +27,37 @@
 # and hand-applying matches it rejects in the same change would undercut that
 # contract. Worth doing as its own reviewed pass.
 #
-# Format: one entry id per line. Blank lines and # comments ignored.
+# Format: `<entry id> <known-bad sha>` per line. Blank lines and # comments
+# ignored; an id with no sha is a hard error.
+#
+# The sha is part of the KEY, not a note. Keyed on the id alone this file would
+# grant an entry a permanent exemption instead of recording one known-bad sha:
+# its `commit:` could later be edited to anything -- including a plausible
+# WRONG sha, which is a real ancestor and so passes every check -- and never be
+# looked at again. Pinning the sha makes a resolved or altered entry fail the
+# check until its line is removed, which is the prompt we want.
 
-backend-unreachable-error-mapping    # 0c34464
-backfill-age-from-existing-drawers    # b3f0206
-cli-cypher-readonly    # 32a41b1
-cli-graph-kg-snapshot    # 499f42d
-cli-json-quiet-flags    # 25ed900
-cli-list-drawer-browser    # 257137b
-cli-stats-dashboard    # 6f994fb
-cli-stats-rooms-breakdown    # 1673465
-cli-tags-and-overlap-fast-path    # ea5d567
-cli-why-and-tunnels-fast-path    # fdcd0b4
-kg-age-api-parity    # ff7187d
-kg-triple-extraction-llm    # 59ac0bc
-kg-writethrough-middleware    # 3321d83
-mempalace-walk-palace-mcp-tool    # 8022ecb
-opencode-integration-recipe    # 60dc9e6
-opencode-live-capture-plugin    # 5522623
-opencode-mcp-config-cherry-pick-1567    # ba16b82
-opencode-source-adapter-cherry-pick-1484    # 2ffe652
-palace-structure-as-age-nodes    # ff583c0
-power-resilience-pending-queue    # 0c34464
-rate-memory-feedback-loop    # 583536c
-recency-decay-prune    # 558d327
-sh-shim-strategy-doc    # bf0a4d0
-verbatim-derivative-essay-promotion    # 6a264d9
+backend-unreachable-error-mapping 0c34464
+backfill-age-from-existing-drawers b3f0206
+cli-cypher-readonly 32a41b1
+cli-graph-kg-snapshot 499f42d
+cli-json-quiet-flags 25ed900
+cli-list-drawer-browser 257137b
+cli-stats-dashboard 6f994fb
+cli-stats-rooms-breakdown 1673465
+cli-tags-and-overlap-fast-path ea5d567
+cli-why-and-tunnels-fast-path fdcd0b4
+kg-age-api-parity ff7187d
+kg-triple-extraction-llm 59ac0bc
+kg-writethrough-middleware 3321d83
+mempalace-walk-palace-mcp-tool 8022ecb
+opencode-integration-recipe 60dc9e6
+opencode-live-capture-plugin 5522623
+opencode-mcp-config-cherry-pick-1567 ba16b82
+opencode-source-adapter-cherry-pick-1484 2ffe652
+palace-structure-as-age-nodes ff583c0
+power-resilience-pending-queue 0c34464
+rate-memory-feedback-loop 583536c
+recency-decay-prune 558d327
+sh-shim-strategy-doc bf0a4d0
+verbatim-derivative-essay-promotion 6a264d9
