@@ -76,6 +76,70 @@ Args:
 Returns:
     A hook callable suitable for ``PostgresCollection.set_kg_writethrough``.
 
+### `make_age_batch_writethrough`
+
+```python
+def make_age_batch_writethrough(kg: Any, extractor: Extractor, *, relation_type: str = 'mentions', confidence: float = 0.5, max_entities_per_drawer: int = 100)
+```
+
+Like :func:`make_age_writethrough`, but one commit for the whole batch.
+
+Hook signature: ``hook(drawers: list[dict])`` where each dict carries
+``drawer_id`` / ``document`` / ``metadata`` — the same three values the
+per-drawer hook takes, handed over together so the commit can be
+amortized.
+
+Why this exists (palace-daemon#265, design on #251). The MERGEs were
+never the dominant cost; the *commits* were. ``add_mention`` and
+``_run_cypher`` default to ``commit=True``, so a 1000-drawer batch with
+up to 100 entities each issued up to 100,000 individual transaction
+commits — each an fsync round-trip, on the connection holding the palace
+write lock. Measured on the palace host: 4,832 drawers in 69 minutes
+(~1.2 drawers/s), with ``pg_stat_activity`` showing one
+``MERGE (d:Drawer …`` per drawer; and after the tunnel recompute was
+removed (#264) a single changed file still spent 4+ minutes here after
+its 690 drawers were already filed.
+
+The machinery was already there and unused: ``kg.commit()`` exists
+precisely for bulk callers, and ``backfill_age`` has used
+``commit=False`` + one commit per batch since it shipped. The blocker
+was the per-drawer hook contract, not the KG layer.
+
+Failure handling matches the per-drawer hook's posture, because
+enrichment is opportunistic and the drawer rows have already committed
+by the time any of this runs:
+
+- a failing extractor skips its drawer, not the batch;
+- a failing ``commit()`` is logged, never raised;
+- a failing ``add_mention`` does NOT cost only itself. Be precise here,
+  because an earlier version of this docstring claimed it did:
+  ``_run_cypher`` routes through ``_with_conn_retry``, which calls
+  ``_rollback_quietly()`` on a statement-level DB error. Under
+  ``commit=False`` that ``conn.rollback()`` **discards every mention
+  pending in this batch**. The loop continues, so mentions extracted
+  after the failure still land at the final commit, but the ones before
+  it are gone.
+
+That is a real narrowing versus the per-drawer hook, where a failure
+cost exactly one mention. It is accepted for now because the *drawers*
+are untouched — they committed before this hook ran — and the lost
+edges are recoverable with ``backfill_age``, which exists for precisely
+this state. Restoring per-mention isolation needs a SAVEPOINT around
+each mention, which was measured on a scratch AGE palace at **3.0x**
+the cost of the bare statements (1000 MERGEs: 0.50 s plain, 1.51 s
+with SAVEPOINT + RELEASE each) -- enough to cut this change's 4.2x win
+down to roughly 1.4x. Not worth it to buy back a rare, non-fatal,
+backfill-recoverable loss, so it is filed as stage A2 on
+techempower-org/palace-daemon#265 rather than built here. A savepoint
+per *drawer* instead of per mention is the more promising point on
+that curve: ~10x fewer savepoints at this corpus's entity density, and
+it bounds a loss to one drawer's edges rather than the batch's.
+
+Note the edges stay ``CREATE``-always (``add_mention`` does not upsert),
+so a partially-applied batch is a state this system already tolerates.
+That is also why nothing here retries: a retry after a lost commit would
+duplicate the edges it did write.
+
 ### `make_null_writethrough`
 
 ```python
@@ -171,6 +235,29 @@ Regex extractor needs an SME-repo import — kept optional so the
 mempalace package doesn't hard-require SME. If unavailable, falls
 back to a built-in tiny regex extractor (lower recall than the SME
 one but no cross-package dependency).
+
+### `make_batch_writethrough_from_env`
+
+```python
+def make_batch_writethrough_from_env(kg: Optional[Any] = None, dsn: Optional[str] = None)
+```
+
+Batch-contract twin of :func:`make_writethrough_from_env`.
+
+Same environment variables, same stages, same order — the only
+difference is that the MENTIONS stage is built with
+:func:`make_age_batch_writethrough`, so its MERGEs run with
+``commit=False`` and the whole batch commits once
+(palace-daemon#265). Stages with no batched form are wrapped by
+:func:`_batchify` rather than dropped.
+
+Returns ``None`` when no stage is enabled, exactly as the per-drawer
+builder does, so the caller's "is write-through on?" check is
+unchanged.
+
+The env parsing deliberately lives in one place: this delegates to the
+per-drawer builder for stage *selection* and swaps the MENTIONS
+implementation, so the two cannot drift on which switches mean what.
 
 ### `make_deletethrough_from_env`
 

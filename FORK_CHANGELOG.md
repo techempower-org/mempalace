@@ -316,6 +316,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Performance
 
 
+- **KG write-through commits once per batch instead of once per drawer** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  Measured on the palace host: a projects-mode mine wrote **4,832 drawers
+  in 69 minutes (~1.2 drawers/s)** while ``pg_stat_activity`` showed one
+  ``cypher('mempalace_kg', … MERGE (d:Drawer …`` statement per drawer, and
+  after the tunnel recompute was removed a changed 4,627-line file still
+  spent 4+ minutes in write-through after its 690 drawers were filed.
+
+  The dominant cost was never the MERGEs — it was the commits.
+  ``add_mention`` and ``_run_cypher`` default to ``commit=True``, so a
+  1000-drawer batch with up to 100 entities each issued up to **100,000
+  individual transaction commits**, each an fsync round trip on the
+  connection holding the palace write lock.
+
+  The machinery to avoid that already existed and was unused:
+  ``kg.commit()`` is documented for bulk callers and ``backfill_age`` has
+  used ``commit=False`` + one commit per batch since it shipped;
+  ``kg_writethrough`` never passed ``commit`` at all. **The blocker was
+  the contract**, not the KG layer — ``hook(drawer_id, document,
+  metadata)`` is per-drawer, so no caller could know a batch existed.
+
+  Stage A therefore adds the contract rather than touching the KG layer:
+  ``PostgresCollection.set_kg_writethrough_batch(hook)`` receives every
+  drawer in one call and takes precedence over the per-drawer hook (only
+  one ever runs, so registering both cannot double-write the graph);
+  ``make_age_batch_writethrough`` runs the same MENTIONS stage with
+  ``commit=False`` and one ``kg.commit()``; and
+  ``make_batch_writethrough_from_env`` wraps stages that have no batched
+  form — today the extraction queue — rather than dropping them, so
+  batching MENTIONS cannot silently disable the queue. Backends without
+  the seam (chroma, sqlite) are untouched, and the daemon consumes it with
+  no change of its own.
+
+  Measured on a scratch AGE palace (200 drawers x 10 entities = 2,000
+  mentions): per-drawer **3.86 s / 51.8 drawers/s / ~1,587 commits**;
+  batched **0.91 s / 220.8 drawers/s / ~9 commits** — **4.3x faster, ~175x
+  fewer commits**. Both arms wrote exactly 2,000 edges with zero
+  rollbacks, which is what makes the comparison valid; the benchmark exits
+  non-zero if they ever diverge. The scratch graph starts empty while
+  production holds 1.4M entities, so this isolates the *commit* cost —
+  MERGE cost at scale is stage B's target.
+
+  Failure posture is **narrowed**, and stated precisely because an earlier
+  draft overstated it: a failing extractor skips its drawer and a failing
+  commit is logged rather than raised, but a failing ``add_mention`` does
+  **not** cost only itself. ``_run_cypher`` routes through
+  ``_with_conn_retry``, which calls ``_rollback_quietly()`` on a
+  statement-level DB error, and under ``commit=False`` that discards every
+  mention pending in the batch. The drawers are untouched — they committed
+  before the hook ran — and the lost edges are recoverable with
+  ``backfill_age``. Per-mention SAVEPOINT would restore isolation but was
+  measured at **3.0x** the cost of the bare statements (1000 MERGEs:
+  0.50 s plain, 1.51 s with SAVEPOINT+RELEASE), which would cut the 4.3x
+  win to ~1.4x; filed as stage A2
+  (techempower-org/palace-daemon#282) with a per-*drawer* savepoint named
+  as the better point on that curve.
+
+  Stages B (dedup entity MERGEs within a batch) and C (UNWIND, pending a
+  probe of AGE 1.6.0's dialect — ``add_mention``'s docstring already
+  documents three gaps) remain design only.
+
+  *Tests:* 21 (test_kg_writethrough_batch — incl. one commit per batch, commits flat across batch size, the rollback-discards-the-batch property, and a write-through-off control)
+  *Files:* `mempalace/kg_writethrough.py`, `mempalace/backends/postgres.py`, `mempalace/palace.py`, `scripts/bench_kg_writethrough.py`, `tests/test_kg_writethrough_batch.py`
+
+
 - **Batch tunnel persistence — a 2,000-tunnel rebuild goes from 37.9 s to 0.08 s** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
   ``create_tunnel`` did a full ``_load_tunnels`` **and** a full atomic
   ``_save_tunnels`` on every call, and it is called from inside two loops —

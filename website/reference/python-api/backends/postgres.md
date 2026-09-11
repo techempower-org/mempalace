@@ -32,6 +32,29 @@ def add(self, *, documents: list[str], ids: list[str], metadatas: Optional[list[
 def upsert(self, *, documents: list[str], ids: list[str], metadatas: Optional[list[dict[str, Any]]] = None, embeddings: Optional[list[list[float]]] = None) -> None
 ```
 
+#### `set_kg_writethrough_batch`
+
+```python
+def set_kg_writethrough_batch(self, hook) -> None
+```
+
+Register a callable invoked ONCE per ``_insert_rows`` batch.
+
+Hook signature: ``hook(drawers: list[dict])``, each dict carrying
+``drawer_id`` / ``document`` / ``metadata`` — the same values the
+per-drawer hook receives, handed over together.
+
+Takes precedence over :meth:`set_kg_writethrough`; only one of the
+two ever runs, so registering both does not write the graph twice.
+Set to ``None`` to fall back to the per-drawer hook.
+
+This exists because the per-drawer contract made batching
+impossible: the hook could not know a batch existed, so every
+mention committed on its own (palace-daemon#265). Exceptions are
+caught and logged exactly as the per-drawer hook's are — the drawer
+rows have already committed by the time the hook runs, and KG
+enrichment is opportunistic, not mandatory.
+
 #### `set_kg_writethrough`
 
 ```python
