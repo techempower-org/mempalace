@@ -57,13 +57,13 @@ echo "$TURN" > "$TURN_FILE" 2>/dev/null || true
 # Shell-level pre-filter — skip Python entirely if no signal pattern matches.
 # Must be a SUPERSET of Python's signal extraction — err on the side of
 # letting prompts through. Five checks:
-#   1. Temporal/explicit recall patterns (case-insensitive)
+#   1. Temporal/explicit recall + session-resumption patterns (case-insensitive)
 #   2. Capitalized entity names (potential wing/entity matches)
 #   3. Identifier shapes (ALLCAPS, snake_case, camelCase, hex, alnum codes)
 #   4. Turn 1 always passes (task resumption + first depth refresh)
 #   5. Every 10th turn passes (periodic depth refresh)
 MATCH=0
-echo "$PROMPT" | grep -qiE 'remind|remember|do (we|you) (have|know)|did (we|you)|what (did|was|were) |history of|have we|prior to|earlier|last (time|week|session|night|run|month|sprint)|yesterday|previously|recently|while ago|days ago|back when|used to|that time|when (did|we|was)|before we|recall|check (if|whether)|was there|were there' && MATCH=1
+echo "$PROMPT" | grep -qiE 'remind|remember|do (we|you) (have|know)|did (we|you)|what (did|was|were) |history of|have we|prior to|earlier|last (time|week|session|night|run|month|sprint)|yesterday|previously|recently|while ago|days ago|back when|used to|that time|when (did|we|was)|before we|recall|check (if|whether)|was there|were there|where (were|was)|where we left|pick(ing)? up where|catch me up|up to speed|recap|refresh (my|your) memory|resume (the|our|this)|what.?s (the|still|left|remaining|outstanding)|what is (the|still|left)|which (prs?|pull requests|issues|tickets|branches|agents|lanes)|what (were|was) (we|i)' && MATCH=1
 [ "$MATCH" -eq 0 ] && echo "$PROMPT" | grep -qE '[A-Z][a-zA-Z]{2,}' && MATCH=1
 [ "$MATCH" -eq 0 ] && echo "$PROMPT" | grep -qE '[A-Za-z]+_[A-Za-z0-9_]+|[A-Z]{3,}|[a-z]+[A-Z][a-z]|0x[0-9a-fA-F]{2,}|[A-Za-z]+[0-9]{2,}' && MATCH=1
 [ "$MATCH" -eq 0 ] && [ "$TURN" -eq 1 ] && MATCH=1

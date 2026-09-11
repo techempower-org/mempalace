@@ -111,7 +111,13 @@ class TestEntityTemporal:
 
 
 class TestResumptionIntegration:
-    def test_resumption_fires_diary(self, tmp_path):
+    def test_positional_resumption_fires_diary(self, tmp_path):
+        """Turn 1 with no resumption *phrase* still reads the diary.
+
+        A turn that asks to resume in words takes the content route instead
+        (#364) — see ``test_auto_query_resumption.py``. This pins the
+        positional half, which is unchanged.
+        """
         mcp_result = {
             "entries": [
                 {
@@ -124,7 +130,7 @@ class TestResumptionIntegration:
         log_dir = str(tmp_path / "log")
         with _patch_mcp(mcp_result):
             result = run_auto_query(
-                prompt="let's continue where we left off",
+                prompt="ok lets keep going",
                 session_id="int-3",
                 turn=1,
                 project_wing="wing_mempalace",

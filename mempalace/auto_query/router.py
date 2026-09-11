@@ -5,6 +5,7 @@ calls, no side effects.  The router is stateless; rate limiting and
 deduplication are the caller's responsibility.
 
 Priority order (from spec section 2):
+  0.5 Resumption ask  -> mempalace_search      (the user asked to resume)
   1. Task resumption  -> mempalace_diary_read  (highest precision)
   2. Explicit hint     -> mempalace_search      (user is asking directly)
   3. Entity + temporal -> mempalace_kg_query    (entity-scoped history)
@@ -12,6 +13,7 @@ Priority order (from spec section 2):
   5. Temporal only     -> mempalace_search      (project-scoped recent)
 """
 
+import re
 from typing import Optional
 
 from mempalace.auto_query import MCPCall, SessionState, SignalSet
@@ -63,6 +65,20 @@ def _select_tool(signals: SignalSet) -> Optional[MCPCall]:
     Returns None if no signal pattern matches (edge case: score above
     threshold but no individual signal flags are set).
     """
+    # Priority 0.5: the user asked, in words, to be picked back up (#364) —
+    # "where were we", "catch me up", "which PRs are open". This outranks
+    # both the positional turn-1 resumption and the periodic depth refresh,
+    # because an explicit ask is a better query than either.
+    #
+    # It is deliberately NOT routed to the diary: diary entries are the
+    # palace's own AUTO-SAVE bookkeeping, which the quality gate already
+    # classifies as exhaust. A resumption wants the wing's content.
+    if signals.resumption_phrase:
+        args = {"query": _resumption_query(signals), "limit": DEPTH_FETCH}
+        if signals.project_wing:
+            args["wing"] = signals.project_wing
+        return MCPCall(tool="mempalace_search", args=args)
+
     # Priority 1: Task resumption
     if signals.resumption:
         return MCPCall(
@@ -141,6 +157,41 @@ def _select_tool(signals: SignalSet) -> Optional[MCPCall]:
 
     # No signal pattern matched despite score >= threshold
     return None
+
+
+# Words that carry no retrieval weight once the resumption phrase itself is
+# removed. Everything left is the topic the user actually named.
+_RESUMPTION_FILLER = frozenset(
+    """a about again an and any are as at be been did do for from had has have
+    here i in is it its just me my now of on or our please re so still that the
+    their them then there these they this to up us was we were what when where
+    which who why with you your""".split()
+)
+
+
+def _resumption_query(signals: SignalSet) -> str:
+    """Search text for a resumption ask: the topic, never the question.
+
+    "where were we on the pgvector cutover" searches the cutover. A bare
+    "where were we" names no topic, so fall back to the wing's
+    decision-shaped content rather than searching the question itself —
+    searching the question is how the old depth query matched session
+    manifests forever (fleet check-in, 2026-09-03).
+
+    ONE surviving word is a topic, not noise. The names people resume on are
+    usually single tokens — a wing (``2g``), an issue (``#449``), a component
+    (``pgvector``) — and requiring two discarded exactly those, sending
+    "catch me up on 2g" to the generic depth query instead of to the wing the
+    user just named. Only an empty remainder falls back.
+    """
+    text = signals.query_text or ""
+    phrase = signals.resumption_phrase
+    if phrase:
+        text = re.sub(re.escape(phrase), " ", text, flags=re.IGNORECASE)
+    words = [w for w in re.findall(r"[\w.#/-]+", text) if w.lower() not in _RESUMPTION_FILLER]
+    if words:
+        return _sanitize_for_search(" ".join(words))
+    return "decisions problems findings {}".format(signals.project_wing).strip()
 
 
 def _sanitize_for_search(text: str) -> str:

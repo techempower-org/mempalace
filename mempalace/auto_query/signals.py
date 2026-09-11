@@ -47,6 +47,32 @@ _EXPLICIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Session-resumption patterns (#364). "Where were we" is how a person asks to
+# be picked back up — most often right after a compaction, which is exactly
+# when the palace has something to say and the context does not. Measured on
+# 2026-09-10 all of these scored 0 mid-session and fired nothing.
+#
+# Kept deliberately tight: bare "status", "continue" and "ok" are ordinary
+# turns, not resumptions, and a signal that fires on them is noise.
+_RESUMPTION_RE = re.compile(
+    r"(where\s+(?:were|was)\s+(?:we|i|you)"
+    r"|where\s+we\s+left\s+off"
+    r"|pick(?:ing)?\s+up\s+where"
+    r"|what\s+(?:were|was)\s+(?:we|i)\s+(?:doing|working\s+on|in\s+the\s+middle\s+of)"
+    r"|what(?:'s|\s+is|\s+was)\s+the\s+(?:\w+\s+)?status\b"
+    r"|which\s+(?:prs?|pull\s+requests|issues|tickets|branches|agents|lanes)"
+    r"\s+(?:are|were)\s+(?:still\s+)?(?:open|running|left)"
+    r"|catch\s+me\s+up"
+    r"|bring\s+me\s+up\s+to\s+speed"
+    r"|(?:give\s+me\s+a\s+|quick\s+)?recap\b"
+    r"|refresh\s+(?:my|your)\s+memory"
+    r"|resume\s+(?:the|our|this)\s+(?:work|session|task)"
+    r"|what(?:'s|\s+is)\s+(?:still\s+)?(?:left|outstanding|remaining|in\s+flight)\b"
+    r"|what\s+(?:still\s+)?(?:remains|is\s+pending))",
+    re.IGNORECASE,
+)
+
+
 # Blocks that arrive inside the user-prompt payload but are NOT the user's
 # words: cross-session / teammate messages, harness reminders, local-command
 # echoes. Extracting entities from these fired the auto-query on a *peer's*
@@ -479,7 +505,10 @@ def extract_signals(
     entity_signals = _extract_entity_signals(text, session_state, known_wings, known_entities)
     identifier_signals = _extract_identifier_signals(text, session_state)
     temporal_signals = _extract_temporal_signals(text)
-    resumption = _check_resumption(session_state, project_wing, known_wings, has_recent_drawers)
+    phrase = resumption_phrase(text)
+    resumption = _check_resumption(
+        session_state, project_wing, known_wings, has_recent_drawers, phrase
+    )
     explicit = _check_explicit(text)
 
     total = (
@@ -518,6 +547,7 @@ def extract_signals(
         query_text=text,
         depth_fire=depth_fire,
         identifier=identifier_signals,
+        resumption_phrase=phrase,
     )
 
 
@@ -736,20 +766,39 @@ def _extract_temporal_signals(text):
     return signals[:_MAX_TEMPORAL_SIGNALS]
 
 
+def resumption_phrase(text):
+    # type: (str) -> str
+    """The session-resumption phrase in ``text``, or "" if there is none.
+
+    Public because the router needs to subtract the phrase from the search
+    query: "where were we on the pgvector cutover" should search the cutover,
+    not the question.
+    """
+    m = _RESUMPTION_RE.search(strip_foreign_blocks(text or ""))
+    return m.group(0).strip() if m else ""
+
+
 def _check_resumption(
     session_state,  # type: SessionState
     project_wing,  # type: str
     known_wings,  # type: set
     has_recent_drawers,  # type: bool
+    phrase="",  # type: str
 ):
     # type: (...) -> bool
     """Check for task-resumption signal.
 
-    Returns True only when ALL conditions hold:
-    - turn_index == 1 (first user message in session)
-    - project_wing is in known_wings
-    - has_recent_drawers is True (wing has drawers filed in last 7 days)
+    Two ways to resume, and the second is the one #364 added:
+
+    * *positionally* — turn 1 in a known wing that has recent drawers, i.e.
+      the session is picking a project back up; or
+    * *by asking* — the turn contains a resumption phrase ("where were we",
+      "catch me up", "which PRs are open"). This is the case that matters
+      after a compaction, and until #364 it carried no signal at all, on any
+      turn.
     """
+    if phrase:
+        return True
     return session_state.turn_index == 1 and project_wing in known_wings and has_recent_drawers
 
 

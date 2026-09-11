@@ -686,6 +686,9 @@ def _serialize_signals(signals):
         "entity": [{"name": s.name, "score": s.score, "wing": s.wing} for s in signals.entity],
         "temporal": [{"name": s.name, "phrase": s.phrase} for s in signals.temporal],
         "resumption": signals.resumption,
+        # The phrase that triggered it, so the decision log says WHY a
+        # resumption fired — positional turn-1 or an explicit ask (#364).
+        "resumption_phrase": getattr(signals, "resumption_phrase", ""),
         "explicit": signals.explicit,
         "depth_fire": signals.depth_fire,
         "total_score": signals.total_score,

@@ -50,6 +50,10 @@ class SignalSet:
     # alnum codes) — the strings that appear in logs and findings and nowhere
     # else. Queried with lexical (BM25 union) retrieval, where exact match pays.
     identifier: list = dataclasses.field(default_factory=list)  # list[Signal]
+    # The literal resumption phrase this turn matched ("where were we",
+    # "catch me up"), empty when the resumption is positional (turn 1) or
+    # absent. The router subtracts it from the search query (#364).
+    resumption_phrase: str = ""
 
 
 @dataclasses.dataclass
