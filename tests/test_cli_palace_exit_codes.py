@@ -193,7 +193,14 @@ class TestEachCommandIsStillWiredUp:
         from mempalace import cli
 
         source = inspect.getsource(cli.main)
-        assert f'"{name}": cmd_' in source, f"{name} has no dispatch entry in main()"
+        # Match the handler NAME and its trailing comma, not the `cmd_`
+        # prefix: `"purge": cmd_prune,` satisfied the looser form, so the
+        # probe would have passed a command wired to the wrong handler —
+        # which is worse than a missing entry, because the CLI still works
+        # and does the wrong thing (review catch on #485).
+        assert f'"{name}": cmd_{name},' in source, (
+            f"{name} has no dispatch entry bound to cmd_{name} in main()"
+        )
 
 
 class TestNoResultsIsOneNotTwo:
