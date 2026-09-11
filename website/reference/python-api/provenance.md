@@ -69,14 +69,25 @@ palace is serving an older copy than the file on disk.
 
 ``False`` — the file exists and has not moved on.
 
-``None``  — undecidable, which is the common case and is *not* a denial
-of staleness. It covers a basename-only path (the MCP / daemon result
-shape carries no directory, so the file cannot be located), a missing or
-unparseable index timestamp, a file that is not on this machine, and an
-index timestamp in the future (a clock problem, not a staleness answer).
+``None``  — undecidable, and *not* a denial of staleness. It covers a hit
+whose only path is a bare basename (``_bm25_only_via_postgres`` is the one
+arm that returns those), a missing or unparseable index timestamp, a file
+that is not on this machine, and an index timestamp in the future (a clock
+problem, not a staleness answer).
 
-``now`` is injectable for tests and bounds the future-timestamp check.
-Never raises.
+WHOSE filesystem answers is deliberate: whichever host runs this. Under
+MCP ``mempalace_search`` that is the palace host, and its copy is the
+right one to compare — it is the copy the miner actually read, so its
+mtime is what "has the source moved on since indexing?" means. The CLI
+then re-annotates the same hits locally, and because :func:`annotate`
+only writes ``source_stale`` when it can decide, the answer you get is
+the last host that *could* decide (the reader's, when the file is present
+on both; the palace host's, when it is present only there). Where the
+file is Syncthing-replicated the two agree, because mtime is preserved.
+A path missing on both yields ``None``.
+
+``now`` is injectable for tests and bounds the future-timestamp check; it
+must be naive (see :func:`_indexed_at`). Never raises.
 
 ### `provenance_note`
 
@@ -107,8 +118,13 @@ turn a usable result into an exception.
 
 ``source_stale`` and ``source_indexed_at`` are omitted when there is
 nothing to base them on: ``source_stale`` needs an absolute path that
-exists on this machine (daemon/MCP hits carry a basename only, so they
-are decidable for *kind* but never for *staleness*), and
+exists on the host running this call, plus a parseable index timestamp.
+Most hits carry an absolute ``source_path`` alongside the display
+basename, so staleness usually DOES resolve — including inside the
+palace daemon, against the palace host's filesystem (see
+:func:`source_stale` for why that is the right copy). Because the field
+is written only when decidable, re-annotating on a second host refines
+the answer rather than clobbering it with ``None``.
 ``source_indexed_at`` is the parseable index timestamp echoed back.
 
 ### `all_transcript`

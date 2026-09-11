@@ -24,61 +24,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **mempalace mine <file> --mode projects — targeted re-index of one curated document** ([`787af46`](https://github.com/techempower-org/mempalace/commit/787af46))
-  Projects mode required a directory, so refreshing one edited ``CLAUDE.md``
-  meant re-mining the whole tree and holding the palace write lock for as
-  long as that takes (the ``2g`` corpus that surfaced this is 111 MB). The
-  measured consequence: palace search kept returning the *transcript* copy
-  of a claim that ``2g/CLAUDE.md`` had since refuted. The indexed copy of
-  the card was filed 2026-09-01T14:13; the claim landed in the file on 09-03
-  and the REFUTED banner on 09-05, so the indexed chunk contained neither.
-  Transcripts are mined continuously by the Stop/PreCompact hooks; curated
-  project docs are mined only by a manual whole-directory run nobody makes.
-  A path naming a regular file now mines exactly that file, as part of its
-  project: the root is the nearest ancestor carrying ``.git`` /
-  ``mempalace.yaml`` (``resolve_project_root``), which supplies the wing and
-  the relative path room detection keys off — so ``~/Projects/2g/CLAUDE.md``
-  is wing ``2g``. The file's existing drawers are REPLACED rather than
-  duplicated (``process_file`` already deletes by absolute ``source_file``;
-  the single-file path returns the same resolved absolute path a directory
-  walk produces, so the delete finds them), and the stored-mtime skip still
-  applies, so re-queuing an unchanged file costs nothing.
-  ``scan_project``'s per-file gate is extracted to
-  ``file_passes_scan_gates``; ``scan_single_file`` applies the identical
-  gates without the walk, so there is no second filtering policy to drift.
-  The one deliberate difference: a rejection of a file the operator named BY
-  NAME explains itself on stderr, where the tree walk stays silent. A
-  ``.jsonl`` handed to projects mode is now an explicit exit-2 error naming
-  ``--mode convos`` instead of a silent no-op.
+- **Every search hit carries source_kind (+ staleness when decidable) and the CLI renders the caveat** ([`fbc5d34`](https://github.com/techempower-org/mempalace/commit/fbc5d34))
+  A palace search returns the *indexed copy* of whatever was mined, and
+  transcripts are the only thing mined continuously (the Stop / PreCompact
+  hooks); curated project documents are re-indexed only by a manual
+  ``mempalace mine``. So the copy that comes back for a project fact is
+  usually a session transcript quoting a claim, never the document that
+  later corrected it — and nothing on the hit said which of the two the
+  reader was holding. Measured: ``2g/CLAUDE.md`` gained a
+  ``FIVE HANDSETS REFUSE THIS NETWORK`` headline on 2026-09-03 and a
+  REFUTED banner on 2026-09-05, while the indexed card is dated 2026-09-01
+  and contains neither; a wing-wide keyword query at limit 40 returned 21
+  hits (20 ``.jsonl``, 1 diary, 0 ``CLAUDE.md``). Two peer sessions read
+  the transcript copy as current.
 
-  *Tests:* 36 (test_miner_single_file x24, test_cli_mine_single_file x12)
-  *Files:* `mempalace/miner.py`, `mempalace/cli.py`
+  New ``mempalace/provenance.py`` classifies each hit as
+  ``transcript`` / ``memory`` / ``diary`` / ``file`` / ``unknown`` and,
+  when the source is an absolute path that exists locally, whether the
+  file has been modified since it was indexed. ``source_stale`` returns
+  ``None`` for undecidable — a daemon hit carries a basename only, so it
+  can never be located — and that is explicitly not a denial of
+  staleness. ``annotate()`` stamps the fields at every result-assembly
+  site: the CLI's fast / hybrid / MCP-envelope routes and all three
+  ``searcher`` sites, so MCP ``mempalace_search`` carries them from the
+  daemon host too. ``--format table`` prints the caveat under each hit,
+  ``compact`` tags it with the source shape, and the header says so when
+  nothing curated matched at all.
+  ``auto_query.runner._is_curated`` now delegates to the same predicate,
+  so the ranking that prefers curated hits and the caveat the CLI prints
+  cannot disagree about which hits are curated.
+
+  *Tests:* 61 (test_provenance x49, test_cli_daemon TestCmdSearchProvenance x11, test_hnsw_capacity provenance x1)
+  *Files:* `mempalace/provenance.py`, `mempalace/cli.py`, `mempalace/searcher.py`, `mempalace/auto_query/runner.py`
 
 
 ### Fixed
-
-
-- **Daemon-strict mine refuses to derive a wing from a document path it cannot classify locally** ([`a30293b`](https://github.com/techempower-org/mempalace/commit/a30293b))
-  The daemon-strict branch decided file-vs-directory with ``is_file()`` on
-  the CLIENT filesystem while the daemon mines its own host's copy. A path
-  present there and absent here answered False, fell through to the
-  directory rule, and derived the wing from the FILENAME — measured,
-  ``~/Projects/2g/CLAUDE.md`` lands in a wing called ``claude.md``. Silent,
-  permanent misfiling of exactly the kind targeted re-index exists to
-  prevent. The disagreement is one-sided: for a directory "basename" is
-  right whether or not we can see it, while a file's wing comes from its
-  project root, so only a file misfiles. An unresolvable path carrying a
-  suffix the miner reads as text now exits 2 naming ``--wing``, quoting the
-  junk wing it declined to use; anything else keeps the historic rule.
-  Deliberately not a blanket refusal — the daemon legitimately mines paths
-  the client cannot see (synced, or ``PALACE_DAEMON_PATH_MAP``-remapped),
-  a contract ``test_routes_projects_mode_to_daemon`` has pinned since before
-  single-file mining existed. Residual hole, stated in the docstring rather
-  than papered over: a remote-only file with no suffix still takes the
-  basename rule.
-
-  *Tests:* 3 (test_cli_mine_single_file: refusal, explicit --wing, unseen directory)
-  *Files:* `mempalace/cli.py`
 
 
 - **Postgres write path scrubs lone surrogates, nested metadata and ids, not just top-level NULs** ([`66ca19f`](https://github.com/techempower-org/mempalace/commit/66ca19f))
