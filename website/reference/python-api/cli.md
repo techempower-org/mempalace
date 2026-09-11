@@ -99,6 +99,12 @@ def cmd_sync(args)
 
 Prune drawers whose source files are gitignored, deleted, or moved (#1252).
 
+Where it runs (#418): ``--daemon`` submits to the local job queue;
+daemon-strict with no ``--palace`` routes to the palace daemon; otherwise
+the backend is resolved *before* the palace-directory precheck, and that
+precheck is skipped for a service-backed store, which has no local
+database file by design.
+
 ### `cmd_daemon`
 
 ```python
@@ -261,9 +267,9 @@ is off, falls back to direct postgres via ``MEMPALACE_POSTGRES_DSN``.
 def cmd_purge(args)
 ```
 
-Delete drawers by wing and/or room.
+Delete drawers by wing, room, and/or source-file.
 
-Uses ``collection.delete(where=...)`` — chromadb's filter-delete path
+Uses ``collection.delete(where=...)`` — the backend's filter-delete path
 doesn't go through ``updatePoint`` / ``repairConnectionsForUpdate``,
 which is the upsert-only race from #521 that an earlier draft of this
 command tried to side-step with a nuke-and-rebuild. The simpler path
@@ -272,8 +278,13 @@ re-embedding the survivors under a default model, and without
 bypassing the backend abstraction.
 
 ``--room`` without ``--wing`` purges that room across ALL wings.
-Not idempotent — running purge twice on the same criteria prints
-"No drawers found" the second time.
+
+Where it runs (#418): daemon-strict with no ``--palace`` routes to the
+daemon's palace; otherwise the backend is resolved *before* any
+palace-directory precheck, and the precheck is skipped entirely for a
+service-backed store, which has no local database file by design. The
+resolved target is printed on every outcome, including the zero-match
+one, which exits 1 rather than 0.
 
 ### `cmd_prune`
 

@@ -23,6 +23,63 @@
 # Order in this file is presentation order in the changelog (newest first).
 
 entries:
+  - id: purge-sync-backend-before-precheck
+    date: 2026-09-10
+    bucket: Fixed
+    commit: 3b1a2af
+    area: CLI
+    summary: "purge/sync work on Postgres palaces, and a zero-match purge no longer looks like a success"
+    body: |
+      ``purge`` and ``sync`` checked the palace directory for a database file
+      *before* resolving the backend. A Postgres palace has none by design --
+      the directory holds only sidecars (``dsn.env``, ``hallways.json``,
+      ``tunnels.json``, ``locks/``, ``wal/``) and ``PostgresBackend.detect()``
+      returns ``False`` unconditionally -- so both refused with "No palace
+      found at <dir>", leaving no working bulk delete on a Postgres
+      deployment at all: only ``drawer delete <id>``, one at a time,
+      irreversible. ``sync --dry-run`` could not even preview. Measured on a
+      sidecar-only palace with ``MEMPALACE_BACKEND=postgres`` and a DSN
+      pointing at a closed port: before, "No palace found" / "has no backend
+      database yet", exit 0; after, "connection refused", exit 1 -- the
+      commands now reach the backend and fail only on the dead connection.
+      Both now resolve the backend first and skip the directory precheck for
+      a service-backed store, keyed off the ``local_mode``/``server_mode``
+      capability token every backend already declares
+      (``palace.backend_stores_data_locally``); ``purge`` opens through
+      ``palace.get_collection`` instead of hardcoding ChromaBackend.
+
+      Same defect's second half: a zero-match purge printed a one-line notice
+      and exited 0, the shape of a success. Run from a client whose local
+      palace was not the one holding the drawers, the two were
+      indistinguishable -- the reporter saw "No drawers found matching
+      source-file=...", exit 0, then ``mempalace mined`` still listing 115
+      drawers for that path. Every purge outcome now names the target it
+      operated on; a zero match exits 1, and an unreachable palace or a
+      failed delete exits 1 rather than 0. Under daemon-strict with no
+      ``--palace``, ``purge --source-file`` routes to
+      ``mempalace_delete_by_source`` and ``sync`` to ``mempalace_sync``
+      instead of silently retargeting a local directory; ``purge
+      --wing/--room`` is refused there (the daemon exposes no bulk wing/room
+      delete) rather than quietly purging the wrong palace.
+
+      Two defects in that daemon routing were caught in review and fixed
+      before landing. ``--wing W --source-file F`` reached
+      ``mempalace_delete_by_source``, which filters on ``source_file``
+      **alone** — the source was deleted across every wing while the receipt
+      printed ``wing=W source-file=F``, a narrowing flag silently dropped on
+      a destructive command (27 of 5,477 sampled production sources live in
+      more than one wing). That combination is now refused with exit 2. And
+      ``sync --apply``, a guaranteed no-op on a service-backed palace until
+      this change, became a live bulk delete with no prompt — measured at
+      2,619 drawers over one wing's top 400 sources — so it now previews,
+      reports, and confirms through the same gate ``purge`` uses, with a new
+      ``--yes``/``-y`` skipping prompt and preview together. Adding that
+      preview initially laundered away ``sync_palace``'s apply-scope rule
+      (the preview is a dry run, which the rule permits), so the rule is
+      extracted as ``sync.validate_apply_scope()`` and evaluated before the
+      preview on both routes rather than restated in the CLI.
+    tests: "44 (test_cli_purge_sync_backend.py: TestBackendStoresDataLocally, TestPurgeOnServerBackend, TestPurgeZeroMatchIsLoud, TestPurgeFailuresAreNotSuccesses, TestPurgeUnderDaemonStrict, TestSyncOnServerBackend, TestSyncApplyAsksFirst, TestSyncUnderDaemonStrict)"
+    files: [mempalace/cli.py, mempalace/palace.py, mempalace/sync.py]
   - id: auto-query-resumption-signal
     date: 2026-09-10
     bucket: Added
