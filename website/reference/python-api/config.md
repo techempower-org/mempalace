@@ -972,6 +972,25 @@ Only blocks null bytes and over-length strings.
 Not used for wing/room names (which have filesystem constraints) or
 predicates (which should be simple relationship identifiers).
 
+### `sanitize_session_id`
+
+```python
+def sanitize_session_id(value) -> str
+```
+
+Reduce a harness session id to a safe, indexable token.
+
+Returns ``""`` when nothing usable survives. Callers then *omit* the
+metadata key rather than storing a placeholder: an absent key is
+honest, whereas a synthetic ``"unknown"`` is a real id that matches
+nothing and would pool unrelated sessions under one name.
+
+Strips rather than raises, unlike ``sanitize_name``. ``session_id``
+is a passenger on write paths whose whole job is to not lose a
+memory, so a malformed id must degrade to "unattributed" and never
+fail the write -- the same call ``tool_checkpoint`` already makes
+when its dedup probe errors.
+
 ### `sanitize_iso_temporal`
 
 ```python

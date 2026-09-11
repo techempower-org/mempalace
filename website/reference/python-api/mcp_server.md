@@ -202,7 +202,7 @@ Follow explicit tunnels from a room to see connected drawers in other wings.
 ### `tool_add_drawer`
 
 ```python
-def tool_add_drawer(wing: str, room: str, content: str, source_file: str = None, added_by: str = 'mcp', tags: list = None)
+def tool_add_drawer(wing: str, room: str, content: str, source_file: str = None, added_by: str = 'mcp', tags: list = None, session_id: str = '')
 ```
 
 File verbatim content into a wing/room. Checks for duplicates first.

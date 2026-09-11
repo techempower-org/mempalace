@@ -24,6 +24,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **Checkpoint drawers carry the session id, not just the diary entry; session_id is validated** ([`e9860b3`](https://github.com/techempower-org/mempalace/commit/e9860b3))
+  The earlier pass forwarded a checkpoint's ``session_id`` to
+  ``tool_diary_write`` and declared it in the ``mempalace_checkpoint`` and
+  ``mempalace_diary_write`` schemas, but ``tool_add_drawer`` had no such
+  parameter — so the batch a checkpoint summarized stayed unlinked from its
+  own summary, and only the summary could be recovered by session.
+  ``tool_add_drawer`` now accepts ``session_id`` and stores it in the drawer
+  metadata; ``tool_checkpoint`` resolves the diary's id once and attaches it
+  to every drawer it files as well as to the diary entry; and
+  ``mempalace_add_drawer`` declares the field. The declaration is
+  load-bearing rather than cosmetic: ``handle_request`` rejects undeclared
+  parameters outright (measured with the entry removed: ``-32602 Unknown
+  parameter 'session_id' for tool mempalace_add_drawer``), so an undeclared
+  parameter is unreachable over MCP — the same write-only dead slot the
+  issue was filed about.
+
+  ``session_id`` is validated rather than free-form, which the issue raised
+  as a deliberate decision. ``sanitize_session_id`` mirrors the charset the
+  live Stop/PreCompact hook already applies
+  (``palace-daemon/clients/hook.py::_sanitize_session_id``), because that
+  hook is the writer which populates the field in practice and a second,
+  different rule would give an indexed key two shapes depending on which
+  side normalised it. It strips rather than raises: ``session_id`` is a
+  passenger on write paths whose job is to not lose a memory, so a
+  malformed id degrades to unattributed and never fails the write. When
+  nothing usable survives, the key is omitted rather than stored as a
+  placeholder — an absent key is honest, while a synthetic ``"unknown"``
+  would pool unrelated sessions under one name. Existing drawers are
+  untouched and not backfilled, so a session-scoped query returns nothing
+  for sessions predating the change.
+
+  *Tests:* 24 (TestCheckpointDrawerSessionId x5, TestSessionIdSanitization x17, TestSessionIdReachableOverMcp x2)
+  *Files:* `mempalace/config.py`, `mempalace/mcp_server.py`, `tests/test_checkpoint_session_id.py`
+
+
 - **Auto-query recognizes a session-resumption ask ("where were we", "catch me up") in both the shell pre-filter and the signal set** ([`c6872494`](https://github.com/techempower-org/mempalace/commit/c6872494))
   Measured on ``main`` 2026-09-10, turn 5, wing ``memorypalace`` with
   recent drawers: every way a person asks to be picked back up scored
