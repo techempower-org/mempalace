@@ -35,6 +35,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.entities`](./entities) — No-LLM structural entity extraction for the associative graph.
 - [`mempalace.entity_detector`](./entity_detector) — entity_detector.py — Auto-detect people and projects from file content.
 - [`mempalace.entity_registry`](./entity_registry) — entity_registry.py — Persistent personal entity registry for MemPalace.
+- [`mempalace.exhaust`](./exhaust) — One definition of "this drawer is the palace's own exhaust, not knowledge".
 - [`mempalace.exporter`](./exporter) — exporter.py — Export the palace as a browsable folder of markdown files.
 - [`mempalace.fact_checker`](./fact_checker) — fact_checker.py — Verify text against known facts in the palace.
 - [`mempalace.format_miner`](./format_miner) — format_miner.py — proposed for mempalace 3.3.6.

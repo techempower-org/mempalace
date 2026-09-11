@@ -108,6 +108,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **Wake-up L1 stops leading with harness prompt-echo, diff fragments and tool-call receipts** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  #436 taught L1 to skip diary checkpoints, session manifests and compaction
+  summaries. None of those are what it actually led with. Measured on the live
+  palace 2026-09-11: ``memorypalace`` spent **9 of its 16** story lines on a
+  single code review — the prompt ("> Review this change for security
+  vulnerabilities."), two scaffolding lines ("Changed files (you may Read
+  these…", "Unified diff (only + lines are new):"), two "=== DIFF: …" headers,
+  four hunk-body fragments and a truncated byte-string — and ``2g`` spent two of
+  twelve on a SendMessage receipt and a quoted ``<teammate-message>``.
+
+  This matters more since #458: post-compaction recovery injects L1 as the only
+  context an agent gets back, so its first lines stopped being an annoyance you
+  scroll past and became the whole inheritance.
+
+  ``mempalace.exhaust`` is now the single definition, shared by wake-up L1 and
+  the auto-query quality gate. The two had kept separate copies of the room set
+  and the prefix tuple, which is why only one of them ever grew the prompt-echo
+  prefixes (#445) and neither ever learned about diffs.
+
+  The bias is one-directional, and two rules had to be narrowed to keep it. The
+  predicate was run over all **1,134** live drawers in both wings and every
+  single drop was read. A first version dropped any one-line quote under 200
+  characters as prompt-echo — but the house style states a distilled lesson *as*
+  a blockquote, so **eight real findings** went with it; the separator turned
+  out to be formatting (markdown emphasis) rather than length. A first version
+  also counted "-" lines as diff body, and every markdown bullet starts with
+  "- ", so a CLAUDE.md chunk read as a patch; it counts "+" only now. Neither
+  would have surfaced by reading the code — both needed the corpus, and the
+  drop list rather than the pass rate was the instrument.
+
+  A third narrowing came from review, and from a bigger instrument: a
+  full-population audit over **168,390** drawers found **19** real findings
+  still being dropped, every one a fenced block in which "+" is not a diff
+  marker — AT-command responses (``+CREG: 0,1``) and struct offsets (``+0x40
+  (64) LAC``), unavoidable in the 2g wing's reverse-engineering work. The
+  diff-body rule now ignores "+" inside ``` fences, which rescues all 19 with no
+  collateral; a "+"-ratio threshold was tested instead and rejected, because it
+  rescues 191 drawers including genuine diff hunks. Fencing is the real
+  separator: a patch body arrives raw from the harness, a human pastes machine
+  output inside a fence.
+
+  Scope of the numbers, because the first pass over-claimed: over the **L1
+  candidate pool** that was audited by hand (1,134 drawers, 0.67% of the two
+  wings) the filter drops 3.7% and loses no findings; across the full population
+  it drops 12.24%. The sample is what missed the 19 — it contained zero
+  instances of their shape. On the live L1 renderings, at least 5 of
+  ``memorypalace``'s 15 story lines and 3 of ``2g``'s 12 are removed — a floor
+  rather than an estimate, because L1 flattens newlines for display and the
+  hunk-body rule needs real line starts, while in production the filter runs on
+  the drawer before it is flattened.
+
+  The budget is unchanged and pinned by a test: filtering happens before the
+  top-N cut, so a stricter filter refills L1 from deeper in the pool instead of
+  leaving it short — which would have quietly halved the very context #458
+  exists to restore.
+
+  *Tests:* 44 (test_exhaust_shapes) — every fixture verbatim from a live drawer, including the eight findings the first version ate, now the positive controls
+  *Files:* `mempalace/exhaust.py`, `mempalace/layers.py`, `mempalace/auto_query/runner.py`
+
+
 - **prune / status --json / compress / mined resolve the backend before any local-dir test, so a Postgres palace is no longer refused** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
   #418 removed a local-directory precheck from `purge` and `sync`. The same
   check survived in two more places, so four more commands still refused a

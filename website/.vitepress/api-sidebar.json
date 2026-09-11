@@ -108,6 +108,10 @@
         "link": "/reference/python-api/entity_registry"
       },
       {
+        "text": "mempalace.exhaust",
+        "link": "/reference/python-api/exhaust"
+      },
+      {
         "text": "mempalace.exporter",
         "link": "/reference/python-api/exporter"
       },
