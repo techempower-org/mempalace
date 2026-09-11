@@ -5496,6 +5496,14 @@ def _open_drawers_or_refuse(
     Resolution precedes the directory test: a service-backed palace has no
     local database file by design, so that test is not a question about
     whether the palace exists (#459).
+
+    ``sync`` is deliberately OUTSIDE this sequence and still exits 0 on a
+    missing palace and 1 on a database-less directory, which makes the four
+    commands more divergent than before this helper existed (2/2/2/0). Not
+    an oversight: its open path runs through ``sync_palace()`` behind a
+    daemon route, a job-queue route, an apply-scope rule and a confirmation
+    prompt, so adopting this is a decision about where the precheck sits
+    relative to daemon routing rather than a substitution. Tracked in #494.
     """
     from .backends import detect_backend_for_path
     from .migrate import contains_palace_database

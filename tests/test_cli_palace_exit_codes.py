@@ -29,8 +29,10 @@ without adding it here the visible thing to do.
 """
 
 import argparse
+import inspect
 import json
 import os
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -156,6 +158,42 @@ class TestPalaceUnavailableIsAlwaysTwo:
             cmd(args)
         out = capsys.readouterr()
         assert str(palace) in (out.out + out.err)
+
+
+class TestEachCommandIsStillWiredUp:
+    """The table above proves the POLICY; this proves the commands exist.
+
+    Every test in this file calls `cmd_purge` / `cmd_prune` / `cmd_mined`
+    directly, so deleting an `add_parser(...)` or a dispatch entry would
+    leave all of them green while the CLI lost the command entirely. Review
+    caught that gap (#485): an import catches a deleted function, nothing
+    here caught a deleted wiring.
+
+    Two halves, because one probe cannot see both: `--help` exercises parser
+    registration and exits BEFORE dispatch, so the dispatch table needs its
+    own assertion.
+    """
+
+    @pytest.mark.parametrize("name", ["purge", "prune", "mined"])
+    def test_the_subcommand_is_registered_with_the_parser(self, name, capsys):
+        from mempalace import cli
+
+        with patch.object(sys, "argv", ["mempalace", name, "--help"]):
+            with pytest.raises(SystemExit) as exc:
+                cli.main()
+
+        # argparse exits 0 for --help and 2 for an unknown subcommand, so a
+        # deleted add_parser shows up here as the wrong code.
+        assert exc.value.code == 0, f"{name} is not a registered subcommand"
+        assert name in capsys.readouterr().out
+
+    @pytest.mark.parametrize("name", ["purge", "prune", "mined"])
+    def test_the_subcommand_has_a_dispatch_entry(self, name):
+        """`--help` cannot see this: it exits before `dispatch[...]` is read."""
+        from mempalace import cli
+
+        source = inspect.getsource(cli.main)
+        assert f'"{name}": cmd_' in source, f"{name} has no dispatch entry in main()"
 
 
 class TestNoResultsIsOneNotTwo:
