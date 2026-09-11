@@ -22,6 +22,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 from typing import Iterator, Optional
 
@@ -179,6 +180,53 @@ def _has_unstorable_bytes(record: dict) -> bool:
     return "\x00" in blob or any("\ud800" <= ch <= "\udfff" for ch in blob)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Entity classes — report the corpus, never edit it
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Hallway entities are harvested from drawer metadata, and most of them are
+# not names. Measured read-only against the live 1.14 GB store on the palace
+# host (2026-09-10): of 154,692 distinct entities only 12,484 — 8% — are
+# word-shaped, while identifier/path/url/template together are 47%. The very
+# first record in the file links the entity ``${this.baseUrl}/health``.
+#
+# Whether that belongs in the palace is a judgement call about the corpus,
+# not about storage, so this module reports the mix and filters NOTHING. A
+# silent filter would be an irreversible edit to the user's data, made by the
+# tool that was only asked to move it — and "we never summarize, we never
+# paraphrase" applies to deciding which of someone's entities were worth
+# keeping. The class table goes in the dry-run output so the decision is
+# made deliberately, with numbers, at cutover.
+
+_TEMPLATE_RE = re.compile(r"\$\{|\{\{|%[sd]\b|<%|\$\(")
+_URL_RE = re.compile(r"://")
+_PATH_RE = re.compile(r"[/\\]")
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_$][A-Za-z0-9_$]*$")
+_CAMEL_OR_SNAKE_RE = re.compile(r"[a-z][A-Z]|_")
+_WORDS_RE = re.compile(r"^[^\W\d_][\w'\-]*(?: [^\W\d_][\w'\-]*){0,5}$", re.UNICODE)
+
+
+def classify_entity(entity) -> str:
+    """Bucket one entity name. ``other`` is a catch-all, not a junk verdict.
+
+    Deliberately ordered most-specific first: a template that contains a
+    slash is a template, not a path.
+    """
+    if not entity or not isinstance(entity, str):
+        return "empty"
+    if _TEMPLATE_RE.search(entity):
+        return "template"
+    if _URL_RE.search(entity):
+        return "url"
+    if _PATH_RE.search(entity):
+        return "path"
+    if _IDENTIFIER_RE.match(entity) and _CAMEL_OR_SNAKE_RE.search(entity):
+        return "identifier"
+    if _WORDS_RE.match(entity):
+        return "word"
+    return "other"
+
+
 def migrate(
     source_path: str,
     *,
@@ -218,6 +266,7 @@ def migrate(
         "skipped": skip,
         "scrubbed": 0,
         "by_wing": {},
+        "entity_classes": {},
         "dry_run": dry_run,
     }
 
@@ -244,6 +293,9 @@ def migrate(
         summary["total"] += 1
         wing = record.get("wing") or "(none)"
         summary["by_wing"][wing] = summary["by_wing"].get(wing, 0) + 1
+        for entity in (record.get("entity_a"), record.get("entity_b")):
+            klass = classify_entity(entity)
+            summary["entity_classes"][klass] = summary["entity_classes"].get(klass, 0) + 1
         if _has_unstorable_bytes(record):
             summary["scrubbed"] += 1
         if dry_run or index < skip:
@@ -339,6 +391,19 @@ def main(argv=None) -> int:
     print("by wing:")
     for wing, count in sorted(summary["by_wing"].items(), key=lambda kv: -kv[1]):
         print(f"  {count:>9}  {wing}")
+    if summary["entity_classes"]:
+        total_slots = sum(summary["entity_classes"].values()) or 1
+        print("entity classes (one count per entity slot; nothing is filtered):")
+        for klass, count in sorted(summary["entity_classes"].items(), key=lambda kv: -kv[1]):
+            print(f"  {count:>9}  {klass:<11} {100 * count / total_slots:5.1f}%")
+        print(
+            "  note: code-shaped entities (identifier/path/url/template) are "
+            "imported as-is.\n"
+            "        Filtering them is a separate, deliberate decision — the "
+            "table makes\n"
+            "        them cheap to hold and cheap to query, so it stays open "
+            "after import."
+        )
     return 0
 
 

@@ -281,3 +281,67 @@ def test_dry_run_needs_no_configured_store(tmp_path, monkeypatch):
 
     assert result["total"] == 3
     assert result["imported"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Entity-class reporting — surface the corpus, never filter it silently
+# ---------------------------------------------------------------------------
+
+
+def test_dry_run_reports_entity_classes(tmp_path):
+    """Most hallway entities are harvested code tokens, not names.
+
+    Measured read-only against the live 1.14 GB file on the palace host
+    (2026-09-10): of 154,692 distinct entities only 12,484 (8%) are
+    word-shaped; identifier/path/url/template together are 47%. The first
+    record in the store links the entity ``${this.baseUrl}/health``.
+
+    Whether to import that is JP's call at cutover, so the migration reports
+    the mix and filters nothing. A silent filter would be an irreversible
+    edit to the corpus made by the tool that was only asked to move it.
+    """
+    records = [
+        {"id": "1", "wing": "w", "entity_a": "Aya", "entity_b": "Lumi"},
+        {"id": "2", "wing": "w", "entity_a": "${this.baseUrl}/health", "entity_b": "res.ok"},
+        {"id": "3", "wing": "w", "entity_a": "docs/spec.md", "entity_b": "getUserName"},
+        {"id": "4", "wing": "w", "entity_a": "https://example.com/x", "entity_b": "Aya"},
+    ]
+    path = _write(tmp_path, {"hallways": records})
+
+    result = mh.migrate(path, dry_run=True, state_path=str(tmp_path / "s.json"))
+
+    classes = result["entity_classes"]
+    assert classes["template"] >= 1
+    assert classes["path"] >= 1
+    assert classes["identifier"] >= 1
+    assert classes["url"] >= 1
+    assert classes["word"] >= 1
+
+
+def test_entity_classification():
+    """The buckets themselves, so the reported table means something."""
+    assert mh.classify_entity("${this.baseUrl}/health") == "template"
+    assert mh.classify_entity("https://example.com/health") == "url"
+    assert mh.classify_entity("docs/superpowers/specs/design.md") == "path"
+    assert mh.classify_entity("getUserName") == "identifier"
+    assert mh.classify_entity("base_url") == "identifier"
+    assert mh.classify_entity("Aya") == "word"
+    assert mh.classify_entity("memory palace") == "word"
+    assert mh.classify_entity("") == "empty"
+
+
+def test_migration_never_filters_entities(tmp_path):
+    """Reporting is not filtering. Every record still imports."""
+    records = [
+        {"id": "1", "wing": "w", "entity_a": "${x}", "entity_b": "y/z"},
+        {"id": "2", "wing": "w", "entity_a": "Aya", "entity_b": "Lumi"},
+    ]
+    store = _FakeStore()
+
+    mh.migrate(
+        _write(tmp_path, {"hallways": records}),
+        store=store,
+        state_path=str(tmp_path / "s.json"),
+    )
+
+    assert set(store.rows) == {"1", "2"}

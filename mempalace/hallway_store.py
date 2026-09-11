@@ -2,9 +2,13 @@
 
 Why this module exists, measured on the production palace host 2026-09-10:
 
-``hallways.json`` is **1,041,537,215 bytes (1.04 GB)** holding ~797K records
-across 21 wings, and growing — it was 479 MB one week earlier. Every hallway
-operation loads and JSON-parses the whole thing:
+``hallways.json`` is growing fast enough that any single figure is stale on
+arrival: **479 MB** (early evening) → **1,041,537,215 B / ~797K records /
+21 wings** (20:03) → **1,142,562,893 B / 1,903,306 records / 50 wings**
+(measured read-only at 23:0x the same night). No duplication — record count,
+distinct ids and distinct (wing, sorted-pair) tuples all agree exactly, so
+the growth is new wings plus the N(N-1)/2 pair combinatorics, not a writer
+bug. Every hallway operation loads and JSON-parses the whole thing:
 
 - ``list_hallways(wing=...)`` filters in Python *after* the full load, so the
   ``wing`` argument does not reduce the work at all. The daemon cannot
