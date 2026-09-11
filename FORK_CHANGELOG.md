@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **Every search hit carries source_kind (+ staleness when decidable) and the CLI renders the caveat** ([`fbc5d34`](https://github.com/techempower-org/mempalace/commit/fbc5d34))
+- **Every search hit carries source_kind (+ staleness when decidable) and the CLI renders the caveat** ([`28518f2`](https://github.com/techempower-org/mempalace/commit/28518f2))
   A palace search returns the *indexed copy* of whatever was mined, and
   transcripts are the only thing mined continuously (the Stop / PreCompact
   hooks); curated project documents are re-indexed only by a manual
@@ -50,11 +50,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   daemon host too. ``--format table`` prints the caveat under each hit,
   ``compact`` tags it with the source shape, and the header says so when
   nothing curated matched at all.
+
+  The staleness CAVEAT is deliberately not rendered for transcripts, only
+  the field. Measured over 48 production transcript hits: 15 stale, 21
+  not, 12 undecidable — but a live session's transcript is appended to
+  continuously, so any wing with an open session reads stale and the note
+  would fire constantly while saying nothing the transcript caveat
+  already says. Staleness is the signal that matters for a curated
+  document, which is the #451 case: a project ``CLAUDE.md`` that grew a
+  REFUTED banner after its drawer was indexed.
   ``auto_query.runner._is_curated`` now delegates to the same predicate,
   so the ranking that prefers curated hits and the caveat the CLI prints
   cannot disagree about which hits are curated.
 
-  *Tests:* 61 (test_provenance x49, test_cli_daemon TestCmdSearchProvenance x11, test_hnsw_capacity provenance x1)
+  *Tests:* 65 (test_provenance x52, test_cli_daemon TestCmdSearchProvenance x12, test_hnsw_capacity provenance x1)
   *Files:* `mempalace/provenance.py`, `mempalace/cli.py`, `mempalace/searcher.py`, `mempalace/auto_query/runner.py`
 
 
