@@ -127,6 +127,90 @@ def make_age_writethrough(
     return hook
 
 
+def make_age_batch_writethrough(
+    kg: Any,
+    extractor: Extractor,
+    *,
+    relation_type: str = "mentions",
+    confidence: float = 0.5,
+    max_entities_per_drawer: int = 100,
+):
+    """Like :func:`make_age_writethrough`, but one commit for the whole batch.
+
+    Hook signature: ``hook(drawers: list[dict])`` where each dict carries
+    ``drawer_id`` / ``document`` / ``metadata`` — the same three values the
+    per-drawer hook takes, handed over together so the commit can be
+    amortized.
+
+    Why this exists (palace-daemon#265, design on #251). The MERGEs were
+    never the dominant cost; the *commits* were. ``add_mention`` and
+    ``_run_cypher`` default to ``commit=True``, so a 1000-drawer batch with
+    up to 100 entities each issued up to 100,000 individual transaction
+    commits — each an fsync round-trip, on the connection holding the palace
+    write lock. Measured on the palace host: 4,832 drawers in 69 minutes
+    (~1.2 drawers/s), with ``pg_stat_activity`` showing one
+    ``MERGE (d:Drawer …`` per drawer; and after the tunnel recompute was
+    removed (#264) a single changed file still spent 4+ minutes here after
+    its 690 drawers were already filed.
+
+    The machinery was already there and unused: ``kg.commit()`` exists
+    precisely for bulk callers, and ``backfill_age`` has used
+    ``commit=False`` + one commit per batch since it shipped. The blocker
+    was the per-drawer hook contract, not the KG layer.
+
+    Failure handling matches the per-drawer hook's posture, because
+    enrichment is opportunistic and the drawer rows have already committed
+    by the time any of this runs:
+
+    - a failing extractor skips its drawer, not the batch;
+    - a failing ``add_mention`` skips that mention, not the batch — one bad
+      entity must not cost the other 299 drawers their edges;
+    - a failing ``commit()`` is logged, never raised. Losing a batch of
+      edges is recoverable by ``backfill_age``; failing a mine is not.
+
+    Note the edges stay ``CREATE``-always (``add_mention`` does not upsert),
+    so a partially-applied batch is a state this system already tolerates.
+    That is also why nothing here retries: a retry after a lost commit would
+    duplicate the edges it did write.
+    """
+
+    def hook(drawers) -> None:
+        wrote = False
+        for drawer in drawers:
+            drawer_id = drawer.get("drawer_id")
+            document = drawer.get("document")
+            if not document:
+                continue
+            try:
+                entities = extractor(document)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("extractor failed for drawer %s: %s", drawer_id, e)
+                continue
+            if not entities:
+                continue
+            for ent in entities[:max_entities_per_drawer]:
+                try:
+                    kg.add_mention(
+                        drawer_id=drawer_id,
+                        entity_name=ent.name,
+                        entity_type=getattr(ent, "type", "unknown"),
+                        count=getattr(ent, "count", 1),
+                        confidence=confidence,
+                        commit=False,
+                    )
+                    wrote = True
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("add_mention failed for (%s, %s): %s", drawer_id, ent.name, e)
+        if not wrote:
+            return
+        try:
+            kg.commit()
+        except Exception as e:  # noqa: BLE001 - the drawers are already committed
+            logger.warning("KG batch commit failed (%s edges may be lost): %s", "some", e)
+
+    return hook
+
+
 def make_null_writethrough():
     """A no-op hook. Useful for disabling KG writes in tests or rollouts
     without removing the ``set_kg_writethrough`` call from the writer
@@ -284,6 +368,54 @@ def make_extraction_enqueue_writethrough(dsn: str):
     return hook
 
 
+def _batchify(per_drawer_hook):
+    """Adapt a per-drawer hook to the batch contract by looping.
+
+    Used for stages that have no batched form yet — today that is the
+    extraction-queue stage, whose own batching is stage B of
+    palace-daemon#265. Batching MENTIONS must not silently drop the queue
+    when both are enabled, so it composes rather than being skipped.
+
+    One drawer failing must not cost the rest of the batch, matching the
+    per-drawer path's posture.
+    """
+
+    def hook(drawers) -> None:
+        for drawer in drawers:
+            try:
+                per_drawer_hook(
+                    drawer_id=drawer.get("drawer_id"),
+                    document=drawer.get("document"),
+                    metadata=drawer.get("metadata") or {},
+                )
+            except Exception as e:  # noqa: BLE001 - opportunistic enrichment
+                logger.warning(
+                    "batched writethrough stage failed for drawer %s: %s",
+                    drawer.get("drawer_id"),
+                    e,
+                )
+
+    return hook
+
+
+def _chain_batch_writethroughs(hooks: list):
+    """Compose batch hooks. Mirror of :func:`_chain_writethroughs`."""
+    hooks = [h for h in hooks if h is not None]
+    if not hooks:
+        return None
+    if len(hooks) == 1:
+        return hooks[0]
+
+    def chained(drawers) -> None:
+        for index, stage in enumerate(hooks):
+            try:
+                stage(drawers)
+            except Exception as e:  # noqa: BLE001 - a bad stage must not stop the others
+                logger.warning("chained batch writethrough stage %s failed: %s", index, e)
+
+    return chained
+
+
 def _chain_writethroughs(hooks: list):
     """Compose multiple writethrough hooks into a single callable.
 
@@ -388,6 +520,64 @@ def make_writethrough_from_env(kg: Optional[Any] = None, dsn: Optional[str] = No
         )
 
     return _chain_writethroughs(stages)
+
+
+def make_batch_writethrough_from_env(kg: Optional[Any] = None, dsn: Optional[str] = None):
+    """Batch-contract twin of :func:`make_writethrough_from_env`.
+
+    Same environment variables, same stages, same order — the only
+    difference is that the MENTIONS stage is built with
+    :func:`make_age_batch_writethrough`, so its MERGEs run with
+    ``commit=False`` and the whole batch commits once
+    (palace-daemon#265). Stages with no batched form are wrapped by
+    :func:`_batchify` rather than dropped.
+
+    Returns ``None`` when no stage is enabled, exactly as the per-drawer
+    builder does, so the caller's "is write-through on?" check is
+    unchanged.
+
+    The env parsing deliberately lives in one place: this delegates to the
+    per-drawer builder for stage *selection* and swaps the MENTIONS
+    implementation, so the two cannot drift on which switches mean what.
+    """
+    import os
+
+    stages = []
+
+    mentions_on = os.environ.get("MEMPALACE_KG_WRITETHROUGH") in ("1", "true", "yes")
+    if mentions_on:
+        if kg is None:
+            raise ValueError("kg must be provided when MEMPALACE_KG_WRITETHROUGH is enabled")
+        extractor_name = os.environ.get("MEMPALACE_KG_EXTRACTOR", "regex")
+        if extractor_name == "regex":
+            try:
+                from sme.extractors.regex import extract as sme_extract  # type: ignore
+
+                extractor = sme_extract
+            except ImportError:
+                extractor = _builtin_regex_extractor
+            stages.append(make_age_batch_writethrough(kg, extractor))
+            logger.info("kg_writethrough: batched MENTIONS stage attached (one commit per batch)")
+        elif extractor_name == "null":
+            stages.append(_batchify(make_null_writethrough()))
+        else:
+            raise ValueError(
+                f"unknown MEMPALACE_KG_EXTRACTOR={extractor_name!r}; "
+                "supported: regex, null (spacy/llm pending)"
+            )
+
+    if os.environ.get("MEMPALACE_KG_EXTRACTION_QUEUE") in ("1", "true", "yes"):
+        queue_dsn = dsn or os.environ.get("MEMPALACE_POSTGRES_DSN")
+        if not queue_dsn:
+            raise ValueError(
+                "MEMPALACE_KG_EXTRACTION_QUEUE requires a dsn — pass one or set "
+                "MEMPALACE_POSTGRES_DSN"
+            )
+        # No batched form yet; stage B of palace-daemon#265.
+        stages.append(_batchify(make_extraction_enqueue_writethrough(queue_dsn)))
+        logger.info("kg_writethrough: extraction-queue stage attached (per-drawer, batched loop)")
+
+    return _chain_batch_writethroughs(stages)
 
 
 def make_deletethrough_from_env(kg: Optional[Any] = None):

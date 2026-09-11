@@ -441,9 +441,23 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
             from .knowledge_graph_age import KnowledgeGraphAGE
 
             kg = KnowledgeGraphAGE(dsn=dsn)
-        hook = make_writethrough_from_env(kg=kg, dsn=dsn)
+        # Prefer the batch contract when the backend offers it: the
+        # per-drawer hook committed once per MENTION, up to 100,000 fsync
+        # round trips per 1000-drawer batch, measured at ~1.2 drawers/s on
+        # the palace host (palace-daemon#265). Backends without the batch
+        # seam keep the per-drawer path unchanged.
+        hook = None
+        if hasattr(collection, "set_kg_writethrough_batch"):
+            from .kg_writethrough import make_batch_writethrough_from_env
+
+            hook = make_batch_writethrough_from_env(kg=kg, dsn=dsn)
+            if hook is not None:
+                collection.set_kg_writethrough_batch(hook)
+        if hook is None:
+            hook = make_writethrough_from_env(kg=kg, dsn=dsn)
+            if hook is not None:
+                collection.set_kg_writethrough(hook)
         if hook is not None:
-            collection.set_kg_writethrough(hook)
             _writethrough_attached.add(cid)
             logger.info(
                 "KG write-through attached to collection (AGE entities will be extracted inline)"

@@ -633,14 +633,39 @@ class PostgresCollection(BaseCollection):
         # drawer. Hook signature: ``hook(drawer_id, document, metadata)``.
         # Failures inside the hook are caught + logged but never raise —
         # KG enrichment is opportunistic, not mandatory.
+        # A batch hook, when registered, wins: it gets every drawer in one
+        # call so it can amortize the commit. The per-drawer hook's contract
+        # structurally prevented that — with no way to know a batch existed,
+        # every mention committed on its own, up to 100,000 fsync round
+        # trips per 1000-drawer batch (palace-daemon#265). Only one of the
+        # two ever runs, or the graph would be written twice.
+        batch_hook = getattr(self, "_kg_writethrough_batch", None)
         hook = getattr(self, "_kg_writethrough", None)
-        if hook is not None:
+
+        # Use the in-memory post-pop metadata dicts rather than re-parsing
+        # ``row[5]`` (the JSON-serialized form). Same contract — wing/room
+        # already popped — but no round-trip through json.loads.
+        # (Gemini PR #101 review.)
+        if batch_hook is not None:
+            drawers = [
+                {
+                    "drawer_id": row[2],
+                    "document": row[3],
+                    "metadata": metadata_by_id.get(row[2], {}),
+                }
+                for row in rows
+            ]
+            try:
+                batch_hook(drawers)
+            except Exception as e:  # noqa: BLE001 — opportunistic enrichment
+                logger.warning(
+                    "KG batch write-through hook failed for %d drawer(s): %s",
+                    len(drawers),
+                    e,
+                )
+        elif hook is not None:
             for row in rows:
                 doc_id, document = row[2], row[3]
-                # Use the in-memory post-pop metadata dict rather than
-                # re-parsing ``row[5]`` (which is the JSON-serialized form).
-                # Same contract — wing/room already popped — but no
-                # round-trip through json.loads. (Gemini PR #101 review.)
                 metadata = metadata_by_id.get(doc_id, {})
                 try:
                     hook(drawer_id=doc_id, document=document, metadata=metadata)
@@ -650,6 +675,26 @@ class PostgresCollection(BaseCollection):
                         doc_id,
                         e,
                     )
+
+    def set_kg_writethrough_batch(self, hook) -> None:
+        """Register a callable invoked ONCE per ``_insert_rows`` batch.
+
+        Hook signature: ``hook(drawers: list[dict])``, each dict carrying
+        ``drawer_id`` / ``document`` / ``metadata`` — the same values the
+        per-drawer hook receives, handed over together.
+
+        Takes precedence over :meth:`set_kg_writethrough`; only one of the
+        two ever runs, so registering both does not write the graph twice.
+        Set to ``None`` to fall back to the per-drawer hook.
+
+        This exists because the per-drawer contract made batching
+        impossible: the hook could not know a batch existed, so every
+        mention committed on its own (palace-daemon#265). Exceptions are
+        caught and logged exactly as the per-drawer hook's are — the drawer
+        rows have already committed by the time the hook runs, and KG
+        enrichment is opportunistic, not mandatory.
+        """
+        self._kg_writethrough_batch = hook
 
     def set_kg_writethrough(self, hook) -> None:
         """Register a callable invoked after each successful drawer write.
