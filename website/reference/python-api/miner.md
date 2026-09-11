@@ -274,6 +274,23 @@ too-short content (below ``min_chunk_size``). It is ``"chunk_cap"``
 when the per-file chunk cap aborted the file. Callers use the tag to
 surface a separate counter in the mine summary (see #1455).
 
+### `file_passes_scan_gates`
+
+```python
+def file_passes_scan_gates(filepath: Path, project_path: Path, *, matchers: list = None, include_paths: set = None, exclude_matcher = None, explain: bool = False) -> bool
+```
+
+Decide whether one candidate file may be mined.
+
+Extracted verbatim from :func:`scan_project`'s walk so that a mine of a
+single named file applies exactly the same gates as that file would meet
+inside a directory walk — there is no second policy to drift out of sync.
+
+``matchers`` is the ancestor-ordered list of active ``.gitignore``
+matchers (empty disables the gitignore gate, which is what
+``--no-gitignore`` does). ``explain`` makes the otherwise-silent
+rejections print a ``SKIP:`` line.
+
 ### `scan_project`
 
 ```python
@@ -286,13 +303,70 @@ Skips symlinks and oversized files. Each skipped symlink is logged to
 ``sys.stderr`` with a ``  SKIP: &lt;relative-path> (symlink)`` line so the
 caller can tell why a directory looks empty after walking.
 
+### `resolve_project_root`
+
+```python
+def resolve_project_root(path) -> Path
+```
+
+Return the project directory a single mined file belongs to.
+
+A directory mine gets its wing from the directory it was handed and its
+rooms from paths relative to it. A single-file mine has no such argument,
+and answering "which project is this file in?" with "the directory it
+happens to sit in" would file ``&lt;repo>/docs/notes/CLAUDE.md`` under a wing
+called ``notes``. So walk up to the nearest ancestor carrying a project
+marker (``.git`` / ``mempalace.yaml`` / ``mempal.yaml``) — the same two
+things ``load_config`` and the rest of the toolchain already treat as "a
+project lives here" — and fall back to the file's own directory when the
+file is loose on disk and belongs to no project at all.
+
+Nearest marker wins, so a subproject with its own ``mempalace.yaml``
+inside a larger git repo keeps its own wing.
+
+### `scan_single_file`
+
+```python
+def scan_single_file(filepath, project_path, respect_gitignore: bool = True, include_ignored: list = None, exclude_patterns: list = None) -> list
+```
+
+Return ``[path]`` for one explicitly named file, or ``[]`` if a gate rejects it.
+
+The single-file counterpart of :func:`scan_project`. It applies the very
+same per-file gates — via the shared :func:`file_passes_scan_gates` — so a
+file mined by name behaves exactly as it would have inside a directory
+walk: same extension whitelist, same ``SKIP_FILENAMES``, same
+``.gitignore`` and ``exclude_patterns`` handling, same symlink / regular
+file / size checks, same ``--include-ignored`` override.
+
+The one difference is voice. ``scan_project``'s rejections are silent
+because a tree walk would otherwise drown the mine in them; here the
+operator named this one file and got nothing back, so every rejection
+explains itself on stderr.
+
+``.gitignore`` matchers are collected from ``project_path`` down to the
+file's own directory, in ancestor order, which is the state the walk would
+have accumulated by the time it reached that directory.
+
 ### `mine`
 
 ```python
 def mine(project_dir: str, palace_path: str, wing_override: str = None, agent: str = 'mempalace', limit: int = 0, dry_run: bool = False, respect_gitignore: bool = True, include_ignored: list = None, files: list = None, max_chunks_per_file: Optional[int] = None, workers: int = 1, *, collection = None, closets_collection = None)
 ```
 
-Mine a project directory into the palace.
+Mine a project directory — or one file inside a project — into the palace.
+
+``project_dir`` normally names a directory and the whole tree is walked.
+When it names a single regular file, only that file is mined (#451): the
+project it belongs to is found by walking up to the nearest ``.git`` /
+``mempalace.yaml`` (:func:`resolve_project_root`) and supplies the wing
+and the relative path room detection keys off, so a file is filed exactly
+where a directory mine would have filed it. The file's existing drawers
+are replaced, not duplicated — ``process_file`` deletes by ``source_file``
+before inserting — and an unchanged file is still skipped on its stored
+mtime, so re-queuing one costs nothing. This is the targeted re-index
+path: re-mining a 111 MB corpus to refresh one edited CLAUDE.md holds the
+palace write lock for hours.
 
 ``workers`` controls parallelism of the read/chunk/route prep half.
 The default ``1`` runs the unchanged sequential path (zero behaviour

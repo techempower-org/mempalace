@@ -23,6 +23,68 @@
 # Order in this file is presentation order in the changelog (newest first).
 
 entries:
+  - id: cli-mine-single-file
+    date: 2026-09-10
+    bucket: Added
+    commit: 787af46
+    area: CLI
+    summary: "mempalace mine <file> --mode projects — targeted re-index of one curated document"
+    body: |
+      Projects mode required a directory, so refreshing one edited ``CLAUDE.md``
+      meant re-mining the whole tree and holding the palace write lock for as
+      long as that takes (the ``2g`` corpus that surfaced this is 111 MB). The
+      measured consequence: palace search kept returning the *transcript* copy
+      of a claim that ``2g/CLAUDE.md`` had since refuted. The indexed copy of
+      the card was filed 2026-09-01T14:13; the claim landed in the file on 09-03
+      and the REFUTED banner on 09-05, so the indexed chunk contained neither.
+      Transcripts are mined continuously by the Stop/PreCompact hooks; curated
+      project docs are mined only by a manual whole-directory run nobody makes.
+      A path naming a regular file now mines exactly that file, as part of its
+      project: the root is the nearest ancestor carrying ``.git`` /
+      ``mempalace.yaml`` (``resolve_project_root``), which supplies the wing and
+      the relative path room detection keys off — so ``~/Projects/2g/CLAUDE.md``
+      is wing ``2g``. The file's existing drawers are REPLACED rather than
+      duplicated (``process_file`` already deletes by absolute ``source_file``;
+      the single-file path returns the same resolved absolute path a directory
+      walk produces, so the delete finds them), and the stored-mtime skip still
+      applies, so re-queuing an unchanged file costs nothing.
+      ``scan_project``'s per-file gate is extracted to
+      ``file_passes_scan_gates``; ``scan_single_file`` applies the identical
+      gates without the walk, so there is no second filtering policy to drift.
+      The one deliberate difference: a rejection of a file the operator named BY
+      NAME explains itself on stderr, where the tree walk stays silent. A
+      ``.jsonl`` handed to projects mode is now an explicit exit-2 error naming
+      ``--mode convos`` instead of a silent no-op.
+    tests: "36 (test_miner_single_file x24, test_cli_mine_single_file x12)"
+    files: [mempalace/miner.py, mempalace/cli.py]
+
+  - id: cli-mine-wing-never-guessed
+    date: 2026-09-10
+    bucket: Fixed
+    commit: a30293b
+    area: CLI
+    summary: "Daemon-strict mine refuses to derive a wing from a document path it cannot classify locally"
+    body: |
+      The daemon-strict branch decided file-vs-directory with ``is_file()`` on
+      the CLIENT filesystem while the daemon mines its own host's copy. A path
+      present there and absent here answered False, fell through to the
+      directory rule, and derived the wing from the FILENAME — measured,
+      ``~/Projects/2g/CLAUDE.md`` lands in a wing called ``claude.md``. Silent,
+      permanent misfiling of exactly the kind targeted re-index exists to
+      prevent. The disagreement is one-sided: for a directory "basename" is
+      right whether or not we can see it, while a file's wing comes from its
+      project root, so only a file misfiles. An unresolvable path carrying a
+      suffix the miner reads as text now exits 2 naming ``--wing``, quoting the
+      junk wing it declined to use; anything else keeps the historic rule.
+      Deliberately not a blanket refusal — the daemon legitimately mines paths
+      the client cannot see (synced, or ``PALACE_DAEMON_PATH_MAP``-remapped),
+      a contract ``test_routes_projects_mode_to_daemon`` has pinned since before
+      single-file mining existed. Residual hole, stated in the docstring rather
+      than papered over: a remote-only file with no suffix still takes the
+      basename rule.
+    tests: "3 (test_cli_mine_single_file: refusal, explicit --wing, unseen directory)"
+    files: [mempalace/cli.py]
+
   - id: postgres-scrub-unstorable-bytes
     date: 2026-09-10
     bucket: Fixed
