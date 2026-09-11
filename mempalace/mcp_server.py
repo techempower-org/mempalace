@@ -66,6 +66,7 @@ from .config import (  # noqa: E402
     sanitize_iso_temporal,
     sqlite_read_uri,
     strip_lone_surrogates,
+    sanitize_session_id,
 )
 from .version import __version__  # noqa: E402
 from chromadb.errors import NotFoundError as _ChromaNotFoundError  # noqa: E402
@@ -3810,6 +3811,7 @@ def tool_add_drawer(
     source_file: str = None,
     added_by: str = "mcp",
     tags: list = None,
+    session_id: str = "",
 ):
     """File verbatim content into a wing/room. Checks for duplicates first.
 
@@ -3907,6 +3909,14 @@ def tool_add_drawer(
         "filed_at": datetime.now().isoformat(),
         "id_recipe": ID_RECIPE,
     }
+    # #408: the session that filed this drawer, so a checkpoint's diary
+    # entry and the batch it summarizes can be recovered together. Absent
+    # rather than placeholder when nothing usable survives sanitization --
+    # every drawer written before this existed has no key either, and a
+    # synthetic id would pool them all under one name.
+    session_id = sanitize_session_id(session_id)
+    if session_id:
+        base_meta["session_id"] = session_id
     apply_tags_to_metadata(base_meta, normalised_tags)
 
     from .novelty_wiring import compute_novelty_tag
@@ -5362,6 +5372,9 @@ def tool_diary_write(
             "filed_at": now.isoformat(),
             "date": now.strftime("%Y-%m-%d"),
         }
+        # Same rule as tool_add_drawer (#408): one shape for the key
+        # whichever tool wrote it.
+        session_id = sanitize_session_id(session_id)
         if session_id:
             base_metadata["session_id"] = session_id
         # Verbatim guarantee: preserve the raw AAAK source whenever the
@@ -5848,6 +5861,13 @@ def tool_checkpoint(items, diary=None, dedup_threshold=0.9, added_by=None):
         resolved_added_by = agent if isinstance(agent, str) and agent.strip() else None
     if resolved_added_by is None:
         resolved_added_by = "checkpoint"
+    # #408 ask 2: the diary's session id also rides on every drawer this
+    # call files. Previously only the diary entry carried it, so the batch
+    # a checkpoint summarized was left unlinked from its own summary.
+    # Resolved before the loop because the diary block runs after it.
+    resolved_session_id = ""
+    if isinstance(diary, dict):
+        resolved_session_id = sanitize_session_id(diary.get("session_id", ""))
     for item in items:
         if not isinstance(item, dict):
             out["errors"].append({"item": item, "error": "item must be an object"})
@@ -5870,7 +5890,13 @@ def tool_checkpoint(items, diary=None, dedup_threshold=0.9, added_by=None):
         # string by the guard above) we still file rather than drop the
         # memory: verbatim recall is the priority and add_drawer's own
         # idempotency blocks exact duplicates.
-        res = tool_add_drawer(wing=wing, room=room, content=content, added_by=resolved_added_by)
+        res = tool_add_drawer(
+            wing=wing,
+            room=room,
+            content=content,
+            added_by=resolved_added_by,
+            session_id=resolved_session_id,
+        )
         if res.get("success"):
             out["added"].append(res)
         else:
@@ -5890,7 +5916,7 @@ def tool_checkpoint(items, diary=None, dedup_threshold=0.9, added_by=None):
                     entry=entry,
                     topic=diary.get("topic", "session-checkpoint"),
                     wing=diary.get("wing", ""),
-                    session_id=str(diary.get("session_id", "") or ""),
+                    session_id=resolved_session_id,
                 )
     return out
 
@@ -6602,6 +6628,10 @@ TOOLS = {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Cross-cutting labels for the drawer (optional). Normalised to lower-case with spaces → hyphens.",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Harness session id (optional) — stored in the drawer's metadata so a session's drawers and its checkpoint diary entry can be recovered together.",
                 },
             },
             "required": ["wing", "room", "content"],
