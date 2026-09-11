@@ -530,6 +530,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and pinned in three places so a silent flip fails loudly. In
   daemon-strict mode the flag joins the existing ignored-local-flags
   warning until the daemon carries a ``tunnels`` body field.
+  A second, unconditional short-circuit needs no flag at all: a mine that
+  **upserted zero drawers** skips the block outright. Measured on the
+  palace host, a requeued ``CLAUDE.md`` mine wrote nothing (all 661 of
+  that file's drawers still carried the earlier ``filed_at``, so the
+  stored-mtime check skipped the file) and still spent **14+ minutes at
+  3.5 GB** there, against a 4G cgroup cap, while the palace wrote nothing
+  at all. It is a trade rather than a free win and the code says so:
+  ``_compute_entity_tunnels_for_wing`` reads every wing's hallways, so a
+  no-op mine of one wing could in principle have picked up a cross-wing
+  tunnel created by a mine of another; the next mine that actually files
+  something, or a full recompute, picks it up.
   Root cause note for the follow-up: the 29 minutes is **not** the 993 MB
   ``hallways.json``. Measured on katana, a 900K-record/396 MB hallways file
   parses in 3.1 s and writes in 8.4 s (~37 s per mine at the production
@@ -540,7 +551,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   O(n²), extrapolating to ~16 min at 10K tunnels. Batching that persist is
   tracked separately; this entry is the skip, not the fix.
 
-  *Tests:* 10 (test_miner_no_tunnels x5, test_cli_mine_no_tunnels x5)
+  *Tests:* 13 (test_miner_no_tunnels x8, test_cli_mine_no_tunnels x5)
   *Files:* `mempalace/miner.py`, `mempalace/cli.py`
 
 
