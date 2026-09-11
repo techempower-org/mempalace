@@ -39,7 +39,10 @@ EMBEDDING_MODEL = "chroma-default-all-MiniLM-L6-v2"
 VECTOR_INDEX_MIN_ROWS = 5_000
 VECTOR_INDEX_CHECK_INTERVAL_ROWS = 1_000
 
-_embedder = None
+# Set once the first time a resolved embedder's width disagrees with the
+# column's, so the mismatch is named on the batch that discovers it rather
+# than on every batch after.
+_dim_warned = False
 
 # U+FFFD REPLACEMENT CHARACTER — the standard "this byte cannot be
 # represented" marker, used for both unstorable classes so the
@@ -69,26 +72,78 @@ def _load_psycopg2():
 
 
 def _embed(texts: list[str]) -> list[list[float]]:
-    """Embed texts for PostgreSQL vector search.
+    """Embed texts for PostgreSQL vector search, through the project resolver.
 
-    Reuse Chroma's default local embedding function so the PostgreSQL backend
-    matches the zero-API embedding model already used by the default backend
-    without adding a second ML dependency stack.
+    This used to construct ``DefaultEmbeddingFunction()`` directly, on the
+    stated rationale of matching the default backend's zero-API local model
+    without a second ML dependency stack. Delegating satisfies that goal
+    completely — with no embedding configuration set, the resolver still
+    returns a local ONNX MiniLM embedder, adds no dependency, and does not
+    change default behaviour — and it repairs three compounding defects:
+
+    - ``MEMPALACE_EMBEDDING_MODEL`` was ignored on this backend's write *and*
+      query paths, so a configured remote endpoint served 9 texts in 18.3
+      hours of near-continuous mining while a local CPU embedder did the work;
+    - the ORT ``intra_op_num_threads`` cap (#1068) lives inside the resolver,
+      so this path spawned a ~47-thread pool it was never allowed to spawn;
+    - in chromadb 1.5.9 ``DefaultEmbeddingFunction`` is not
+      ``ONNXMiniLM_L6_V2`` — its whole ``__call__`` is
+      ``return ONNXMiniLM_L6_V2()(input)``, and ``.model`` is a per-*instance*
+      ``cached_property``. The old module-global therefore cached an object
+      holding no model, and every call rebuilt the entire ONNX session
+      (0.706s / 0.711s / 0.713s — flat, no warm-up ever, against
+      1.257s / 0.532s / 0.539s for a genuinely reused instance).
+
+    ``get_embedding_function()`` caches under a lock, so the module-global
+    embedder is gone rather than moved. The numpy-to-float conversion is
+    shared with ``embedding_wrapper`` instead of re-derived here: the postgres
+    vector literal formats with ``%f`` and ``np.float32`` scalars would not
+    survive it, and that subtlety should have exactly one home.
     """
-    global _embedder
-    if _embedder is None:
-        try:
-            from chromadb.utils import embedding_functions
-        except ImportError as exc:  # pragma: no cover - chromadb is a core dependency.
-            raise RuntimeError(
-                "PostgreSQL backend text queries require ChromaDB's local embedding function."
-            ) from exc
+    if not texts:
+        return []
+    from .embedding_wrapper import _embed_texts
 
-        _embedder = embedding_functions.DefaultEmbeddingFunction()
-        logger.info("Loaded embedding model: %s", EMBEDDING_MODEL)
+    vectors = _embed_texts(texts)
+    _warn_on_dimension_mismatch(vectors)
+    return vectors
 
-    vectors = _embedder(texts)
-    return [[float(value) for value in vector] for vector in vectors]
+
+def _warn_on_dimension_mismatch(vectors: list[list[float]]) -> None:
+    """Name a width mismatch once, in terms of the model that caused it.
+
+    Routing through the resolver makes a new failure mode reachable: before,
+    ``_embed`` could only ever produce ``EMBEDDING_DIM`` vectors; now an
+    operator can configure a model of a different width against a
+    ``vector(EMBEDDING_DIM)`` column. pgvector's own error names neither the
+    model nor the configuration that selected it, so say both here. Postgres
+    stays the authority on whether the write is legal — this only makes the
+    cause legible, and does not invent a second place that can refuse a write.
+    """
+    global _dim_warned
+    if _dim_warned or not vectors or not vectors[0]:
+        return
+    dim = len(vectors[0])
+    if dim == EMBEDDING_DIM:
+        return
+    _dim_warned = True
+    try:
+        from ..embedding import current_model_name
+
+        model = current_model_name()
+    except Exception:  # noqa: BLE001 — a naming failure must not block the write
+        model = "unknown"
+    logger.warning(
+        "postgres: configured embedding model %r produces %d-dimensional vectors, but the "
+        "drawers table's embedding column is vector(%d) (sized for %s). Writes will be "
+        "rejected by postgres until the model and the column agree — re-embed the palace "
+        "or set MEMPALACE_EMBEDDING_MODEL back to a %d-dimensional model.",
+        model,
+        dim,
+        EMBEDDING_DIM,
+        EMBEDDING_MODEL,
+        EMBEDDING_DIM,
+    )
 
 
 def _vec_literal(vector: list[float]) -> str:
