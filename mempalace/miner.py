@@ -2801,6 +2801,9 @@ def _mine_impl(  # noqa: C901 — injected-handle branches push complexity one t
                 room_resolver=room_resolver,
             )
 
+        if not dry_run and compute_derived and not total_drawers:
+            print("\n  Derived graph: skipped — this mine filed no drawers")
+
         if not dry_run:
             # #474: these three derived analytics cost O(wing), not
             # O(change). Measured on the palace host: a 31-file memory
@@ -2813,7 +2816,20 @@ def _mine_impl(  # noqa: C901 — injected-handle branches push complexity one t
             # (entity tunnels read the hallways the step above wrote), and
             # skipping only the two tunnel steps would leave the hallways
             # load + full rewrite -- most of the I/O -- in place.
-            if compute_derived:
+            #
+            # ``total_drawers == 0`` short-circuits without any flag: a mine
+            # that filed nothing has nothing to recompute for. Measured on
+            # the palace host, a requeued CLAUDE.md mine wrote zero drawers
+            # (every drawer still carried the earlier filed_at, so the
+            # stored-mtime check skipped the file) and still spent 14+
+            # minutes at 3.5 GB here. Note this is a TRADE, not a free win:
+            # ``_compute_entity_tunnels_for_wing`` reads every wing's
+            # hallways, so a no-op mine of wing A could in principle have
+            # picked up a cross-wing tunnel created by a mine of wing B.
+            # The next mine of A that actually files something -- or a full
+            # recompute -- picks it up, which is a fair price for not
+            # burning 14 minutes and 3.5 GB to rewrite identical output.
+            if compute_derived and total_drawers:
                 from .config import MempalaceConfig
 
                 graph_config = MempalaceConfig(palace_path=palace_path)

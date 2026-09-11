@@ -160,3 +160,82 @@ def test_skipping_derived_does_not_change_what_is_filed(project, derived_spies):
 
 
 assert Path  # fixtures above use tmp_path; keep the import meaningful
+
+
+# ---------------------------------------------------------------------------
+# zero-upsert short-circuit (#474) — no flag needed
+# ---------------------------------------------------------------------------
+
+
+class _AlreadyMinedCollection(_StubCollection):
+    """Reports every file as already mined at its current mtime.
+
+    Reproduces the measured case: the requeued CLAUDE.md mine wrote zero
+    drawers because the stored source_mtime still matched, and then spent
+    14+ minutes at 3.5 GB recomputing the wing's derived graph anyway.
+    """
+
+    def __init__(self, sources):
+        super().__init__()
+        import os
+
+        from mempalace.palace import NORMALIZE_VERSION
+
+        self._metas = [
+            {
+                "source_file": str(s),
+                "source_mtime": os.path.getmtime(s),
+                "normalize_version": NORMALIZE_VERSION,
+            }
+            for s in sources
+        ]
+
+    def get(self, **kwargs):
+        if kwargs.get("offset", 0):
+            return {"ids": [], "metadatas": [], "documents": []}
+        return {
+            "ids": [f"seed{i}" for i in range(len(self._metas))],
+            "metadatas": [dict(m) for m in self._metas],
+            "documents": [""] * len(self._metas),
+        }
+
+
+def test_zero_upsert_mine_skips_the_derived_block(project, derived_spies):
+    """A mine that filed nothing has nothing to recompute for.
+
+    Measured on the palace host: a requeued CLAUDE.md mine wrote zero drawers
+    (all 661 drawers still carried the earlier filed_at, so the mtime check
+    skipped the file) and still spent 14+ minutes at 3.5 GB in this block.
+    """
+    col = _AlreadyMinedCollection([project / "notes" / "a.md"])
+    mine(
+        str(project), str(project / "palace"), collection=col, closets_collection=_StubCollection()
+    )
+
+    assert col.upsert_calls == [], "control: this mine must file nothing"
+    assert derived_spies == {"topic": 0, "hallways": 0, "entity": 0}
+
+
+def test_zero_upsert_skip_needs_no_flag(project, derived_spies):
+    """Explicitly asking for the derived block does not resurrect it when
+    there is nothing to recompute — the short-circuit is unconditional."""
+    col = _AlreadyMinedCollection([project / "notes" / "a.md"])
+    mine(
+        str(project),
+        str(project / "palace"),
+        collection=col,
+        closets_collection=_StubCollection(),
+        compute_derived=True,
+    )
+
+    assert col.upsert_calls == []
+    assert derived_spies == {"topic": 0, "hallways": 0, "entity": 0}
+
+
+def test_a_mine_that_files_something_still_computes(project, derived_spies):
+    """Control for both tests above: the same fixture with an empty
+    collection does file drawers and does run the derived block."""
+    col = _mine(project)
+
+    assert col.upsert_calls
+    assert derived_spies == {"topic": 1, "hallways": 1, "entity": 1}
