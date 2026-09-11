@@ -17,9 +17,12 @@ counting our own calls would just re-assert the thing under test.
 Usage::
 
     python scripts/bench_kg_writethrough.py \\
-        --dsn postgresql://user:pw@host/scratch_db [--drawers 300]
+        --dsn postgresql://user:pw@host/scratch_db \\
+        --scratch-db scratch_db [--drawers 300]
 
-Refuses to run against a DSN that looks like the production palace.
+Refuses to run unless the DSN's database name equals ``--scratch-db``;
+there is no override flag. Exits non-zero when the arms do not do equal
+work, or when the edge count cannot be read at all.
 """
 
 from __future__ import annotations
@@ -55,6 +58,16 @@ def _make_drawers(n, entities_per_drawer):
 
 def _extractor(text):
     return [_Entity(word.lower()) for word in text.split()]
+
+
+def _dbname(dsn: str) -> str:
+    """The database a DSN resolves to, or '' when it cannot be read."""
+    from urllib.parse import urlparse
+
+    try:
+        return (urlparse(dsn).path or "").lstrip("/")
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _xact_commits(dsn, settle=True):
@@ -155,19 +168,24 @@ def main(argv=None) -> int:
         help="skip the pg_stat settle wait (demonstrates the under-count)",
     )
     parser.add_argument(
-        "--i-know-this-is-not-production",
-        action="store_true",
-        help="required if the DSN mentions a known production host",
+        "--scratch-db",
+        required=True,
+        help="name of the scratch database; the DSN's dbname must equal it",
     )
     args = parser.parse_args(argv)
 
-    if (
-        any(h in args.dsn for h in ("familiar", "jphe.in"))
-        and not args.__dict__["i_know_this_is_not_production"]
-    ):
+    # Allowlist, not denylist. A hostname cannot carry the signal here:
+    # production is postgresql://...@localhost:5433/mempalace_2026_05_13
+    # (docker on the palace host), so "is the host familiar?" lets the real
+    # DSN straight through. The operator must name the scratch database and
+    # the DSN must agree -- and there is deliberately no override flag,
+    # because an override is the thing that gets typed at 2am.
+    dbname = _dbname(args.dsn)
+    if dbname != args.scratch_db:
         print(
-            "refusing: that DSN looks like the production palace. This benchmark "
-            "writes thousands of graph edges.",
+            f"refusing: DSN database is {dbname!r} but --scratch-db is "
+            f"{args.scratch_db!r}. This benchmark writes thousands of graph edges; "
+            "point it at a scratch database and name that database explicitly.",
             file=sys.stderr,
         )
         return 2
@@ -218,11 +236,29 @@ def main(argv=None) -> int:
         )
 
     per, bat = results[1], results[2]
+
+    # The edge counts are this benchmark's validity condition, so failing
+    # them has to fail the RUN. A benchmark that prints a warning and exits
+    # 0 will eventually be quoted from a broken run by someone who read
+    # only the table.
+    for r in results:
+        if not isinstance(r["edges"], int):
+            print(
+                f"\nFAIL: could not count edges for the {r['arm']!r} arm "
+                f"({r['edges']}). Without a ground-truth edge count the timings "
+                "prove nothing -- an arm that silently dropped work would look "
+                "fast. Refusing to report a result.",
+                file=sys.stderr,
+            )
+            return 3
     if per["edges"] != bat["edges"]:
         print(
-            f"\n!! arms did NOT do equal work: per-drawer wrote {per['edges']} edges, "
-            f"batched wrote {bat['edges']}. The timing comparison is not valid."
+            f"\nFAIL: the arms did NOT do equal work -- per-drawer wrote "
+            f"{per['edges']} edges, batched wrote {bat['edges']}. The timing "
+            "comparison is not valid.",
+            file=sys.stderr,
         )
+        return 4
     if bat["seconds"]:
         print(f"\nspeedup           {per['seconds'] / bat['seconds']:.1f}x")
     print(

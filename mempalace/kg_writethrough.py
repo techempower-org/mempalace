@@ -163,10 +163,30 @@ def make_age_batch_writethrough(
     by the time any of this runs:
 
     - a failing extractor skips its drawer, not the batch;
-    - a failing ``add_mention`` skips that mention, not the batch — one bad
-      entity must not cost the other 299 drawers their edges;
-    - a failing ``commit()`` is logged, never raised. Losing a batch of
-      edges is recoverable by ``backfill_age``; failing a mine is not.
+    - a failing ``commit()`` is logged, never raised;
+    - a failing ``add_mention`` does NOT cost only itself. Be precise here,
+      because an earlier version of this docstring claimed it did:
+      ``_run_cypher`` routes through ``_with_conn_retry``, which calls
+      ``_rollback_quietly()`` on a statement-level DB error. Under
+      ``commit=False`` that ``conn.rollback()`` **discards every mention
+      pending in this batch**. The loop continues, so mentions extracted
+      after the failure still land at the final commit, but the ones before
+      it are gone.
+
+    That is a real narrowing versus the per-drawer hook, where a failure
+    cost exactly one mention. It is accepted for now because the *drawers*
+    are untouched — they committed before this hook ran — and the lost
+    edges are recoverable with ``backfill_age``, which exists for precisely
+    this state. Restoring per-mention isolation needs a SAVEPOINT around
+    each mention, which was measured on a scratch AGE palace at **3.0x**
+    the cost of the bare statements (1000 MERGEs: 0.50 s plain, 1.51 s
+    with SAVEPOINT + RELEASE each) -- enough to cut this change's 4.2x win
+    down to roughly 1.4x. Not worth it to buy back a rare, non-fatal,
+    backfill-recoverable loss, so it is filed as stage A2 on
+    techempower-org/palace-daemon#265 rather than built here. A savepoint
+    per *drawer* instead of per mention is the more promising point on
+    that curve: ~10x fewer savepoints at this corpus's entity density, and
+    it bounds a loss to one drawer's edges rather than the batch's.
 
     Note the edges stay ``CREATE``-always (``add_mention`` does not upsert),
     so a partially-applied batch is a state this system already tolerates.

@@ -35,30 +35,53 @@ class _Entity:
 
 
 class _RecordingKG:
-    """Counts mentions and commits the way the real KG would experience them."""
+    """Models the real KG's TRANSACTION semantics, not just its call surface.
 
-    def __init__(self, fail_on_entity=None):
-        self.mentions = []
+    An earlier version of this fake got that distinction wrong, and the
+    test built on it certified a property production does not have.
+    ``_run_cypher`` routes through ``_with_conn_retry``, which on a
+    statement-level DB error calls ``_rollback_quietly()`` ->
+    ``conn.rollback()``. Under ``commit=False`` that discards **every
+    mention accumulated in the batch so far**, not only the failing one.
+
+    So ``pending`` is dropped on a DB-class failure here, exactly as
+    postgres drops it. ``fail_is_db_error=False`` models a failure that
+    does not reach the driver and therefore does not roll back.
+    """
+
+    def __init__(self, fail_on_entity=None, fail_is_db_error=True):
+        self.committed = []
+        self.pending = []
         self.commits = 0
-        self.uncommitted = 0
-        self.max_uncommitted = 0
+        self.rollbacks = 0
         self.fail_on_entity = fail_on_entity
+        self.fail_is_db_error = fail_is_db_error
+
+    @property
+    def mentions(self):
+        """Only what survived — committed edges, not attempted ones."""
+        return self.committed
 
     def add_mention(
         self, drawer_id, entity_name, *, entity_type="unknown", count=1, confidence=0.5, commit=True
     ):
         if entity_name == self.fail_on_entity:
+            if self.fail_is_db_error:
+                # What _rollback_quietly() does to the open transaction:
+                # everything pending in this batch is discarded.
+                self.pending = []
+                self.rollbacks += 1
             raise RuntimeError("AGE said no")
-        self.mentions.append((drawer_id, entity_name, commit))
+        self.pending.append((drawer_id, entity_name, commit))
         if commit:
+            self.committed.extend(self.pending)
+            self.pending = []
             self.commits += 1
-        else:
-            self.uncommitted += 1
-            self.max_uncommitted = max(self.max_uncommitted, self.uncommitted)
 
     def commit(self):
         self.commits += 1
-        self.uncommitted = 0
+        self.committed.extend(self.pending)
+        self.pending = []
 
 
 def _extractor(text):
@@ -118,8 +141,23 @@ def test_commits_do_not_scale_with_batch_size():
 # ---------------------------------------------------------------------------
 
 
-def test_one_bad_mention_does_not_lose_the_rest_of_the_batch():
-    """A single failing MERGE must not cost the other 299 drawers' edges."""
+def test_a_db_error_mid_batch_discards_that_batch_s_pending_edges():
+    """The property production ACTUALLY has — asserted rather than wished for.
+
+    An earlier version of this test claimed a failing mention cost only
+    itself. It does not. ``_run_cypher`` routes through
+    ``_with_conn_retry``, which calls ``_rollback_quietly()`` on a
+    statement-level DB error, and under ``commit=False`` that discards
+    everything pending in the batch.
+
+    What survives is what the loop extracts *after* the failure, published
+    by the final commit. The drawers themselves are untouched — they
+    committed before the hook ran — and the lost edges are recoverable
+    with ``backfill_age``.
+
+    Restoring true per-mention isolation needs a SAVEPOINT around each
+    mention; tracked as stage A2 on techempower-org/palace-daemon#265.
+    """
     kg = _RecordingKG(fail_on_entity="delta")
     hook = kgw.make_age_batch_writethrough(kg, _extractor)
 
@@ -127,8 +165,25 @@ def test_one_bad_mention_does_not_lose_the_rest_of_the_batch():
 
     names = [name for _, name, _ in kg.mentions]
     assert "delta" not in names
+    assert not {"alpha", "beta", "gamma"} & set(names), (
+        "the rollback discards every mention pending when the error hit"
+    )
+    assert "epsilon" in names, "mentions extracted after the failure still land"
+    assert kg.rollbacks == 1
+    assert kg.commits == 1
+
+
+def test_a_non_db_failure_costs_only_its_own_mention():
+    """Not every failure rolls back, so the loop's skip is still worth having."""
+    kg = _RecordingKG(fail_on_entity="delta", fail_is_db_error=False)
+    hook = kgw.make_age_batch_writethrough(kg, _extractor)
+
+    hook(DRAWERS)
+
+    names = [name for _, name, _ in kg.mentions]
+    assert "delta" not in names
     assert {"alpha", "beta", "gamma", "epsilon"} <= set(names)
-    assert kg.commits == 1, "the batch still commits what did succeed"
+    assert kg.rollbacks == 0
 
 
 def test_a_failing_extractor_skips_its_drawer_only():
