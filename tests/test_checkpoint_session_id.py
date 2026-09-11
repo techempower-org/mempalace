@@ -283,3 +283,45 @@ class TestSessionIdReachableOverMcp:
 
         assert _meta(result["added"][0]["drawer_id"])["session_id"] == "sess-rpc-both"
         assert _meta(result["diary"]["entry_id"])["session_id"] == "sess-rpc-both"
+
+
+class TestUnknownPlaceholderRejected:
+    """The live hook's own fallback is ``return sanitized or "unknown"``
+    (``palace-daemon/clients/hook.py::_sanitize_session_id``), so once the
+    hook starts sending the field it can send the literal ``"unknown"``.
+
+    Mirroring the hook's charset without mirroring that fallback would
+    store ``"unknown"`` as a real session id — and then every session
+    whose raw id sanitized to nothing pools under one name, which is the
+    exact harm ``sanitize_session_id``'s docstring refuses a placeholder
+    for. Rejecting the sentinel is what makes the "omit, don't
+    substitute" rule actually hold end to end.
+    """
+
+    @pytest.mark.parametrize("raw", ["unknown", "UNKNOWN", "Unknown", "unknown!!", "  unknown  "])
+    def test_sanitizer_refuses_the_placeholder(self, raw):
+        from mempalace.config import sanitize_session_id
+
+        assert sanitize_session_id(raw) == "", f"{raw!r} must not become a session id"
+
+    def test_unknown_is_not_written_to_drawer_metadata(self, monkeypatch, config, palace_path, kg):
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace.mcp_server import tool_add_drawer
+
+        res = tool_add_drawer(
+            wing="w", room="sessions", content="filed by the hook fallback", session_id="unknown"
+        )
+
+        assert res["success"] is True
+        assert "session_id" not in _meta(res["drawer_id"])
+
+    def test_a_real_id_containing_unknown_still_stores(self, monkeypatch, config, palace_path, kg):
+        """Only the bare sentinel is refused — not every id mentioning it."""
+        from mempalace.config import sanitize_session_id
+
+        assert sanitize_session_id("unknown-7f3a") == "unknown-7f3a"
+        assert sanitize_session_id("sess-unknown-2") == "sess-unknown-2"
+        # Boundary held deliberately narrow: only the sentinel itself is
+        # refused, so the guard can never swallow an id a real writer
+        # emits. No writer produces "-unknown-".
+        assert sanitize_session_id("-unknown-") == "-unknown-"

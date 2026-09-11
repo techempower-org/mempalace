@@ -152,7 +152,20 @@ def sanitize_session_id(value) -> str:
     """
     if not isinstance(value, str):
         return ""
-    return _SESSION_ID_STRIP_RE.sub("", value)[:MAX_NAME_LENGTH]
+    cleaned = _SESSION_ID_STRIP_RE.sub("", value)[:MAX_NAME_LENGTH]
+    # The hook's own fallback is ``return sanitized or "unknown"``, so it
+    # can hand us the literal placeholder. Mirroring its charset without
+    # mirroring this would store "unknown" as a real id and pool every
+    # session whose raw id sanitized to nothing under one name -- the
+    # precise harm the "omit, never substitute" rule above exists to
+    # prevent, reintroduced from the other side. Checked after the strip
+    # so "unknown!!" and padded variants collapse into it too.
+    #
+    # Deliberately narrow: the bare sentinel only, never a substring, so
+    # the guard cannot swallow a real id like "unknown-7f3a".
+    if cleaned.casefold() == "unknown":
+        return ""
+    return cleaned
 
 
 # ISO-8601 temporal validator for knowledge-graph temporal parameters
