@@ -538,6 +538,9 @@ def test_cmd_mine_without_mode_preserves_projects_legacy_path(monkeypatch):
         include_ignored=[],
         max_chunks_per_file=None,
         workers=1,  # fork: every mine surface exposes worker-count config
+        # #474: default is True -- pinned so a silent flip of the
+        # derived-graph default at the CLI boundary fails loudly.
+        compute_derived=True,
     )
 
 

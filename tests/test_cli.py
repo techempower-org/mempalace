@@ -1036,6 +1036,9 @@ def test_cmd_mine_projects_mode(mock_config_cls):
             include_ignored=[],
             max_chunks_per_file=None,
             workers=1,
+            # #474: default is True -- pinned here so a silent flip of the
+            # derived-graph default at the CLI boundary fails loudly.
+            compute_derived=True,
         )
 
 
