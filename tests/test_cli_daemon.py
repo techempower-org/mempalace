@@ -142,7 +142,12 @@ class TestPostDaemonMineCli:
 
         assert ok is True
         assert captured["url"] == "http://daemon.example:8085/mine"
-        assert captured["body"] == {"dir": "/some/dir", "wing": "w", "mode": "convos"}
+        assert captured["body"] == {
+            "dir": "/some/dir",
+            "wing": "w",
+            "mode": "convos",
+            "background": False,
+        }
 
     def test_returns_false_on_failure(self, capsys):
         from mempalace.cli import _post_daemon_mine_cli
@@ -181,6 +186,204 @@ class TestPostDaemonMineCli:
         assert "Directory does not exist" in err
         # Path-not-visible gets an actionable hint about sync/staging.
         assert "sync" in err.lower()
+
+
+class TestPostDaemonMineCliBackground:
+    """The CLI poster must be able to ask for a queued mine (#456).
+
+    ``hooks_cli._post_daemon_mine`` has sent ``background: True`` since #433;
+    the CLI copy never did, so every caller of it — ``replay`` above all —
+    waited for the palace write lock. Measured 2026-09-10: ``mempalace
+    replay`` ran 120 s under checkpoint load and drained ONE request (34 →
+    33) while the daemon's mine queue sat at 142-207 with the drainer holding
+    the flock.
+    """
+
+    @staticmethod
+    def _capture(response: bytes = b'{"returncode": 0}', status: int = 200):
+        captured = {}
+
+        class _Resp:
+            def __init__(self):
+                self.status = status
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return response
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            return _Resp()
+
+        return captured, fake_urlopen
+
+    def test_background_key_is_always_on_the_wire(self):
+        """Present even when false, so its absence cannot creep back in.
+
+        The defect was an omitted key, not a wrong value: a body without
+        ``background`` and a body with ``background: false`` behave
+        identically at the daemon (the field defaults to ``False``), which is
+        exactly why the omission survived from #433 to #456 unnoticed.
+        """
+        from mempalace.cli import _post_daemon_mine_cli
+
+        captured, fake_urlopen = self._capture()
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                ok = _post_daemon_mine_cli("/some/dir", wing="w", mode="convos")
+
+        assert ok is True
+        assert "background" in captured["body"]
+        assert captured["body"]["background"] is False
+
+    def test_background_true_is_sent(self):
+        from mempalace.cli import _post_daemon_mine_cli
+
+        captured, fake_urlopen = self._capture()
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                ok = _post_daemon_mine_cli("/some/dir", wing="w", background=True)
+
+        assert ok is True
+        assert captured["body"]["background"] is True
+
+    def test_202_queued_is_success_and_prints_the_daemon_note(self, capsys):
+        """The daemon answers 202 with a systemMessage; show it, not raw JSON."""
+        from mempalace.cli import _post_daemon_mine_cli
+
+        body = json.dumps(
+            {
+                "queued": True,
+                "reason": "background",
+                "systemMessage": "Mine queued — running in the background on the palace host.",
+            }
+        ).encode()
+        _captured, fake_urlopen = self._capture(response=body, status=202)
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                ok = _post_daemon_mine_cli("/some/dir", wing="w", background=True)
+
+        assert ok is True
+        out = capsys.readouterr().out
+        assert "queued" in out.lower()
+        assert "running in the background on the palace host" in out
+
+    def test_synchronous_response_still_reports_accepted(self, capsys):
+        from mempalace.cli import _post_daemon_mine_cli
+
+        _captured, fake_urlopen = self._capture(response=b'{"returncode": 0, "stdout": "mined"}')
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                ok = _post_daemon_mine_cli("/some/dir", wing="w")
+
+        assert ok is True
+        assert "accepted" in capsys.readouterr().out.lower()
+
+    def test_non_json_body_does_not_crash(self, capsys):
+        """An older daemon (or a proxy) may answer plain text."""
+        from mempalace.cli import _post_daemon_mine_cli
+
+        _captured, fake_urlopen = self._capture(response=b"OK, mining")
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                ok = _post_daemon_mine_cli("/some/dir", wing="w")
+
+        assert ok is True
+        assert "OK, mining" in capsys.readouterr().out
+
+
+class TestCmdMineBackgroundFlag:
+    """``--background`` must reach the palace daemon's /mine too (#456)."""
+
+    @staticmethod
+    def _args(**overrides):
+        defaults = {
+            "dir": "/home/u/proj",
+            "mode": "convos",
+            "wing": "myproj",
+            "agent": None,
+            "limit": None,
+            "dry_run": False,
+            "no_gitignore": False,
+            "include_ignored": None,
+            "redetect_origin": False,
+            "extract": None,
+            "palace": None,
+            "daemon": False,
+            "background": False,
+        }
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def test_background_is_forwarded_to_the_daemon(self):
+        from mempalace import cli
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            return _FakeResp(b'{"queued": true, "systemMessage": "Mine queued"}')
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                with pytest.raises(SystemExit) as ex:
+                    cli.cmd_mine(self._args(background=True))
+
+        assert ex.value.code == 0
+        assert captured["body"]["background"] is True
+
+    def test_default_mine_still_asks_for_a_synchronous_run(self):
+        from mempalace import cli
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            return _FakeResp(b'{"returncode": 0}')
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                with pytest.raises(SystemExit) as ex:
+                    cli.cmd_mine(self._args())
+
+        assert ex.value.code == 0
+        assert captured["body"]["background"] is False
+
+    def test_background_without_daemon_still_rejected_off_the_daemon_route(self, capsys):
+        """With no daemon-strict routing, --background needs --daemon."""
+        from mempalace import cli
+
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("mempalace.cli._daemon_strict", return_value=False):
+                with pytest.raises(SystemExit) as ex:
+                    cli.cmd_mine(self._args(background=True))
+
+        assert ex.value.code == 2
+        assert "--background requires --daemon" in capsys.readouterr().err
+
+    def test_background_with_explicit_palace_is_rejected(self, capsys):
+        """--palace opts out of daemon routing, so --background has no route."""
+        from mempalace import cli
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with pytest.raises(SystemExit) as ex:
+                cli.cmd_mine(self._args(background=True, palace="/tmp/p"))
+
+        assert ex.value.code == 2
+        assert "--background requires --daemon" in capsys.readouterr().err
 
 
 # ── cmd_status routing ─────────────────────────────────────────────────

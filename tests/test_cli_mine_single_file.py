@@ -275,3 +275,66 @@ def test_mine_help_mentions_single_file_projects_mode():
     # an older one answers 400 and the CLI exits 1. Help must not promise
     # more than the deployed daemon can do.
     assert "palace-daemon#258" in help_text
+
+
+# ---------------------------------------------------------------------------
+# 4. --background rides along; it does not loosen the wing rule (#456 x #455)
+# ---------------------------------------------------------------------------
+
+
+def test_background_does_not_bypass_the_wing_refusal(tmp_path, capsys):
+    """The #455 refusal must fire whether or not the mine is queued.
+
+    These two changes met in a rebase conflict on the same line: #455 put
+    ``_derive_daemon_mine_wing`` on it, #456 added ``background=`` to the
+    call below it. Resolving toward either side alone is silent — the tree
+    is clean and both test suites pass — so the interaction gets its own
+    test rather than relying on whoever resolves the conflict next.
+    """
+    absent = tmp_path / "2g" / "CLAUDE.md"  # never created
+
+    with (
+        patch("mempalace.cli._daemon_strict", return_value=True),
+        patch("mempalace.cli._post_daemon_mine_cli", return_value=True) as post,
+        pytest.raises(SystemExit) as exc,
+    ):
+        cmd_mine(_mine_args(absent, background=True))
+
+    assert exc.value.code == 2
+    assert post.call_args_list == [], "a queued mine is still a mine; do not guess its wing"
+    assert "--wing" in capsys.readouterr().err
+
+
+def test_background_rides_along_with_the_project_derived_wing(tmp_path):
+    """Both halves on one call: the project's wing AND the queued flag."""
+    _root, target = _project_with_file(tmp_path)
+
+    with (
+        patch("mempalace.cli._daemon_strict", return_value=True),
+        patch("mempalace.cli._post_daemon_mine_cli", return_value=True) as post,
+        pytest.raises(SystemExit) as exc,
+    ):
+        cmd_mine(_mine_args(target, background=True))
+
+    assert exc.value.code == 0
+    assert post.call_args.kwargs["wing"] == "2g", (
+        "reverting #455 here is invisible: the mine still succeeds, and the "
+        "drawers land in a wing called 'claude_md'"
+    )
+    assert post.call_args.kwargs["background"] is True
+
+
+def test_background_with_a_directory_keeps_the_directory_wing(tmp_path):
+    root = tmp_path / "someproj"
+    root.mkdir()
+
+    with (
+        patch("mempalace.cli._daemon_strict", return_value=True),
+        patch("mempalace.cli._post_daemon_mine_cli", return_value=True) as post,
+        pytest.raises(SystemExit) as exc,
+    ):
+        cmd_mine(_mine_args(root, background=True))
+
+    assert exc.value.code == 0
+    assert post.call_args.kwargs["wing"] == "someproj"
+    assert post.call_args.kwargs["background"] is True

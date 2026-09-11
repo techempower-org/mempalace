@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from unittest.mock import patch
 
 from mempalace import pending_queue
 
@@ -236,7 +237,7 @@ def test_cmd_replay_drains_queue(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(cli, "_daemon_strict", lambda: True)
     posted: list[dict] = []
 
-    def fake_post(directory, wing, mode="convos"):
+    def fake_post(directory, wing, mode="convos", *, background=False):
         posted.append({"dir": directory, "wing": wing, "mode": mode})
         return True
 
@@ -259,7 +260,7 @@ def test_cmd_replay_returns_1_on_partial_failure(monkeypatch, capsys, tmp_path):
     monkeypatch.setattr(pq, "PENDING_DIR", tmp_path / "pending")
     monkeypatch.setattr(cli, "_daemon_strict", lambda: True)
 
-    def fake_post(directory, wing, mode="convos"):
+    def fake_post(directory, wing, mode="convos", *, background=False):
         return directory == "/ok"
 
     monkeypatch.setattr(cli, "_post_daemon_mine_cli", fake_post)
@@ -268,6 +269,79 @@ def test_cmd_replay_returns_1_on_partial_failure(monkeypatch, capsys, tmp_path):
 
     rc = cli.cmd_replay(object())
     assert rc == 1
+
+
+def test_cmd_replay_requests_background(monkeypatch, tmp_path):
+    """Replay must ask the daemon to QUEUE each mine, not run it inline (#456)."""
+    from mempalace import cli, pending_queue as pq
+
+    monkeypatch.setattr(pq, "PENDING_DIR", tmp_path / "pending")
+    monkeypatch.setattr(cli, "_daemon_strict", lambda: True)
+    seen: list[bool] = []
+
+    def fake_post(directory, wing, mode="convos", *, background=False):
+        seen.append(background)
+        return True
+
+    monkeypatch.setattr(cli, "_post_daemon_mine_cli", fake_post)
+    pq.enqueue({"dir": "/a", "wing": "wing_a", "mode": "convos"})
+
+    assert cli.cmd_replay(object()) == 0
+    assert seen == [True]
+
+
+def test_cmd_replay_drains_against_a_daemon_that_only_answers_background(
+    monkeypatch, tmp_path, capsys
+):
+    """The measured incident, as a test.
+
+    Production shape on 2026-09-10: the daemon's mine drainer held the palace
+    flock, so a synchronous POST /mine waited for a lock gap and `mempalace
+    replay` drained ONE request in 120 s. The fake daemon here answers 202 at
+    once for a ``background`` body and never answers otherwise — with the
+    pre-#456 poster every entry times out and stays queued; with the flag the
+    whole queue drains.
+    """
+    import json as _json
+
+    from mempalace import cli, pending_queue as pq
+
+    monkeypatch.setattr(pq, "PENDING_DIR", tmp_path / "pending")
+    monkeypatch.setattr(cli, "_daemon_strict", lambda: True)
+
+    class _Queued202:
+        status = 202
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return _json.dumps(
+                {"queued": True, "systemMessage": "Mine queued — running in the background."}
+            ).encode()
+
+    def fake_urlopen(req, timeout=None):
+        body = _json.loads(req.data.decode())
+        if not body.get("background"):
+            # The palace write lock is held; a synchronous mine never answers.
+            raise TimeoutError("timed out waiting for the palace write lock")
+        return _Queued202()
+
+    monkeypatch.setenv("PALACE_DAEMON_URL", "http://daemon.example:8085")
+    for i in range(3):
+        pq.enqueue({"dir": f"/proj/{i}", "wing": f"wing_{i}", "mode": "convos"})
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        rc = cli.cmd_replay(object())
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "attempted=3" in out
+    assert "succeeded=3" in out
+    assert "failed=0" in out
 
 
 # ---- Concurrency fixes (Gemini PR #104 review) ------------------------------

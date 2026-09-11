@@ -1216,8 +1216,13 @@ def test_cmd_mine_background_requires_daemon(mock_config_cls, capsys):
         daemon=False,
         background=True,
     )
-    with pytest.raises(SystemExit) as excinfo:
-        cmd_mine(args)
+    # --background is now valid on the palace-daemon route too (#456), so the
+    # guard only fires when neither route applies. MempalaceConfig is a
+    # MagicMock here, which would make `_daemon_strict()` read truthy; pin it
+    # off to mean what this test has always meant — no daemon anywhere.
+    with patch("mempalace.cli._daemon_strict", return_value=False):
+        with pytest.raises(SystemExit) as excinfo:
+            cmd_mine(args)
     assert excinfo.value.code == 2
     assert "--background requires --daemon" in capsys.readouterr().err
 

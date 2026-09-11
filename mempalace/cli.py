@@ -324,7 +324,9 @@ def _patch_daemon_rest(path: str, body: dict) -> dict:
         raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
 
 
-def _post_daemon_mine_cli(directory: str, wing: str, mode: str = "convos") -> bool:
+def _post_daemon_mine_cli(
+    directory: str, wing: str, mode: str = "convos", *, background: bool = False
+) -> bool:
     """POST a mine request to the daemon's ``/mine`` endpoint.
 
     CLI-shaped variant of :func:`mempalace.hooks_cli._post_daemon_mine`:
@@ -332,6 +334,21 @@ def _post_daemon_mine_cli(directory: str, wing: str, mode: str = "convos") -> bo
     ``sys.exit(1)``. Hooks_cli's version logs to a file and swallows
     silently because a missed-mine isn't worth crashing a hook over;
     here, the user invoked `mempalace mine` and expects to see errors.
+
+    ``background`` asks the daemon to queue the mine and answer 202 at once
+    instead of running it inline. The hook poster has sent it since #433;
+    this copy never did, so everything routed through here waited on the
+    palace write lock — ``mempalace replay`` drained ONE request in 120 s
+    while the daemon's own drainer held the flock (#456). The key is always
+    on the wire, never merely omitted, so a later reader can see which mode
+    was asked for and its absence cannot creep back in. A daemon predating
+    the field ignores it and blocks as before.
+
+    Note what "success" means with ``background=True``: the daemon has taken
+    the request into its durable pending-mines queue, not that the mine has
+    finished. That is the right contract for a replay — the queue's job is a
+    reliable hand-off — but a caller that needs the drawers to exist when the
+    call returns must leave it off.
     """
     import urllib.error
     import urllib.request
@@ -342,14 +359,27 @@ def _post_daemon_mine_cli(directory: str, wing: str, mode: str = "convos") -> bo
         headers["x-api-key"] = api_key
     req = urllib.request.Request(
         f"{_daemon_url()}/mine",
-        data=json.dumps({"dir": directory, "wing": wing, "mode": mode}).encode("utf-8"),
+        data=json.dumps(
+            {"dir": directory, "wing": wing, "mode": mode, "background": background}
+        ).encode("utf-8"),
         headers=headers,
         method="POST",
     )
     try:
+        # A 202 is not an error to urlopen (it only raises on >= 400), so the
+        # queued answer already lands here; what it needs is to be *read* —
+        # the daemon puts a human sentence in ``systemMessage`` and raw JSON
+        # in front of the user is not it.
         with urlopen_with_wake(req, timeout=_daemon_timeout()) as resp:
             body = resp.read().decode("utf-8", errors="replace")
-        print(f"  Daemon mine accepted: {body[:200]}")
+        try:
+            payload = json.loads(body)
+        except ValueError:
+            payload = None
+        note = payload.get("systemMessage") if isinstance(payload, dict) else None
+        queued = isinstance(payload, dict) and payload.get("queued") is True
+        verb = "queued" if queued else "accepted"
+        print(f"  Daemon mine {verb}: {note or body[:200]}")
         return True
     except urllib.error.HTTPError as e:
         # The response body carries the daemon's actual reason ("Directory
@@ -1907,7 +1937,17 @@ def cmd_mine(args):
     # (upstream #1783 family). This is a deliberate user request and takes
     # precedence over the ambient PALACE_DAEMON_URL HTTP routing below — the
     # two are different daemons; the flag names the one the user asked for.
-    if getattr(args, "background", False) and not getattr(args, "daemon", False):
+    # Two different daemons answer to "background" here: --daemon is the
+    # opt-in local job queue, and daemon-strict routing is the palace daemon
+    # over HTTP. Both can take the mine off this terminal's hands, so the
+    # flag is valid on either route -- and only an error when neither applies
+    # (#456).
+    routes_to_palace_daemon = _daemon_strict() and not args.palace
+    if (
+        getattr(args, "background", False)
+        and not getattr(args, "daemon", False)
+        and not routes_to_palace_daemon
+    ):
         print("mempalace: --background requires --daemon", file=sys.stderr)
         sys.exit(2)
     if getattr(args, "daemon", False):
@@ -1956,7 +1996,12 @@ def cmd_mine(args):
 
         directory = os.path.abspath(os.path.expanduser(args.dir))
         wing = args.wing or _derive_daemon_mine_wing(directory, args.dir)
-        ok = _post_daemon_mine_cli(directory, wing=wing, mode=args.mode)
+        ok = _post_daemon_mine_cli(
+            directory,
+            wing=wing,
+            mode=args.mode,
+            background=getattr(args, "background", False),
+        )
         sys.exit(0 if ok else 1)
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
@@ -4917,7 +4962,20 @@ def cmd_replay(args):
         # _post_daemon_mine_cli doesn't share the hook's pending-queue
         # re-enqueue path, so skip_queue isn't applicable here; the
         # CLI variant prints to stderr and returns bool unconditionally.
-        return _post_daemon_mine_cli(request["dir"], request["wing"], request.get("mode", "convos"))
+        #
+        # ``background=True`` is what makes a replay a drain rather than a
+        # crawl: a synchronous /mine waits for a gap in the palace write
+        # lock, and under checkpoint load those gaps are minutes apart
+        # (measured: 120 s, one request drained, #456). The daemon's own
+        # pending-mines queue is durable, so handing off is not a loss of
+        # delivery guarantee — it moves the wait to the side that owns the
+        # lock.
+        return _post_daemon_mine_cli(
+            request["dir"],
+            request["wing"],
+            request.get("mode", "convos"),
+            background=True,
+        )
 
     report = pending_queue.replay(post)
     if report.is_empty:
@@ -9944,7 +10002,10 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
     p_mine.add_argument(
         "--background",
         action="store_true",
-        help="With --daemon, return a job id immediately instead of waiting",
+        help=(
+            "Do not wait for the mine to finish: with --daemon, return a job id "
+            "immediately; on the palace daemon, queue it and return at once"
+        ),
     )
     p_mine.add_argument(
         "--extract",
