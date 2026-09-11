@@ -199,9 +199,15 @@ class _FakeMod:
 
 
 def _real_sql():
-    from psycopg import sql
+    """Real psycopg SQL composition — these tests assert on bound parameters.
 
-    return sql
+    The ``test-linux`` CI job installs mempalace without the ``postgres``
+    extra, so psycopg is absent there and importing it at module scope would
+    fail collection. Skip only the four bind-site tests that genuinely need
+    SQL composition; the pure-logic scrub tests above run everywhere, which is
+    where the behaviour under test actually lives.
+    """
+    return pytest.importorskip("psycopg.sql", reason="requires the postgres extra")
 
 
 @pytest.fixture()
