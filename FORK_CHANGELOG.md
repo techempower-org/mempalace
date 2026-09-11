@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **README install path documents putting the mempalace-mcp bridge on PATH** ([`59bb3b3`](https://github.com/techempower-org/mempalace/commit/59bb3b3))
+- **README install path documents putting the mempalace-mcp bridge on PATH** ([`933602e`](https://github.com/techempower-org/mempalace/commit/933602e))
   The install path never said to make the ``mempalace-mcp`` console script
   resolvable; the wrapper was documented only in
   ``docs/integrations/opencode.md`` and ``docs/RELEASING.md``, neither of
@@ -48,7 +48,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `README.md`, `website/public/llms-full.txt`
 
 
-- **Checkpoint drawers carry the session id, not just the diary entry; session_id is validated** ([`e9860b3`](https://github.com/techempower-org/mempalace/commit/e9860b3))
+- **Checkpoint drawers carry the session id, not just the diary entry; session_id is validated** ([`1a54838`](https://github.com/techempower-org/mempalace/commit/1a54838))
   The earlier pass forwarded a checkpoint's ``session_id`` to
   ``tool_diary_write`` and declared it in the ``mempalace_checkpoint`` and
   ``mempalace_diary_write`` schemas, but ``tool_add_drawer`` had no such
@@ -87,7 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/config.py`, `mempalace/mcp_server.py`, `tests/test_checkpoint_session_id.py`
 
 
-- **Auto-query recognizes a session-resumption ask ("where were we", "catch me up") in both the shell pre-filter and the signal set** ([`c6872494`](https://github.com/techempower-org/mempalace/commit/c6872494))
+- **Auto-query recognizes a session-resumption ask ("where were we", "catch me up") in both the shell pre-filter and the signal set** ([`4c9f69b`](https://github.com/techempower-org/mempalace/commit/4c9f69b))
   Measured on ``main`` 2026-09-10, turn 5, wing ``memorypalace`` with
   recent drawers: every way a person asks to be picked back up scored
   **zero** and fired nothing — "where were we", "what were we doing",
@@ -120,7 +120,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/auto_query/signals.py`, `mempalace/auto_query/router.py`, `mempalace/auto_query/__init__.py`, `mempalace/auto_query/runner.py`, `hooks/palace-auto-query.sh`
 
 
-- **Every search hit carries source_kind (+ staleness when decidable) and the CLI renders the caveat** ([`5632dc2`](https://github.com/techempower-org/mempalace/commit/5632dc2))
+- **Every search hit carries source_kind (+ staleness when decidable) and the CLI renders the caveat** ([`726fa97`](https://github.com/techempower-org/mempalace/commit/726fa97))
   A palace search returns the *indexed copy* of whatever was mined, and
   transcripts are the only thing mined continuously (the Stop / PreCompact
   hooks); curated project documents are re-indexed only by a manual
@@ -163,7 +163,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/provenance.py`, `mempalace/cli.py`, `mempalace/searcher.py`, `mempalace/auto_query/runner.py`
 
 
-- **mempalace mine <file> --mode projects — targeted re-index of one curated document** ([`787af46`](https://github.com/techempower-org/mempalace/commit/787af46))
+- **mempalace mine <file> --mode projects — targeted re-index of one curated document** ([`180d8eb`](https://github.com/techempower-org/mempalace/commit/180d8eb))
   Projects mode required a directory, so refreshing one edited ``CLAUDE.md``
   meant re-mining the whole tree and holding the palace write lock for as
   long as that takes (the ``2g`` corpus that surfaced this is 111 MB). The
@@ -197,7 +197,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **Legacy `hallways` delegates to `hallway list`; both surfaces share one limit rule** ([`5383040`](https://github.com/techempower-org/mempalace/commit/5383040))
+- **Legacy `hallways` delegates to `hallway list`; both surfaces share one limit rule** ([`a404d10`](https://github.com/techempower-org/mempalace/commit/a404d10))
   The earlier deprecation pass gave the legacy plural verb a stderr notice
   and taught it to honour ``--json``, but left it on its own fetch path, so
   four of the five rows in the issue's comparison table were still open:
@@ -229,7 +229,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **Postgres backend embeds through get_embedding_function() instead of rebuilding an ONNX session per call** ([`fe9e049`](https://github.com/techempower-org/mempalace/commit/fe9e049))
+- **Postgres backend embeds through get_embedding_function() instead of rebuilding an ONNX session per call** ([`4975b0a`](https://github.com/techempower-org/mempalace/commit/4975b0a))
   ``backends/postgres.py::_embed`` constructed its own
   ``DefaultEmbeddingFunction`` and never called
   ``mempalace.embedding.get_embedding_function()``. Every embedding-layer
@@ -272,7 +272,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/backends/postgres.py`, `tests/test_postgres_embedding_resolver.py`
 
 
-- **Cached postgres connection reconnects once after a server-side disconnect instead of raising raw** ([`4d15803`](https://github.com/techempower-org/mempalace/commit/4d15803))
+- **Cached postgres connection reconnects once after a server-side disconnect instead of raising raw** ([`d8564fc`](https://github.com/techempower-org/mempalace/commit/d8564fc))
   After any server-side disconnect — a DB restart, a
   ``pg_terminate_backend``, or the ``idle_session_timeout = 10min`` set on
   the production palace DB after the 2026-08-07 incident — the *first* call
@@ -315,7 +315,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/backends/postgres.py`, `tests/test_postgres_reconnect.py`
 
 
-- **`mempalace replay` asks the daemon to queue each mine instead of waiting on the palace write lock** ([`059fe0a`](https://github.com/techempower-org/mempalace/commit/059fe0a))
+- **`mempalace replay` asks the daemon to queue each mine instead of waiting on the palace write lock** ([`823547f`](https://github.com/techempower-org/mempalace/commit/823547f))
   ``hooks_cli._post_daemon_mine`` has sent ``"background": true`` since
   #433 and gets a 202 in ~2.5 ms. ``cli._post_daemon_mine_cli`` — a
   separate copy of the same request builder — was never updated, so
@@ -357,7 +357,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`
 
 
-- **purge/sync work on Postgres palaces, and a zero-match purge no longer looks like a success** ([`3b1a2af`](https://github.com/techempower-org/mempalace/commit/3b1a2af))
+- **purge/sync work on Postgres palaces, and a zero-match purge no longer looks like a success** ([`1ff23c5`](https://github.com/techempower-org/mempalace/commit/1ff23c5))
   ``purge`` and ``sync`` checked the palace directory for a database file
   *before* resolving the backend. A Postgres palace has none by design --
   the directory holds only sidecars (``dsn.env``, ``hallways.json``,
@@ -411,7 +411,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`, `mempalace/palace.py`, `mempalace/sync.py`
 
 
-- **Post-compaction recovery: clear the auto-query dedupe and re-inject wake-up content, not a pointer** ([`22858070`](https://github.com/techempower-org/mempalace/commit/22858070))
+- **Post-compaction recovery: clear the auto-query dedupe and re-inject wake-up content, not a pointer** ([`ddc6306`](https://github.com/techempower-org/mempalace/commit/ddc6306))
   A context compaction keeps the session id and throws the context away,
   which broke both halves of the palace's post-compaction behaviour. The
   per-session auto-query dedupe (#429) records the drawers already shown so
@@ -451,7 +451,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/compact_recovery.py`, `mempalace/auto_query/injected.py`, `mempalace/auto_query/runner.py`, `mempalace/config.py`, `hooks/palace-session-start.sh`
 
 
-- **Daemon-strict mine refuses to derive a wing from a document path it cannot classify locally** ([`a30293b`](https://github.com/techempower-org/mempalace/commit/a30293b))
+- **Daemon-strict mine refuses to derive a wing from a document path it cannot classify locally** ([`180d8eb`](https://github.com/techempower-org/mempalace/commit/180d8eb))
   The daemon-strict branch decided file-vs-directory with ``is_file()`` on
   the CLIENT filesystem while the daemon mines its own host's copy. A path
   present there and absent here answered False, fell through to the
@@ -474,7 +474,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`
 
 
-- **Postgres write path scrubs lone surrogates, nested metadata and ids, not just top-level NULs** ([`66ca19f`](https://github.com/techempower-org/mempalace/commit/66ca19f))
+- **Postgres write path scrubs lone surrogates, nested metadata and ids, not just top-level NULs** ([`4963eda`](https://github.com/techempower-org/mempalace/commit/4963eda))
   ``backends/pgvector.py`` has stripped both byte classes Postgres refuses
   since upstream #1829/#1833 — NUL and lone UTF-16 surrogates — because one
   stray byte anywhere in a mined corpus aborts the whole batch.

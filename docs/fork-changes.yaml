@@ -26,7 +26,7 @@ entries:
   - id: readme-mcp-bridge-on-path
     date: 2026-09-10
     bucket: Added
-    commit: 59bb3b3
+    commit: 933602e
     area: Docs
     summary: "README install path documents putting the mempalace-mcp bridge on PATH"
     body: |
@@ -54,7 +54,7 @@ entries:
   - id: checkpoint-drawer-session-id
     date: 2026-09-10
     bucket: Added
-    commit: e9860b3
+    commit: 1a54838
     area: CLI
     summary: "Checkpoint drawers carry the session id, not just the diary entry; session_id is validated"
     body: |
@@ -97,7 +97,7 @@ entries:
   - id: hallways-delegates-to-hallway-list
     date: 2026-09-10
     bucket: Changed
-    commit: 5383040
+    commit: a404d10
     area: CLI
     summary: "Legacy `hallways` delegates to `hallway list`; both surfaces share one limit rule"
     body: |
@@ -130,7 +130,7 @@ entries:
   - id: postgres-embed-through-resolver
     date: 2026-09-10
     bucket: Fixed
-    commit: fe9e049
+    commit: 4975b0a
     area: Performance
     summary: "Postgres backend embeds through get_embedding_function() instead of rebuilding an ONNX session per call"
     body: |
@@ -177,7 +177,7 @@ entries:
   - id: postgres-cached-conn-reconnect
     date: 2026-09-10
     bucket: Fixed
-    commit: 4d15803
+    commit: d8564fc
     area: Reliability
     summary: "Cached postgres connection reconnects once after a server-side disconnect instead of raising raw"
     body: |
@@ -224,7 +224,7 @@ entries:
   - id: cli-mine-background-replay-drain
     date: 2026-09-10
     bucket: Fixed
-    commit: 059fe0a
+    commit: 823547f
     area: CLI
     summary: "`mempalace replay` asks the daemon to queue each mine instead of waiting on the palace write lock"
     body: |
@@ -269,7 +269,7 @@ entries:
   - id: purge-sync-backend-before-precheck
     date: 2026-09-10
     bucket: Fixed
-    commit: 3b1a2af
+    commit: 1ff23c5
     area: CLI
     summary: "purge/sync work on Postgres palaces, and a zero-match purge no longer looks like a success"
     body: |
@@ -326,7 +326,7 @@ entries:
   - id: auto-query-resumption-signal
     date: 2026-09-10
     bucket: Added
-    commit: c6872494
+    commit: 4c9f69b
     area: Search
     summary: "Auto-query recognizes a session-resumption ask (\"where were we\", \"catch me up\") in both the shell pre-filter and the signal set"
     body: |
@@ -367,7 +367,7 @@ entries:
   - id: compact-recovery-reinjection
     date: 2026-09-10
     bucket: Fixed
-    commit: 22858070
+    commit: ddc6306
     area: Reliability
     summary: "Post-compaction recovery: clear the auto-query dedupe and re-inject wake-up content, not a pointer"
     body: |
@@ -415,7 +415,7 @@ entries:
   - id: search-source-provenance
     date: 2026-09-10
     bucket: Added
-    commit: 5632dc2
+    commit: 726fa97
     area: Search
     summary: "Every search hit carries source_kind (+ staleness when decidable) and the CLI renders the caveat"
     body: |
@@ -462,7 +462,7 @@ entries:
   - id: cli-mine-single-file
     date: 2026-09-10
     bucket: Added
-    commit: 787af46
+    commit: 180d8eb
     area: CLI
     summary: "mempalace mine <file> --mode projects — targeted re-index of one curated document"
     body: |
@@ -497,7 +497,7 @@ entries:
   - id: cli-mine-wing-never-guessed
     date: 2026-09-10
     bucket: Fixed
-    commit: a30293b
+    commit: 180d8eb
     area: CLI
     summary: "Daemon-strict mine refuses to derive a wing from a document path it cannot classify locally"
     body: |
@@ -524,7 +524,7 @@ entries:
   - id: postgres-scrub-unstorable-bytes
     date: 2026-09-10
     bucket: Fixed
-    commit: 66ca19f
+    commit: 4963eda
     area: Reliability
     summary: "Postgres write path scrubs lone surrogates, nested metadata and ids, not just top-level NULs"
     body: |

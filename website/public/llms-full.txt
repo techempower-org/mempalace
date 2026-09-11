@@ -309,19 +309,19 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | README install path documents putting the mempalace-mcp bridge on PATH | — | [`59bb3b3`](https://github.com/techempower-org/mempalace/commit/59bb3b3) |
-| 2 | Checkpoint drawers carry the session id, not just the diary entry; session_id is validated | — | [`e9860b3`](https://github.com/techempower-org/mempalace/commit/e9860b3) |
-| 3 | Legacy `hallways` delegates to `hallway list`; both surfaces share one limit rule | — | [`5383040`](https://github.com/techempower-org/mempalace/commit/5383040) |
-| 4 | Postgres backend embeds through get_embedding_function() instead of rebuilding an ONNX session per call | — | [`fe9e049`](https://github.com/techempower-org/mempalace/commit/fe9e049) |
-| 5 | Cached postgres connection reconnects once after a server-side disconnect instead of raising raw | — | [`4d15803`](https://github.com/techempower-org/mempalace/commit/4d15803) |
-| 6 | `mempalace replay` asks the daemon to queue each mine instead of waiting on the palace write lock | — | [`059fe0a`](https://github.com/techempower-org/mempalace/commit/059fe0a) |
-| 7 | purge/sync work on Postgres palaces, and a zero-match purge no longer looks like a success | — | [`3b1a2af`](https://github.com/techempower-org/mempalace/commit/3b1a2af) |
-| 8 | Auto-query recognizes a session-resumption ask ("where were we", "catch me up") in both the shell pre-filter and the signal set | — | [`c6872494`](https://github.com/techempower-org/mempalace/commit/c6872494) |
-| 9 | Post-compaction recovery: clear the auto-query dedupe and re-inject wake-up content, not a pointer | — | [`22858070`](https://github.com/techempower-org/mempalace/commit/22858070) |
-| 10 | Every search hit carries source_kind (+ staleness when decidable) and the CLI renders the caveat | — | [`5632dc2`](https://github.com/techempower-org/mempalace/commit/5632dc2) |
-| 11 | mempalace mine <file> --mode projects — targeted re-index of one curated document | — | [`787af46`](https://github.com/techempower-org/mempalace/commit/787af46) |
-| 12 | Daemon-strict mine refuses to derive a wing from a document path it cannot classify locally | — | [`a30293b`](https://github.com/techempower-org/mempalace/commit/a30293b) |
-| 13 | Postgres write path scrubs lone surrogates, nested metadata and ids, not just top-level NULs | — | [`66ca19f`](https://github.com/techempower-org/mempalace/commit/66ca19f) |
+| 1 | README install path documents putting the mempalace-mcp bridge on PATH | — | [`933602e`](https://github.com/techempower-org/mempalace/commit/933602e) |
+| 2 | Checkpoint drawers carry the session id, not just the diary entry; session_id is validated | — | [`1a54838`](https://github.com/techempower-org/mempalace/commit/1a54838) |
+| 3 | Legacy `hallways` delegates to `hallway list`; both surfaces share one limit rule | — | [`a404d10`](https://github.com/techempower-org/mempalace/commit/a404d10) |
+| 4 | Postgres backend embeds through get_embedding_function() instead of rebuilding an ONNX session per call | — | [`4975b0a`](https://github.com/techempower-org/mempalace/commit/4975b0a) |
+| 5 | Cached postgres connection reconnects once after a server-side disconnect instead of raising raw | — | [`d8564fc`](https://github.com/techempower-org/mempalace/commit/d8564fc) |
+| 6 | `mempalace replay` asks the daemon to queue each mine instead of waiting on the palace write lock | — | [`823547f`](https://github.com/techempower-org/mempalace/commit/823547f) |
+| 7 | purge/sync work on Postgres palaces, and a zero-match purge no longer looks like a success | — | [`1ff23c5`](https://github.com/techempower-org/mempalace/commit/1ff23c5) |
+| 8 | Auto-query recognizes a session-resumption ask ("where were we", "catch me up") in both the shell pre-filter and the signal set | — | [`4c9f69b`](https://github.com/techempower-org/mempalace/commit/4c9f69b) |
+| 9 | Post-compaction recovery: clear the auto-query dedupe and re-inject wake-up content, not a pointer | — | [`ddc6306`](https://github.com/techempower-org/mempalace/commit/ddc6306) |
+| 10 | Every search hit carries source_kind (+ staleness when decidable) and the CLI renders the caveat | — | [`726fa97`](https://github.com/techempower-org/mempalace/commit/726fa97) |
+| 11 | mempalace mine <file> --mode projects — targeted re-index of one curated document | — | [`180d8eb`](https://github.com/techempower-org/mempalace/commit/180d8eb) |
+| 12 | Daemon-strict mine refuses to derive a wing from a document path it cannot classify locally | — | [`180d8eb`](https://github.com/techempower-org/mempalace/commit/180d8eb) |
+| 13 | Postgres write path scrubs lone surrogates, nested metadata and ids, not just top-level NULs | — | [`4963eda`](https://github.com/techempower-org/mempalace/commit/4963eda) |
 | 14 | Wing-scoped vector search no longer returns 0 rows: enable pgvector hnsw.iterative_scan per connection | — | [`2ea774d`](https://github.com/techempower-org/mempalace/commit/2ea774d) |
 | 15 | Curated memory-file hits clear a lower confidence floor; harness prompt-echo drawers filtered as exhaust | — | [`31b74d9`](https://github.com/techempower-org/mempalace/commit/31b74d9) |
 | 16 | mempalace doctor — one-screen health check of the memory workflow (bridge, daemon, wing, hooks, replay) | — | [`04dde83`](https://github.com/techempower-org/mempalace/commit/04dde83) |
