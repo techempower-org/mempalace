@@ -51,11 +51,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   malformed id degrades to unattributed and never fails the write. When
   nothing usable survives, the key is omitted rather than stored as a
   placeholder — an absent key is honest, while a synthetic ``"unknown"``
-  would pool unrelated sessions under one name. Existing drawers are
+  would pool unrelated sessions under one name. The sanitizer also refuses
+  the literal ``"unknown"``: the hook's own fallback is ``return sanitized
+  or "unknown"``, so mirroring its charset without mirroring that fallback
+  would have stored someone else's placeholder as a real id — the same
+  pooling harm, reintroduced from the writer's side. Existing drawers are
   untouched and not backfilled, so a session-scoped query returns nothing
   for sessions predating the change.
 
-  *Tests:* 24 (TestCheckpointDrawerSessionId x5, TestSessionIdSanitization x17, TestSessionIdReachableOverMcp x2)
+  *Tests:* 31 (TestCheckpointDrawerSessionId x5, TestSessionIdSanitization x17, TestSessionIdReachableOverMcp x2, TestUnknownPlaceholderRejected x7)
   *Files:* `mempalace/config.py`, `mempalace/mcp_server.py`, `tests/test_checkpoint_session_id.py`
 
 
