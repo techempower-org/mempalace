@@ -156,6 +156,73 @@ def test_daemon_strict_explicit_wing_still_wins(tmp_path):
     assert post.call_args.kwargs["wing"] == "explicit"
 
 
+def test_daemon_strict_refuses_to_guess_a_wing_for_a_path_it_cannot_see(tmp_path, capsys):
+    """The daemon mines ITS host's copy; `is_file()` here answers about ours.
+
+    A path that exists on the daemon host and not on this one makes `is_file()`
+    False, and the historic dirname fallback would then derive the wing from
+    the FILE's name: measured, `~/Projects/2g/CLAUDE.md` lands in a wing called
+    `claude.md` (the dot survives `normalize_wing_name`). A file and a directory
+    derive different wings and an absent path is indistinguishable between them,
+    so refuse and say so.
+    """
+    absent = tmp_path / "2g" / "CLAUDE.md"  # never created
+
+    with (
+        patch("mempalace.cli._daemon_strict", return_value=True),
+        patch("mempalace.cli._post_daemon_mine_cli", return_value=True) as post,
+        pytest.raises(SystemExit) as exc,
+    ):
+        cmd_mine(_mine_args(absent))
+
+    assert exc.value.code == 2
+    assert post.call_args_list == [], "must not POST a mine whose wing we had to guess"
+    err = capsys.readouterr().err
+    assert "--wing" in err, "the error must name the flag that resolves it"
+
+
+def test_daemon_strict_unseen_path_is_fine_when_wing_is_explicit(tmp_path):
+    """--wing removes the ambiguity, so the mine proceeds: path-mapped and
+    synced-only paths (PALACE_DAEMON_PATH_MAP) keep working."""
+    absent = tmp_path / "2g" / "CLAUDE.md"
+
+    with (
+        patch("mempalace.cli._daemon_strict", return_value=True),
+        patch("mempalace.cli._post_daemon_mine_cli", return_value=True) as post,
+        pytest.raises(SystemExit) as exc,
+    ):
+        cmd_mine(_mine_args(absent, wing="2g"))
+
+    assert exc.value.code == 0
+    assert post.call_args.kwargs["wing"] == "2g"
+    assert post.call_args.args[0] == str(absent)
+
+
+def test_daemon_strict_unseen_directory_shaped_path_still_routes():
+    """A remote-only DIRECTORY path must keep working without --wing.
+
+    The daemon can mine paths this machine cannot see (synced, or remapped by
+    PALACE_DAEMON_PATH_MAP), and `tests/test_cli_daemon.py::TestCmdMineDaemon::
+    test_routes_projects_mode_to_daemon` has pinned that contract since before
+    this feature existed: `/home/u/proj`, no --wing, exit 0.
+
+    That is why the refusal above is scoped to paths carrying a DOCUMENT
+    SUFFIX rather than to every unresolvable path. For a directory the
+    historic rule (basename) is correct whether or not we can see it; only a
+    FILE derives its wing from somewhere else, and only a file therefore
+    produces a junk wing when we guess wrong.
+    """
+    with (
+        patch("mempalace.cli._daemon_strict", return_value=True),
+        patch("mempalace.cli._post_daemon_mine_cli", return_value=True) as post,
+        pytest.raises(SystemExit) as exc,
+    ):
+        cmd_mine(_mine_args("/home/u/proj-that-does-not-exist-here"))
+
+    assert exc.value.code == 0
+    assert post.call_args.kwargs["wing"] == "proj_that_does_not_exist_here"
+
+
 def test_daemon_strict_directory_wing_is_unchanged(tmp_path):
     """Regression guard: directory mines keep deriving the wing from the dir."""
     root, _target = _project_with_file(tmp_path)
@@ -204,3 +271,7 @@ def test_mine_help_mentions_single_file_projects_mode():
     help_text = " ".join(buf.getvalue().split())
     assert "one file" in help_text
     assert "projects mode" in help_text
+    # Single-file projects mode needs a daemon carrying palace-daemon#258;
+    # an older one answers 400 and the CLI exits 1. Help must not promise
+    # more than the deployed daemon can do.
+    assert "palace-daemon#258" in help_text
