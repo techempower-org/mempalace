@@ -319,3 +319,132 @@ def test_the_store_does_not_normalize_wing_names(pg_store):
     delete_sql, delete_params = conn.executed[-1]
     assert delete_sql.startswith("DELETE")
     assert delete_params[0] == "Kiyo-XHCI-Fix"
+
+
+# ---------------------------------------------------------------------------
+# replace_wing must be one transaction, not N+1 autocommit statements
+# ---------------------------------------------------------------------------
+
+
+class _FailingCursor(_FakeCursor):
+    """Raises on the Nth statement, to simulate a crash mid-batch."""
+
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        if self.conn.fail_on is not None and len(self.conn.executed) >= self.conn.fail_on:
+            raise RuntimeError("connection died mid-batch")
+
+
+class _TxConn(_FakeConn):
+    def __init__(self, rows=None, fail_on=None):
+        super().__init__(rows=rows)
+        self.fail_on = fail_on
+        self.rollbacks = 0
+        # _connect() hands back an autocommit connection; the fake has to
+        # start in the same state or "reads stay on autocommit" is vacuous.
+        self.autocommit = True
+
+    def cursor(self):
+        return _FailingCursor(self)
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+@pytest.fixture()
+def tx_store(monkeypatch):
+    def _make(fail_on=None):
+        conn = _TxConn(fail_on=fail_on)
+        store = hs.PostgresHallwayStore(dsn="postgresql://fake/db")
+        monkeypatch.setattr(store, "_connect", lambda: conn)
+        return store, conn
+
+    return _make
+
+
+def test_replace_wing_is_one_transaction(tx_store):
+    """DELETE + N INSERTs must commit together or not at all.
+
+    The JSON path wrote a temp file and os.replace'd it, so a wing could
+    never be observed half-written. An autocommit DELETE followed by N
+    autocommit INSERTs loses that: a crash after the DELETE leaves the wing
+    EMPTY, and a crash midway leaves it partial. Same scope as the JSON
+    path, but not the same atomicity — the storage move must not quietly
+    trade one for the other.
+    """
+    store, conn = tx_store()
+
+    store.replace_wing("kiyo", [FULL_RECORD, dict(FULL_RECORD, id="second")])
+
+    assert conn.autocommit is False, "the batch must not run in autocommit"
+    assert conn.commits == 1, "exactly one commit for the whole swap"
+    assert conn.rollbacks == 0
+
+
+def test_replace_wing_rolls_back_when_an_insert_fails(tx_store):
+    """A failing insert must leave the wing as it was, not emptied."""
+    # statements: DELETE, INSERT, INSERT -> fail on the second INSERT
+    store, conn = tx_store(fail_on=3)
+
+    with pytest.raises(RuntimeError):
+        store.replace_wing("kiyo", [FULL_RECORD, dict(FULL_RECORD, id="second")])
+
+    assert conn.rollbacks == 1, "the DELETE must be rolled back with the inserts"
+    assert conn.commits == 0
+
+
+def test_replace_wing_rolls_back_when_the_delete_fails(tx_store):
+    store, conn = tx_store(fail_on=1)
+
+    with pytest.raises(RuntimeError):
+        store.replace_wing("kiyo", [FULL_RECORD])
+
+    assert conn.rollbacks == 1
+    assert conn.commits == 0
+
+
+def test_reads_stay_on_the_cheap_autocommit_path(tx_store):
+    """Only the multi-statement swap needs a transaction; reads should not pay."""
+    store, conn = tx_store()
+    store.list(wing="kiyo")
+    assert conn.autocommit is True
+    assert conn.commits == 0
+
+
+# ---------------------------------------------------------------------------
+# Missing table: say so, the way the daemon side does
+# ---------------------------------------------------------------------------
+
+
+class _UndefinedTableCursor(_FakeCursor):
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        if "mempalace_hallways" in sql and not sql.startswith("CREATE"):
+            raise hs._undefined_table_error("relation does not exist")
+
+
+def test_reads_on_a_missing_table_warn_and_return_empty(monkeypatch, caplog):
+    """Before the migration runs there is no table.
+
+    An empty list is indistinguishable from "this wing has no hallways", so
+    a read must name migrate_hallways — the same reasoning as the daemon's
+    fast-intercept note (palace-daemon#255). It must not raise: a
+    misconfigured flag should not take down a mine.
+    """
+    import logging
+
+    conn = _FakeConn()
+    conn.cursor = lambda: _UndefinedTableCursor(conn)
+    store = hs.PostgresHallwayStore(dsn="postgresql://fake/db")
+    monkeypatch.setattr(store, "_connect", lambda: conn)
+
+    with caplog.at_level(logging.WARNING, logger="mempalace_hallways"):
+        assert store.list(wing="kiyo") == []
+        assert store.count() == 0
+        assert store.dynamics_for_wing("kiyo") == {}
+
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "migrate_hallways" in messages
+    assert sum("migrate_hallways" in r.getMessage() for r in caplog.records) == 1, (
+        "name the missing table once, not on every read"
+    )

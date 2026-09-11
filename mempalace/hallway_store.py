@@ -129,6 +129,28 @@ def _scrub(value: Any) -> Any:
     return _scrub_json_value(value)
 
 
+def _undefined_table_error(message: str = "relation does not exist"):
+    """Build the driver's UndefinedTable error, or a stand-in if unavailable."""
+    try:
+        from psycopg import errors as pg_errors
+
+        return pg_errors.UndefinedTable(message)
+    except Exception:  # pragma: no cover - driver missing in a chroma-only install
+        return RuntimeError(message)
+
+
+def _is_undefined_table(exc: BaseException) -> bool:
+    """True when the hallway table has not been created yet."""
+    try:
+        from psycopg import errors as pg_errors
+
+        if isinstance(exc, pg_errors.UndefinedTable):
+            return True
+    except Exception:  # pragma: no cover - driver missing
+        pass
+    return "does not exist" in str(exc)
+
+
 def _record_to_row(record: dict) -> dict:
     """Split a hallway record into promoted columns + dynamics + extra."""
     record = _scrub(dict(record))
@@ -228,6 +250,7 @@ class PostgresHallwayStore:
 
     def __init__(self, dsn: str):
         self.dsn = dsn
+        self._missing_table_warned = False
 
     # -- connection -------------------------------------------------------
 
@@ -239,11 +262,17 @@ class PostgresHallwayStore:
         conn.autocommit = True
         return conn
 
-    def _run(self, statements, conn=None, fetch=None):
+    def _run(self, statements, conn=None, fetch=None, atomic=False):
         """Execute ``(sql, params)`` pairs, optionally on a caller's connection."""
         owned = conn is None
         conn = conn or self._connect()
+        # A caller-supplied connection owns its own transaction; silently
+        # committing someone else's open work would be worse than not
+        # grouping ours.
+        atomic = atomic and owned
         try:
+            if atomic:
+                conn.autocommit = False
             cur = conn.cursor()
             result = None
             for sql, params in statements:
@@ -252,7 +281,16 @@ class PostgresHallwayStore:
                 result = cur.fetchall()
             elif fetch == "one":
                 result = cur.fetchone()
+            if atomic:
+                conn.commit()
             return result
+        except Exception:
+            if atomic:
+                try:
+                    conn.rollback()
+                except Exception:  # noqa: BLE001 - the socket may already be gone
+                    logger.debug("hallways: rollback failed", exc_info=True)
+            raise
         finally:
             if owned:
                 try:
@@ -268,6 +306,32 @@ class PostgresHallwayStore:
             [(_CREATE_TABLE, None), (_WING_INDEX, None), (_WING_COUNT_INDEX, None)],
             conn=conn,
         )
+
+    def _read(self, statements, conn=None, fetch=None, empty=None):
+        """Run a read, tolerating a table that the migration has not created.
+
+        Before ``migrate_hallways`` runs there is no table. Raising an opaque
+        UndefinedTable out of ``list_hallways`` would take down a mine over
+        an ordering mistake; returning a bare empty result would be
+        indistinguishable from "this wing has no hallways" and send whoever
+        is debugging it somewhere else entirely. So: empty result, and say
+        exactly which command is missing -- once per store, not per read.
+        Mirrors the daemon's fast-intercept note (palace-daemon#255).
+        """
+        try:
+            return self._run(statements, conn=conn, fetch=fetch)
+        except Exception as exc:  # noqa: BLE001 - re-raised unless it is the known case
+            if not _is_undefined_table(exc):
+                raise
+            if not self._missing_table_warned:
+                self._missing_table_warned = True
+                logger.warning(
+                    "hallway_backend=postgres but the %s table does not exist; "
+                    "returning no hallways. Run `python -m mempalace.migrate_hallways` "
+                    "to import hallways.json, then keep hallway_backend=postgres.",
+                    HALLWAY_TABLE,
+                )
+            return empty
 
     # -- reads ------------------------------------------------------------
 
@@ -286,7 +350,7 @@ class PostgresHallwayStore:
         if offset:
             sql += " OFFSET %s"
             params.append(int(offset))
-        rows = self._run([(sql, params)], conn=conn, fetch="all") or []
+        rows = self._read([(sql, params)], conn=conn, fetch="all", empty=[]) or []
         return [_row_to_record(r) for r in rows]
 
     def count(self, wing: Optional[str] = None, conn=None) -> int:
@@ -295,7 +359,7 @@ class PostgresHallwayStore:
         if wing is not None:
             sql += " WHERE wing = %s"
             params.append(wing)
-        row = self._run([(sql, params)], conn=conn, fetch="one")
+        row = self._read([(sql, params)], conn=conn, fetch="one")
         return int(row[0]) if row else 0
 
     def dynamics_for_wing(self, wing: str, conn=None) -> dict:
@@ -306,7 +370,7 @@ class PostgresHallwayStore:
         accumulated weights instead of silently resetting them on recompute.
         """
         sql = f"SELECT entity_a, entity_b, dynamics FROM {HALLWAY_TABLE} WHERE wing = %s"
-        rows = self._run([(sql, [wing])], conn=conn, fetch="all") or []
+        rows = self._read([(sql, [wing])], conn=conn, fetch="all", empty=[]) or []
         lookup: dict = {}
         for entity_a, entity_b, dynamics in rows:
             if isinstance(dynamics, str):
@@ -356,7 +420,18 @@ class PostgresHallwayStore:
         return len(statements)
 
     def replace_wing(self, wing: str, records: list[dict], conn=None) -> None:
-        """Swap one wing's rows. Other wings are untouched, as the JSON path did.
+        """Swap one wing's rows in ONE transaction. Other wings are untouched.
+
+        Both halves of that matter, and the JSON path had both: it preserved
+        other wings (scope) *and* wrote a temp file then ``os.replace``d it
+        (atomicity), so a wing could never be observed half-written. A DELETE
+        followed by N autocommit INSERTs keeps the scope and quietly drops the
+        atomicity -- a crash after the DELETE leaves the wing EMPTY, a crash
+        midway leaves it partial, and the recompute that would repair it only
+        runs on the next mine of that wing. So the whole swap commits or rolls
+        back together.
+
+        When the caller passes ``conn`` the caller's transaction governs.
 
         The delete runs even when ``records`` is empty: a wing whose pairs all
         fell below ``min_count`` must end up with no rows, not with its
@@ -364,7 +439,7 @@ class PostgresHallwayStore:
         """
         statements = [(f"DELETE FROM {HALLWAY_TABLE} WHERE wing = %s", [wing])]
         statements.extend((self._INSERT, self._insert_params(r)) for r in records)
-        self._run(statements, conn=conn)
+        self._run(statements, conn=conn, atomic=True)
 
     def delete(self, hallway_id: str, conn=None) -> bool:
         row = self._run(
