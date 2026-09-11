@@ -73,6 +73,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.palace_graph_age`](./palace_graph_age) — Palace structure (Wing → Room → Drawer) as native AGE graph nodes.
 - [`mempalace.pending_queue`](./pending_queue) — Append-only journal for mine requests that couldn't reach the daemon.
 - [`mempalace.project_scanner`](./project_scanner) — project_scanner.py — Detect projects and people from real signal.
+- [`mempalace.provenance`](./provenance) — Source provenance and staleness for search hits.
 - [`mempalace.query_sanitizer`](./query_sanitizer) — query_sanitizer.py — Mitigate system prompt contamination in search queries.
 - [`mempalace.ratings`](./ratings) — Feedback ratings for search results (#159, Tier 1).
 - [`mempalace.recency`](./recency) — Recency weighting for search results (#158).

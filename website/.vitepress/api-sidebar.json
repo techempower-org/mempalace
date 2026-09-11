@@ -260,6 +260,10 @@
         "link": "/reference/python-api/project_scanner"
       },
       {
+        "text": "mempalace.provenance",
+        "link": "/reference/python-api/provenance"
+      },
+      {
         "text": "mempalace.query_sanitizer",
         "link": "/reference/python-api/query_sanitizer"
       },
