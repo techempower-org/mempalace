@@ -30,6 +30,8 @@ from mempalace.auto_query.depth_cache import (
     store_injection,
 )
 from mempalace.auto_query.formatter import format_injection
+from mempalace.auto_query.injected import load_injected as _load_injected
+from mempalace.auto_query.injected import remember_injected
 from mempalace.auto_query.router import DEPTH_KEEP, THRESHOLDS, pick_tool
 from mempalace.auto_query.signals import extract_signals
 from mempalace.config import MempalaceConfig
@@ -476,39 +478,20 @@ def _wing_inventory_lines(wing, wing_counts):
     return [line]
 
 
-def _injected_path(session_id):
-    # type: (str) -> str
-    safe = "".join(ch for ch in str(session_id) if ch.isalnum() or ch in "-_")[:80] or "cli"
-    return os.path.join(os.path.expanduser("~/.mempalace/auto_query/injected"), safe + ".json")
-
-
-def _load_injected(session_id):
-    # type: (str) -> set
-    try:
-        with open(_injected_path(session_id), "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return set(str(x) for x in data) if isinstance(data, list) else set()
-    except (OSError, ValueError):
-        return set()
-
-
 def _remember_injected(session_id, mcp_result):
     # type: (str, dict) -> None
-    """Never inject the same drawer twice in one session (fail-open on I/O)."""
+    """Never inject the same drawer twice in one session (fail-open on I/O).
+
+    The record itself lives in ``auto_query.injected`` so the post-compaction
+    path can clear it (#449) without importing this classifier.
+    """
     results = mcp_result.get("results") if isinstance(mcp_result, dict) else None
     if not isinstance(results, list):
         return
-    ids = _load_injected(session_id)
-    ids.update(
-        str(r.get("drawer_id")) for r in results if isinstance(r, dict) and r.get("drawer_id")
+    remember_injected(
+        session_id,
+        [r.get("drawer_id") for r in results if isinstance(r, dict) and r.get("drawer_id")],
     )
-    path = _injected_path(session_id)
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(sorted(ids)[-500:], f)
-    except OSError:
-        pass
 
 
 _DAEMON_ENV_FILE = os.path.expanduser("~/.config/palace-daemon/env")
@@ -730,3 +713,12 @@ def _safe_log(decision, log_dir):
         rotate_log(log_dir=log_dir)
     except OSError:
         pass
+
+
+# Public seams for callers outside the auto-query pipeline. The
+# post-compaction re-injection path (``mempalace.compact_recovery``, #449)
+# needs the same daemon transport and the same hook-safe key lookup; a third
+# copy of either is how the fleet ends up with three different timeout and
+# auth behaviours.
+call_mcp = _call_mcp
+api_key = _api_key

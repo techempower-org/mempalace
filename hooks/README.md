@@ -20,6 +20,35 @@ It covers hook wiring, JSONL backup, and one-time backfill.
 | **Save Hook** | Every 15 human messages | Saves a diary entry with theme extraction, auto-mines transcript into the palace |
 | **SessionEnd Hook** | Clean session exit | Backgrounds a final transcript mine (when a transcript exists) so short sessions aren't lost; returns immediately so teardown is never delayed. A lightweight diary checkpoint is written in the detached child. |
 | **PreCompact Hook** | Right before context compaction | Emergency save — diary entry + transcript mining before context is lost |
+| **SessionStart Hook** | Every session start | One visible line about the palace (alive?, size, this wing's depth). On `source=compact` it instead runs post-compaction recovery: clears auto-query's per-session suppression list and re-injects the wake-up story as content — see below. |
+
+## Post-Compaction Recovery (SessionStart, `source=compact`)
+
+A compaction keeps the session id and throws the context away. Two things
+follow, and both were measured on the fleet:
+
+1. Auto-query's per-session dedupe
+   (`~/.mempalace/auto_query/injected/<session>.json`) records which drawers
+   have already been shown so they are not repeated. After a compaction those
+   drawers are gone from the agent and still marked shown — so the dedupe
+   suppresses exactly the material that was just lost, and suppresses more of
+   it the longer the session ran. One live session had **119** ids in that file.
+2. The old branch injected a *pointer* ("run `mempalace wake-up`"). Agents do
+   not act on invitations; hooks that inject without asking do.
+
+`hooks/palace-session-start.sh` therefore delegates the compact case to
+`python -m mempalace.compact_recovery`, which
+
+* clears the session's dedupe file (unconditionally, before any network call)
+  and reports how many ids it dropped, and
+* fetches the wake-up story for the project's wing and returns it as
+  `additionalContext` — content, not a hint.
+
+It reads Claude Code's SessionStart JSON on stdin, prints the hook payload on
+stdout, and always exits 0. If the palace is unreachable the dedupe is still
+cleared and the visible line says so. The injected text is capped by
+`compact_recovery.max_chars` in `~/.mempalace/config.json` (env
+`COMPACT_RECOVERY_MAX_CHARS`, default 4000 characters ≈ 1000 tokens).
 
 ## Save Architecture
 

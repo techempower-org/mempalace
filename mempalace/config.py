@@ -1154,6 +1154,26 @@ class MempalaceConfig:
         return coerced if coerced is not None else 6
 
     @property
+    def compact_recovery_max_chars(self) -> int:
+        """Ceiling on the palace text re-injected after a context compaction.
+
+        Env ``COMPACT_RECOVERY_MAX_CHARS`` > config
+        ``compact_recovery.max_chars`` > 4000 (~1000 tokens). Wake-up L1 is
+        capped at ~800 tokens by construction; this is the backstop so a
+        recovery can never become the next context problem (#449).
+        """
+        env_val = os.environ.get("COMPACT_RECOVERY_MAX_CHARS", "").strip()
+        if env_val:
+            coerced = self._try_coerce_int(env_val, minimum=200)
+            if coerced is not None:
+                return coerced
+        cr = self._file_config.get("compact_recovery", {})
+        if not isinstance(cr, dict):
+            cr = {}
+        coerced = self._try_coerce_int(cr.get("max_chars"), minimum=200)
+        return coerced if coerced is not None else 4000
+
+    @property
     def wing_aliases(self) -> dict:
         """Mapping of directory basenames to canonical palace wing names.
 
