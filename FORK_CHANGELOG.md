@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **`doctor --curated` reports curated docs newer than what the palace indexed** (`HEAD` — pending resolution)
+- **`doctor --curated` reports curated docs newer than what the palace indexed** ([`f308493`](https://github.com/techempower-org/mempalace/commit/f308493))
   The palace keeps serving a pre-edit copy of `CLAUDE.md` or `docs/*.md`
   until it is re-mined, and nothing says so. `doctor --curated` now reports,
   per file, whether the copy on disk has moved on since the palace read it.
@@ -80,7 +80,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`
 
 
-- **mempalace tunnels --rebuild --wing W — refresh the derived graph on purpose** (`HEAD` — pending resolution)
+- **mempalace tunnels --rebuild --wing W — refresh the derived graph on purpose** ([`18fd745`](https://github.com/techempower-org/mempalace/commit/18fd745))
   After the #474 wave the derived graph — cross-wing topic tunnels,
   within-wing hallways, cross-wing entity tunnels — refreshes **only as a side
   effect** of a full-directory mine that actually files drawers.
@@ -129,7 +129,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **purge / prune / mined share one open-and-refuse sequence and one exit-code contract** (`HEAD` — pending resolution)
+- **purge / prune / mined share one open-and-refuse sequence and one exit-code contract** ([`459efab`](https://github.com/techempower-org/mempalace/commit/459efab))
   `purge`, `prune` and `mined` each grew their own *resolve backend → gate
   the local precheck → open the drawers* sequence, across #418 and #459, one
   at a time. The policy was identical every time; only the refusal messages
@@ -204,7 +204,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **Entry shas resolve from the commit that added the entry file; strict check rejects an unresolved placeholder on main** (`HEAD` — pending resolution)
+- **Entry shas resolve from the commit that added the entry file; strict check rejects an unresolved placeholder on main** ([`b9d168a`](https://github.com/techempower-org/mempalace/commit/b9d168a))
   Three gaps in the pipeline #480 introduced, each found by a different lane.
 
   **`commit: HEAD` could not be resolved from `fork_pr` alone.** A lane
@@ -245,7 +245,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `scripts/maintain-fork-changes.py`, `scripts/fork_changes.py`, `scripts/render-docs.py`, `scripts/check-docs.sh`, `.github/workflows/check-docs.yml`, `docs/fork-changes/README.md`
 
 
-- **Wake-up L1 stops leading with harness prompt-echo, diff fragments and tool-call receipts** (`HEAD` — pending resolution)
+- **Wake-up L1 stops leading with harness prompt-echo, diff fragments and tool-call receipts** ([`6bdaade`](https://github.com/techempower-org/mempalace/commit/6bdaade))
   #436 taught L1 to skip diary checkpoints, session manifests and compaction
   summaries. None of those are what it actually led with. Measured on the live
   palace 2026-09-11: ``memorypalace`` spent **9 of its 16** story lines on a
@@ -305,7 +305,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/exhaust.py`, `mempalace/layers.py`, `mempalace/auto_query/runner.py`
 
 
-- **prune / status --json / compress / mined resolve the backend before any local-dir test, so a Postgres palace is no longer refused** (`HEAD` — pending resolution)
+- **prune / status --json / compress / mined resolve the backend before any local-dir test, so a Postgres palace is no longer refused** ([`525c339`](https://github.com/techempower-org/mempalace/commit/525c339))
   #418 removed a local-directory precheck from `purge` and `sync`. The same
   check survived in two more places, so four more commands still refused a
   Postgres palace: `palace._open_collection_or_explain` — the shared "open it
@@ -355,7 +355,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/palace.py`, `mempalace/cli.py`
 
 
-- **test_init's sys.path assertion resolves entries against cwd, so it stops failing in every linked worktree** (`HEAD` — pending resolution)
+- **test_init's sys.path assertion resolves entries against cwd, so it stops failing in every linked worktree** ([`e4d52a3`](https://github.com/techempower-org/mempalace/commit/e4d52a3))
   `test_init_filters_sys_path_from_leaked_pythonpath` failed all five sentinel
   params in any linked worktree, so every lane in the 2026-09-10 drain wave ran
   the suite with it deselected and paid a false red before working that out.
@@ -397,7 +397,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Performance
 
 
-- **KG write-through commits once per batch instead of once per drawer** (`HEAD` — pending resolution)
+- **KG write-through commits once per batch instead of once per drawer** ([`41f1251`](https://github.com/techempower-org/mempalace/commit/41f1251))
   Measured on the palace host: a projects-mode mine wrote **4,832 drawers
   in 69 minutes (~1.2 drawers/s)** while ``pg_stat_activity`` showed one
   ``cypher('mempalace_kg', … MERGE (d:Drawer …`` statement per drawer, and
@@ -461,7 +461,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/kg_writethrough.py`, `mempalace/backends/postgres.py`, `mempalace/palace.py`, `scripts/bench_kg_writethrough.py`, `tests/test_kg_writethrough_batch.py`
 
 
-- **Batch tunnel persistence — a 2,000-tunnel rebuild goes from 37.9 s to 0.08 s** (`HEAD` — pending resolution)
+- **Batch tunnel persistence — a 2,000-tunnel rebuild goes from 37.9 s to 0.08 s** ([`6f328ca`](https://github.com/techempower-org/mempalace/commit/6f328ca))
   ``create_tunnel`` did a full ``_load_tunnels`` **and** a full atomic
   ``_save_tunnels`` on every call, and it is called from inside two loops —
   the per-entity loop in ``entity_tunnels_for_wing`` and the per-wing loop in
@@ -499,7 +499,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/palace_graph.py`
 
 
-- **Hallways move from a 1 GB monolithic JSON file to an opt-in postgres table** (`HEAD` — pending resolution)
+- **Hallways move from a 1 GB monolithic JSON file to an opt-in postgres table** ([`71f4e31`](https://github.com/techempower-org/mempalace/commit/71f4e31))
   ``hallways.json`` on the production palace host grows fast enough that
   any single figure is stale on arrival: 479 MB early in the evening,
   **1,041,537,215 B / ~797K records / 21 wings** at 20:03, and
@@ -806,7 +806,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **Curated hits order above the transcripts that quote them; diary hits say they have no source** (`HEAD` — pending resolution)
+- **Curated hits order above the transcripts that quote them; diary hits say they have no source** ([`7df8dee`](https://github.com/techempower-org/mempalace/commit/7df8dee))
   A paraphrased question ranked session transcripts above the curated card
   that answers it, so a reader at the default limit never reached the
   correction. Measured on production (wing ``2g``, limit 20): the

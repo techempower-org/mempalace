@@ -2,8 +2,7 @@ seq: 147
 id: kg-writethrough-batch-commit
 date: '2026-09-11'
 bucket: Performance
-commit: HEAD
-fork_pr: 491
+commit: 41f1251
 area: Performance
 summary: KG write-through commits once per batch instead of once per drawer
 body: |
@@ -66,6 +65,7 @@ body: |
   probe of AGE 1.6.0's dialect — ``add_mention``'s docstring already
   documents three gaps) remain design only.
 tests: 21 (test_kg_writethrough_batch — incl. one commit per batch, commits flat across batch size, the rollback-discards-the-batch property, and a write-through-off control)
+fork_pr: 491
 files:
 - mempalace/kg_writethrough.py
 - mempalace/backends/postgres.py

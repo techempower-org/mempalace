@@ -2,8 +2,7 @@ seq: 146
 id: doctor-curated-docs-staleness
 date: '2026-09-11'
 bucket: Added
-commit: HEAD
-fork_pr: 490
+commit: f308493
 area: CLI
 summary: '`doctor --curated` reports curated docs newer than what the palace indexed'
 body: |
@@ -58,5 +57,6 @@ body: |
   so the check now says which situation it is in, because an alarming line
   that means nothing is how a check earns a deselect.
 tests: '25 (test_doctor_curated_docs.py: enumeration x5, cap disclosure x3, tri-state x3, daemon tier x7, worktree note x2, gate x2, local tier x2, provenance delegation x1)'
+fork_pr: 490
 files:
 - mempalace/cli.py

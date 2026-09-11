@@ -2,10 +2,9 @@ seq: 143
 id: cli-tunnels-rebuild
 date: '2026-09-11'
 bucket: Added
-commit: HEAD
-fork_pr: 486
+commit: 18fd745
 area: CLI
-summary: "mempalace tunnels --rebuild --wing W — refresh the derived graph on purpose"
+summary: mempalace tunnels --rebuild --wing W — refresh the derived graph on purpose
 body: |
   After the #474 wave the derived graph — cross-wing topic tunnels,
   within-wing hallways, cross-wing entity tunnels — refreshes **only as a side
@@ -47,5 +46,8 @@ body: |
   wings — recreating the problem this verb exists to fix. The flag is accepted
   and refused with that reason rather than left to a bare argparse error, and
   it becomes cheap once hallways leave the monolithic JSON (#442).
-tests: "16 (test_cli_tunnels_rebuild)"
-files: [mempalace/cli.py, mempalace/miner.py]
+tests: 16 (test_cli_tunnels_rebuild)
+fork_pr: 486
+files:
+- mempalace/cli.py
+- mempalace/miner.py

@@ -2,11 +2,9 @@ seq: 141
 id: precheck-postgres-prune-status-compress-mined
 date: '2026-09-11'
 bucket: Fixed
-commit: HEAD
-fork_pr: 481
+commit: 525c339
 area: CLI
-summary: prune / status --json / compress / mined resolve the backend before any local-dir
-  test, so a Postgres palace is no longer refused
+summary: prune / status --json / compress / mined resolve the backend before any local-dir test, so a Postgres palace is no longer refused
 body: |
   #418 removed a local-directory precheck from `purge` and `sync`. The same
   check survived in two more places, so four more commands still refused a
@@ -53,6 +51,7 @@ body: |
   payload carries the hint either way; the real-CLI probe against a closed
   port found it. The renderer is now an explicit argument with its own test.
 tests: '21 (test_cli_precheck_postgres.py: TestOpenCollectionOrExplainResolvesBackendFirst x5, TestPruneOnServerBackend x6, TestMinedOnServerBackend x6, TestStatusJsonOnServerBackend x2, TestCompressOnServerBackend x1; plus 3 existing contract updates)'
+fork_pr: 481
 files:
 - mempalace/palace.py
 - mempalace/cli.py

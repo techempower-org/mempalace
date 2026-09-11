@@ -2,7 +2,7 @@ seq: 145
 id: search-curated-over-transcript-ordering
 date: '2026-09-10'
 bucket: Fixed
-commit: HEAD
+commit: 7df8dee
 area: Search
 summary: Curated hits order above the transcripts that quote them; diary hits say they have no source
 body: |
@@ -56,6 +56,10 @@ body: |
   two-process before/after credited the corpus's work to the code. Diary hits
   now render "palace diary summary — no source file" and sort below curated
   hits.
-tests: "47 new (test_result_ordering x35 incl. the transitivity triple, the pass-what-you-outrank repro, the stabilise-cap pin and property tests for idempotence and the bound over 4,000 randomised three-kind inputs each; test_cli_daemon route-ordering + conditional widen + diary tag x10; test_provenance diary note x2)"
+tests: 47 new (test_result_ordering x35 incl. the transitivity triple, the pass-what-you-outrank repro, the stabilise-cap pin and property tests for idempotence and the bound over 4,000 randomised three-kind inputs each; test_cli_daemon route-ordering + conditional widen + diary tag x10; test_provenance diary note x2)
 fork_pr: 477
-files: [mempalace/result_ordering.py, mempalace/cli.py, mempalace/searcher.py, mempalace/provenance.py]
+files:
+- mempalace/result_ordering.py
+- mempalace/cli.py
+- mempalace/searcher.py
+- mempalace/provenance.py

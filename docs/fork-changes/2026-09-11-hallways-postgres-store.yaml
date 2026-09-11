@@ -2,8 +2,7 @@ seq: 140
 id: hallways-postgres-store
 date: '2026-09-11'
 bucket: Performance
-commit: HEAD
-fork_pr: 479
+commit: 71f4e31
 area: Performance
 summary: Hallways move from a 1 GB monolithic JSON file to an opt-in postgres table
 body: |
@@ -98,6 +97,7 @@ body: |
   which is worse than slow. All 110 pre-existing hallway tests pass
   unchanged.
 tests: 61 (test_hallway_store 24, test_hallways_store_routing 9, test_migrate_hallways 28)
+fork_pr: 479
 files:
 - mempalace/hallway_store.py
 - mempalace/migrate_hallways.py

@@ -2,11 +2,9 @@ seq: 139
 id: init-test-cwd-relative-syspath
 date: '2026-09-11'
 bucket: Fixed
-commit: HEAD
-fork_pr: 482
+commit: e4d52a3
 area: Testing
-summary: test_init's sys.path assertion resolves entries against cwd, so it stops failing
-  in every linked worktree
+summary: test_init's sys.path assertion resolves entries against cwd, so it stops failing in every linked worktree
 body: |
   `test_init_filters_sys_path_from_leaked_pythonpath` failed all five sentinel
   params in any linked worktree, so every lane in the 2026-09-10 drain wave ran
@@ -42,5 +40,6 @@ body: |
   the main tree, against 5 failed / 3 passed for the old test from a worktree.
   The full suite now runs green from a worktree with no manual deselect.
 tests: 0 new (repairs 5 existing params; the suite from a worktree goes 5 failed -> 0)
+fork_pr: 482
 files:
 - tests/test_init.py

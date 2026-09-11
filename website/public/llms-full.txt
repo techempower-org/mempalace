@@ -309,17 +309,17 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
-| purge / prune / mined share one open-and-refuse sequence and one exit-code contract | — | `HEAD` — pending resolution |
-| Entry shas resolve from the commit that added the entry file; strict check rejects an unresolved placeholder on main | — | `HEAD` — pending resolution |
-| KG write-through commits once per batch instead of once per drawer | — | `HEAD` — pending resolution |
-| `doctor --curated` reports curated docs newer than what the palace indexed | — | `HEAD` — pending resolution |
-| Curated hits order above the transcripts that quote them; diary hits say they have no source | — | `HEAD` — pending resolution |
-| Wake-up L1 stops leading with harness prompt-echo, diff fragments and tool-call receipts | — | `HEAD` — pending resolution |
-| mempalace tunnels --rebuild --wing W — refresh the derived graph on purpose | — | `HEAD` — pending resolution |
-| Batch tunnel persistence — a 2,000-tunnel rebuild goes from 37.9 s to 0.08 s | — | `HEAD` — pending resolution |
-| prune / status --json / compress / mined resolve the backend before any local-dir test, so a Postgres palace is no longer refused | — | `HEAD` — pending resolution |
-| Hallways move from a 1 GB monolithic JSON file to an opt-in postgres table | — | `HEAD` — pending resolution |
-| test_init's sys.path assertion resolves entries against cwd, so it stops failing in every linked worktree | — | `HEAD` — pending resolution |
+| purge / prune / mined share one open-and-refuse sequence and one exit-code contract | — | [`459efab`](https://github.com/techempower-org/mempalace/commit/459efab) |
+| Entry shas resolve from the commit that added the entry file; strict check rejects an unresolved placeholder on main | — | [`b9d168a`](https://github.com/techempower-org/mempalace/commit/b9d168a) |
+| KG write-through commits once per batch instead of once per drawer | — | [`41f1251`](https://github.com/techempower-org/mempalace/commit/41f1251) |
+| `doctor --curated` reports curated docs newer than what the palace indexed | — | [`f308493`](https://github.com/techempower-org/mempalace/commit/f308493) |
+| Curated hits order above the transcripts that quote them; diary hits say they have no source | — | [`7df8dee`](https://github.com/techempower-org/mempalace/commit/7df8dee) |
+| Wake-up L1 stops leading with harness prompt-echo, diff fragments and tool-call receipts | — | [`6bdaade`](https://github.com/techempower-org/mempalace/commit/6bdaade) |
+| mempalace tunnels --rebuild --wing W — refresh the derived graph on purpose | — | [`18fd745`](https://github.com/techempower-org/mempalace/commit/18fd745) |
+| Batch tunnel persistence — a 2,000-tunnel rebuild goes from 37.9 s to 0.08 s | — | [`6f328ca`](https://github.com/techempower-org/mempalace/commit/6f328ca) |
+| prune / status --json / compress / mined resolve the backend before any local-dir test, so a Postgres palace is no longer refused | — | [`525c339`](https://github.com/techempower-org/mempalace/commit/525c339) |
+| Hallways move from a 1 GB monolithic JSON file to an opt-in postgres table | — | [`71f4e31`](https://github.com/techempower-org/mempalace/commit/71f4e31) |
+| test_init's sys.path assertion resolves entries against cwd, so it stops failing in every linked worktree | — | [`e4d52a3`](https://github.com/techempower-org/mempalace/commit/e4d52a3) |
 | Fork-change entries split one-per-file; entry shas verified by ancestry and resolved after merge | — | [`6da8775`](https://github.com/techempower-org/mempalace/commit/6da8775) |
 | README install path documents putting the mempalace-mcp bridge on PATH | — | [`933602e`](https://github.com/techempower-org/mempalace/commit/933602e) |
 | Checkpoint drawers carry the session id, not just the diary entry; session_id is validated | — | [`1a54838`](https://github.com/techempower-org/mempalace/commit/1a54838) |

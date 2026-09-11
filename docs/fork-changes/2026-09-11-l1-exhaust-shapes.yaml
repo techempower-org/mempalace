@@ -1,11 +1,10 @@
 seq: 144
 id: l1-exhaust-shapes
-date: 2026-09-11
+date: '2026-09-11'
 bucket: Fixed
-commit: HEAD
-fork_pr: 487
+commit: 6bdaade
 area: Reliability
-summary: "Wake-up L1 stops leading with harness prompt-echo, diff fragments and tool-call receipts"
+summary: Wake-up L1 stops leading with harness prompt-echo, diff fragments and tool-call receipts
 body: |
   #436 taught L1 to skip diary checkpoints, session manifests and compaction
   summaries. None of those are what it actually led with. Measured on the live
@@ -61,8 +60,9 @@ body: |
   top-N cut, so a stricter filter refills L1 from deeper in the pool instead of
   leaving it short — which would have quietly halved the very context #458
   exists to restore.
-tests: "44 (test_exhaust_shapes) — every fixture verbatim from a live drawer, including the eight findings the first version ate, now the positive controls"
+tests: 44 (test_exhaust_shapes) — every fixture verbatim from a live drawer, including the eight findings the first version ate, now the positive controls
+fork_pr: 487
 files:
-  - mempalace/exhaust.py
-  - mempalace/layers.py
-  - mempalace/auto_query/runner.py
+- mempalace/exhaust.py
+- mempalace/layers.py
+- mempalace/auto_query/runner.py

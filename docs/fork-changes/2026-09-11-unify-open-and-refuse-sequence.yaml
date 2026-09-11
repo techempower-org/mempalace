@@ -2,11 +2,9 @@ seq: 148
 id: unify-open-and-refuse-sequence
 date: '2026-09-11'
 bucket: Changed
-commit: HEAD
-fork_pr: 493
+commit: 459efab
 area: CLI
-summary: purge / prune / mined share one open-and-refuse sequence and one exit-code
-  contract
+summary: purge / prune / mined share one open-and-refuse sequence and one exit-code contract
 body: |
   `purge`, `prune` and `mined` each grew their own *resolve backend → gate
   the local precheck → open the drawers* sequence, across #418 and #459, one
@@ -43,5 +41,6 @@ body: |
   refusal payload while its name promised the success one. It passed for the
   wrong reason until this change made that refusal exit 2.
 tests: '22 (test_cli_palace_exit_codes.py: palace-unavailable table x18, no-results x2, json envelope x2; plus 4 superseded assertions updated)'
+fork_pr: 493
 files:
 - mempalace/cli.py

@@ -2,10 +2,9 @@ seq: 147
 id: entry-sha-resolution-hardening
 date: '2026-09-11'
 bucket: Fixed
-commit: HEAD
+commit: b9d168a
 area: Docs
-summary: Entry shas resolve from the commit that added the entry file; strict check
-  rejects an unresolved placeholder on main
+summary: Entry shas resolve from the commit that added the entry file; strict check rejects an unresolved placeholder on main
 body: |
   Three gaps in the pipeline #480 introduced, each found by a different lane.
 
@@ -42,8 +41,7 @@ body: |
   URL that resolves to whatever is at main's tip, so eight changelog links
   and seven README rows pointed at an unrelated commit while looking
   exactly like real references. They now render as plain text.
-tests: 30 (TestResolveHeadByFileAdd x6, TestFileAddAgainstRealGit x4, TestIncludeHead x3, plus
-  loader/renderer/resolver coverage)
+tests: 30 (TestResolveHeadByFileAdd x6, TestFileAddAgainstRealGit x4, TestIncludeHead x3, plus loader/renderer/resolver coverage)
 fork_pr: 492
 files:
 - scripts/maintain-fork-changes.py

@@ -2,10 +2,9 @@ seq: 142
 id: graph-batch-tunnel-persist
 date: '2026-09-11'
 bucket: Performance
-commit: HEAD
-fork_pr: 484
+commit: 6f328ca
 area: Search
-summary: "Batch tunnel persistence — a 2,000-tunnel rebuild goes from 37.9 s to 0.08 s"
+summary: Batch tunnel persistence — a 2,000-tunnel rebuild goes from 37.9 s to 0.08 s
 body: |
   ``create_tunnel`` did a full ``_load_tunnels`` **and** a full atomic
   ``_save_tunnels`` on every call, and it is called from inside two loops —
@@ -39,5 +38,7 @@ body: |
   ordering all hold inside a batch, pinned by an equivalence test that runs the
   same specs through both routes into separate palaces and requires identical
   files.
-tests: "10 (test_palace_graph_batch_tunnels)"
-files: [mempalace/palace_graph.py]
+tests: 10 (test_palace_graph_batch_tunnels)
+fork_pr: 484
+files:
+- mempalace/palace_graph.py
