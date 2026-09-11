@@ -1,0 +1,258 @@
+"""Source provenance and staleness for search hits.
+
+A palace search returns the *indexed copy* of whatever was mined. Transcripts
+are mined continuously (the Stop / PreCompact hooks) while curated project
+documents are mined only when someone runs ``mempalace mine`` — so the copy
+that comes back for a project fact is usually a session transcript quoting a
+claim, not the document that later corrected it. A refuted claim then reads as
+authoritative, because nothing on the hit says which kind of source it came
+from (techempower-org/mempalace#451: a claim ``2g/CLAUDE.md`` had carried a
+REFUTED banner for two days was still being returned, unmarked, from the
+transcript that first stated it).
+
+This module is the shared, side-effect-free predicate set for that question:
+
+* :func:`source_kind`  — transcript / memory / diary / file / unknown
+* :func:`source_stale` — has the file on disk moved on since it was indexed?
+* :func:`annotate`     — stamp both onto a result list, in place
+* :func:`provenance_note` — the human-readable caveat for one hit
+* :func:`all_transcript`  — "nothing curated matched" for the header line
+
+Only :func:`source_stale` touches the filesystem (one ``os.stat``); everything
+else is pure. Nothing here raises: a hit of an unexpected shape degrades to
+``"unknown"`` / ``None`` rather than breaking a search the caller already paid
+for.
+"""
+
+import os
+from datetime import datetime
+from typing import Optional
+
+from .date_window import parse_date_bound
+
+__all__ = [
+    "all_transcript",
+    "annotate",
+    "no_curated_source",
+    "provenance_note",
+    "source_kind",
+    "source_stale",
+]
+
+# Keys the search arms use for a source path. The MCP / daemon paths store a
+# basename only (``searcher`` writes ``Path(src).name``); the local paths keep
+# the full path alongside it. Any of them answers "what kind of source is
+# this?"; only an absolute one can answer "is it stale?".
+_PATH_KEYS = ("source_file", "source_path", "_source_file_full", "source")
+
+# Keys carrying the time the drawer was filed into the palace.
+_INDEXED_AT_KEYS = ("created_at", "indexed_at", "filed_at")
+
+# ``searcher`` writes "?" when a drawer has no source_file at all.
+_EMPTY_PATHS = ("", "?", "none", "null", "unknown")
+
+# A file touched within a minute of its own mine is the mine, not an edit.
+_STALE_GRACE_SECONDS = 60
+
+_TRANSCRIPT_NOTE = "quoted copy from a session transcript — verify at the curated source"
+
+
+def _paths(hit) -> list:
+    """Every non-empty source path on ``hit``, in key-preference order."""
+    if not isinstance(hit, dict):
+        return []
+    out = []
+    for key in _PATH_KEYS:
+        value = hit.get(key)
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if not value or value.lower() in _EMPTY_PATHS:
+            continue
+        out.append(value)
+    return out
+
+
+def _drawer_id(hit) -> str:
+    if not isinstance(hit, dict):
+        return ""
+    return str(hit.get("drawer_id") or hit.get("id") or "")
+
+
+def source_kind(hit) -> str:
+    """Classify where a hit's content came from.
+
+    Returns one of:
+
+    ``"transcript"``
+        A session transcript (``*.jsonl``). The words are a *quoted copy* —
+        true of the moment it was said, not necessarily true now.
+    ``"memory"``
+        A curated auto-memory file (``.../memory/*.md``): one fact per file,
+        maintained by hand. The highest-trust shape in the palace.
+    ``"diary"``
+        A palace-written diary drawer (no source file; ``diary_``-prefixed id).
+    ``"file"``
+        Any other mined file — a project ``CLAUDE.md``, a findings doc, source.
+    ``"unknown"``
+        Nothing on the hit says.
+
+    Basename-only paths are fine (the MCP path strips directories), and the
+    extension match is case-insensitive.
+    """
+    paths = _paths(hit)
+    for path in paths:
+        lowered = path.lower()
+        if lowered.endswith(".jsonl"):
+            return "transcript"
+        if lowered.endswith(".md") and "/memory/" in lowered:
+            return "memory"
+    if paths:
+        return "file"
+    if _drawer_id(hit).startswith("diary_"):
+        return "diary"
+    return "unknown"
+
+
+def _indexed_at_raw(hit) -> Optional[str]:
+    if not isinstance(hit, dict):
+        return None
+    for key in _INDEXED_AT_KEYS:
+        value = hit.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _indexed_at(hit) -> Optional[datetime]:
+    """Parsed index timestamp, or ``None`` when absent/unparseable.
+
+    Wall-clock naive, matching ``filed_at`` storage and the shared
+    ``date_window`` comparison convention.
+    """
+    raw = _indexed_at_raw(hit)
+    if raw is None:
+        return None
+    try:
+        return parse_date_bound(raw, field_name="created_at")
+    except (ValueError, TypeError):
+        return None
+
+
+def source_stale(hit, now: Optional[datetime] = None) -> Optional[bool]:
+    """Has the hit's source file been modified since the palace indexed it?
+
+    ``True``  — the file exists locally and its mtime is more than
+    :data:`_STALE_GRACE_SECONDS` past the drawer's index timestamp, so the
+    palace is serving an older copy than the file on disk.
+
+    ``False`` — the file exists and has not moved on.
+
+    ``None``  — undecidable, which is the common case and is *not* a denial
+    of staleness. It covers a basename-only path (the MCP / daemon result
+    shape carries no directory, so the file cannot be located), a missing or
+    unparseable index timestamp, a file that is not on this machine, and an
+    index timestamp in the future (a clock problem, not a staleness answer).
+
+    ``now`` is injectable for tests and bounds the future-timestamp check.
+    Never raises.
+    """
+    indexed = _indexed_at(hit)
+    if indexed is None:
+        return None
+    now = now or datetime.now()
+    if indexed > now:
+        # Bad clock or a mis-parse — nothing honest to say about staleness.
+        return None
+    for path in _paths(hit):
+        if not os.path.isabs(path):
+            continue
+        try:
+            mtime = os.stat(path).st_mtime
+        except OSError:
+            continue
+        modified = datetime.fromtimestamp(mtime)
+        return (modified - indexed).total_seconds() > _STALE_GRACE_SECONDS
+    return None
+
+
+def provenance_note(hit) -> Optional[str]:
+    """The human-readable caveat for one hit, or ``None`` when there is none.
+
+    Reuses ``source_kind`` / ``source_stale`` already stamped by
+    :func:`annotate` when they are present, so a renderer handed an annotated
+    hit never re-stats the disk.
+    """
+    if not isinstance(hit, dict):
+        return None
+    kind = hit.get("source_kind") or source_kind(hit)
+    stale = hit.get("source_stale")
+    if stale is None:
+        stale = source_stale(hit)
+
+    notes = []
+    if kind == "transcript":
+        notes.append(_TRANSCRIPT_NOTE)
+    if stale is True:
+        indexed = _indexed_at(hit)
+        when = indexed.strftime("%Y-%m-%d") if indexed else "unknown date"
+        notes.append(
+            f"source file modified after indexing (indexed {when}) — re-mine or read the file"
+        )
+    return "; ".join(notes) if notes else None
+
+
+def annotate(results):
+    """Stamp ``source_kind`` (and staleness when decidable) onto each hit.
+
+    Mutates dicts in ``results`` in place and returns ``results`` itself, so
+    callers can wrap an existing expression. Idempotent — re-annotating an
+    already-annotated list produces the same fields. Non-dict items and a
+    non-list ``results`` pass through untouched, because this runs on the
+    return path of a search the caller has already paid for and must never
+    turn a usable result into an exception.
+
+    ``source_stale`` and ``source_indexed_at`` are omitted when there is
+    nothing to base them on: ``source_stale`` needs an absolute path that
+    exists on this machine (daemon/MCP hits carry a basename only, so they
+    are decidable for *kind* but never for *staleness*), and
+    ``source_indexed_at`` is the parseable index timestamp echoed back.
+    """
+    if not isinstance(results, list):
+        return results
+    for hit in results:
+        if not isinstance(hit, dict):
+            continue
+        hit["source_kind"] = source_kind(hit)
+        stale = source_stale(hit)
+        if stale is not None:
+            hit["source_stale"] = stale
+        indexed_raw = _indexed_at_raw(hit)
+        if indexed_raw is not None and _indexed_at(hit) is not None:
+            hit["source_indexed_at"] = indexed_raw
+    return results
+
+
+def all_transcript(results) -> bool:
+    """True when there are hits and every one of them is a transcript copy.
+
+    That is the shape the fleet keeps getting burned by: no curated document
+    matched at all, so nothing in the result set can carry a later correction.
+    """
+    if not isinstance(results, list) or not results:
+        return False
+    return all(source_kind(hit) == "transcript" for hit in results)
+
+
+def no_curated_source(results) -> bool:
+    """True when there are hits and not one of them came from a curated document.
+
+    The weaker, more common sibling of :func:`all_transcript`: a palace diary
+    drawer is not a transcript, but nobody maintains it either, so a result
+    set of transcripts and diaries still has nowhere a later correction could
+    have landed. An unclassifiable hit makes this ``False`` — "nothing curated
+    matched" is a claim, and a hit of unknown shape is not evidence for it.
+    """
+    if not isinstance(results, list) or not results:
+        return False
+    return all(source_kind(hit) in ("transcript", "diary") for hit in results)

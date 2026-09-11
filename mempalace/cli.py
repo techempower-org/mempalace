@@ -50,6 +50,13 @@ from .auto_wake import urlopen_with_wake
 from .config import MempalaceConfig
 from .corpus_origin import detect_origin_heuristic, detect_origin_llm
 from .llm_client import LLMError, get_provider
+from .provenance import (
+    all_transcript,
+    annotate,
+    no_curated_source,
+    provenance_note,
+    source_kind,
+)
 from .version import __version__
 
 
@@ -577,6 +584,22 @@ def _print_search_header(
         print(f"  Scope has: {data['available_in_scope']} drawers matching filter")
     for w in warnings:
         print(f"  ! {w}")
+    # Nothing curated matched means nothing in this result set can carry a
+    # later correction — every hit is a quoted copy of what was said at the
+    # time (techempower-org/mempalace#451). Say which of the two shapes it is
+    # rather than overclaiming "all transcripts" over a mixed set.
+    hits = data.get("results") or []
+    if all_transcript(hits):
+        print(
+            f"  ! all {len(hits)} hits are session-transcript copies — no curated "
+            "document matched; the source may be newer than its indexed copy"
+        )
+    elif no_curated_source(hits):
+        print(
+            f"  ! none of the {len(hits)} hits came from a curated document — they "
+            "are session-transcript and palace-diary copies; the source may be "
+            "newer than its indexed copy"
+        )
     if data.get("fallback"):
         print(f"  ! fallback: {data['fallback']}")
     print(f"  via palace-daemon @ {_daemon_url()}")
@@ -607,6 +630,10 @@ def _print_hit_table(index: int, hit: dict, *, full: bool, use_color: bool) -> N
     meta = _format_hit_metadata(hit)
     print(f"      {_color(meta, _ANSI_DIM, use_color)}")
 
+    note = provenance_note(hit)
+    if note:
+        print(f"      {_color('⚠ ' + note, _ANSI_DIM, use_color)}")
+
     tags = hit.get("tags")
     if tags:
         tag_str = ", ".join(str(t) for t in tags)
@@ -622,6 +649,26 @@ def _print_hit_table(index: int, hit: dict, *, full: bool, use_color: bool) -> N
         print(f"      {_color(marker, _ANSI_DIM, use_color)}")
     print()
     print(f"  {'─' * 56}")
+
+
+def _provenance_tag(hit: dict) -> str:
+    """Short source-shape tag for ``--format compact`` (empty when unremarkable).
+
+    ``⟨transcript⟩`` — a quoted copy from a session transcript.
+    ``⟨stale⟩`` — the file on disk has been modified since it was indexed.
+
+    The kind is derived when the hit was not annotated, mirroring
+    ``provenance_note``'s fallback so ``compact`` is never the one renderer
+    that silently drops the caveat. Staleness is read only from the annotated
+    field: deciding it costs an ``os.stat`` per hit, and every path that
+    produces hits already stamps it.
+    """
+    flags = []
+    if (hit.get("source_kind") or source_kind(hit)) == "transcript":
+        flags.append("transcript")
+    if hit.get("source_stale") is True:
+        flags.append("stale")
+    return f" ⟨{','.join(flags)}⟩" if flags else ""
 
 
 def _print_hit_compact(index: int, hit: dict, *, use_color: bool) -> None:
@@ -645,6 +692,7 @@ def _print_hit_compact(index: int, hit: dict, *, use_color: bool) -> None:
     source = hit.get("source_file") or "?"
     if len(source) > 28:
         source = "…" + source[-27:]
+    source = f"{source}{_provenance_tag(hit)}"
     print(
         f"  [{index}] {wing}/{room}  {bar_part}  {sim_str}  "
         f"{_color(source, _ANSI_DIM, use_color)}  {first_line}"
@@ -2385,6 +2433,7 @@ def _daemon_search_fast(query: str, n_results: int, wing: str = None) -> dict | 
             hit["bm25_score"] = round(hit.pop("rank"), 3)
         if hit.get("source_file"):
             hit["source"] = hit["source_file"]
+    annotate(hits)
     return {"results": hits, "query": query, "source": "bm25-fast"}
 
 
@@ -2401,6 +2450,7 @@ def _daemon_search_hybrid(
     if data is None:
         return None
     data.setdefault("source", "hybrid")
+    annotate(data.get("results"))
     return data
 
 
@@ -2632,6 +2682,7 @@ def cmd_search(args):
 
             if data is None:
                 data = _call_daemon_tool("mempalace_search", arguments)
+                annotate(data.get("results") if isinstance(data, dict) else None)
         except DaemonError as e:
             if want_json:
                 _emit_json({"error": str(e), "source": "daemon", "query": args.query})

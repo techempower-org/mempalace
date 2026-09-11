@@ -1136,3 +1136,12 @@ class TestCapacityProbeCache:
             chroma_mod._hnsw_capacity_status_uncached = real
 
         assert chroma_mod._capacity_cache == {}, "the in-flight probe resurrected a reset entry"
+
+
+def test_bm25_fallback_stamps_source_provenance(palace_with_drawers):
+    """The sqlite BM25 fallback is a full search surface, not a degraded
+    preview — its hits carry the same ``source_kind`` every other arm does
+    (techempower-org/mempalace#451)."""
+    out = _bm25_only_via_sqlite("segfault chromadb", str(palace_with_drawers), n_results=5)
+    assert out["results"], "fixture should produce at least one hit"
+    assert all(r["source_kind"] == "file" for r in out["results"])

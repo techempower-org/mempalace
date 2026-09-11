@@ -35,6 +35,7 @@ from .palace import (
     get_collection,
     resolve_backend_name,
 )
+from .provenance import annotate as _annotate_provenance
 from .ratings import net_rating, rating_distance_adjustment
 from .recency import RECENCY_HALFLIFE_DAYS, recency_distance_adjustment
 
@@ -1535,7 +1536,7 @@ def _bm25_only_via_sqlite(  # noqa: C901 — fork tag/scope filters atop upstrea
             "source_file": source_file,
         },
         "total_before_filter": len(candidates),
-        "results": hits,
+        "results": _annotate_provenance(hits),
         "fallback": "bm25_only_via_sqlite",
         "fallback_reason": "vector_search_disabled",
     }
@@ -1717,7 +1718,7 @@ def _bm25_only_via_postgres(
         "query": query,
         "filters": {"wing": wing, "room": room},
         "total_before_filter": len(results),
-        "results": results,
+        "results": _annotate_provenance(results),
         "fallback": "bm25_only_via_postgres",
     }
 
@@ -2860,7 +2861,12 @@ def _search_result_envelope(
             "before": before,
         },
         "total_before_filter": candidates_fetched,
-        "results": hits,
+        # Provenance is stamped here so every caller of ``search_memories``
+        # — including MCP ``mempalace_search``, which is what the fleet
+        # actually reads — sees which kind of source a hit came from. The
+        # daemon result shape keeps a basename only, so ``source_kind`` is
+        # decidable there and ``source_stale`` is not (see provenance.py).
+        "results": _annotate_provenance(hits),
     }
     if date_window_active and candidates_fetched >= pool_size:
         result["date_filter_pool_truncated"] = True

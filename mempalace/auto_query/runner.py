@@ -33,6 +33,7 @@ from mempalace.auto_query.formatter import format_injection
 from mempalace.auto_query.router import DEPTH_KEEP, THRESHOLDS, pick_tool
 from mempalace.auto_query.signals import extract_signals
 from mempalace.config import MempalaceConfig
+from mempalace.provenance import source_kind
 
 
 # Daemon round-trip ceiling. Hybrid search on an 85K-drawer wing measured
@@ -426,9 +427,13 @@ def _is_curated(item):
 
     Those files are the memory agents actually reach for (fleet check-in,
     2026-09-03); in the palace they are recognizable by their source path.
+
+    Delegates to :func:`mempalace.provenance.source_kind` so the "what shape
+    of source is this?" predicate has exactly one definition — the ranking
+    here and the caveat the CLI renders must never disagree about which hits
+    are curated (techempower-org/mempalace#451).
     """
-    src = str(item.get("source_file") or item.get("source_path") or "")
-    return "/memory/" in src and src.endswith(".md")
+    return source_kind(item) == "memory"
 
 
 def _apply_filtered(mcp_result, filtered, keep):

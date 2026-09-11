@@ -1049,3 +1049,218 @@ class TestCmdRoomsDaemon:
         err = capsys.readouterr().err
         assert "busy_room" in err
         assert "17 drawers" in err
+
+
+# ── search provenance rendering (techempower-org/mempalace#451) ─────────
+
+
+class TestCmdSearchProvenance:
+    """Every search hit carries ``source_kind`` and, when the CLI can tell,
+    ``source_stale`` — and the renderers say so.
+
+    A transcript hit is a *quoted copy* of what someone said at the time. When
+    the curated document has since corrected the claim (2g/CLAUDE.md carried a
+    REFUTED banner for two days while search kept returning the transcript
+    that first stated it), the reader needs to see which shape they are
+    holding before they act on it.
+    """
+
+    @staticmethod
+    def _args(fmt="json", results=2):
+        return argparse.Namespace(
+            query="five handsets refuse the network",
+            wing="2g",
+            room=None,
+            results=results,
+            limit=None,
+            palace=None,
+            mode="auto",
+            tags=None,
+            format=fmt,
+            json=False,
+            quiet=False,
+        )
+
+    @staticmethod
+    def _fast_payload():
+        """The shape GET /search/fast returns: basename-only source files."""
+        return {
+            "results": [
+                {
+                    "id": "drawer_2g_general_aaa",
+                    "wing": "2g",
+                    "room": "general",
+                    "snippet": "FIVE HANDSETS REFUSE THIS NETWORK",
+                    "source_file": "5f9a-1a2b.jsonl",
+                    "created_at": "2026-09-03T23:14:00",
+                    "rank": 0.4812,
+                },
+                {
+                    "id": "drawer_2g_general_bbb",
+                    "wing": "2g",
+                    "room": "general",
+                    "snippet": "the fault is inside their modems",
+                    "source_file": "7c21-8e06.jsonl",
+                    "created_at": "2026-09-04T01:02:00",
+                    "rank": 0.4501,
+                },
+            ]
+        }
+
+    def _run(self, fmt, capsys):
+        from mempalace import cli
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_rest", return_value=self._fast_payload()),
+        ):
+            try:
+                cli.cmd_search(self._args(fmt=fmt))
+            except SystemExit:
+                pass
+        return capsys.readouterr()
+
+    def test_json_output_carries_source_kind(self, capsys):
+        payload = json.loads(self._run("json", capsys).out)
+        assert [h["source_kind"] for h in payload["results"]] == ["transcript", "transcript"]
+
+    def test_json_omits_source_stale_for_basename_only_paths(self, capsys):
+        """A daemon hit has no directory, so staleness is undecidable — and an
+        undecidable answer must not be rendered as "not stale"."""
+        payload = json.loads(self._run("json", capsys).out)
+        assert all("source_stale" not in h for h in payload["results"])
+
+    def test_table_output_prints_the_transcript_caveat(self, capsys):
+        out = self._run("table", capsys).out
+        assert "⚠ quoted copy from a session transcript" in out
+
+    def test_table_header_warns_when_nothing_curated_matched(self, capsys):
+        out = self._run("table", capsys).out
+        assert "! all 2 hits are session-transcript copies" in out
+
+    def test_compact_output_tags_transcript_hits(self, capsys):
+        out = self._run("compact", capsys).out
+        assert out.count("⟨transcript⟩") == 2
+
+    def test_mcp_envelope_route_is_annotated_too(self, capsys):
+        """``--mode`` values the REST fast path can't serve fall through to the
+        MCP envelope; ``--format json`` must carry the fields there as well."""
+        from mempalace import cli
+
+        envelope = {
+            "results": [
+                {
+                    "id": "diary_2g_20260906_1",
+                    "wing": "2g",
+                    "room": "general",
+                    "text": "checkpoint",
+                    "source_file": None,
+                    "created_at": "2026-09-06T10:00:00",
+                }
+            ]
+        }
+        args = self._args(fmt="json")
+        args.room = "general"  # forces _daemon_search_auto to decline
+        args.mode = "auto"
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_tool", return_value=envelope),
+        ):
+            with pytest.raises(SystemExit):
+                cli.cmd_search(args)
+
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["results"][0]["source_kind"] == "diary"
+
+    def test_header_line_absent_when_a_curated_hit_is_present(self, capsys):
+        """One curated document in the set means the reader has somewhere
+        authoritative to look — no blanket warning."""
+        from mempalace import cli
+
+        payload = self._fast_payload()
+        payload["results"][1]["source_file"] = "user_jp_profile.md"
+        payload["results"][1]["source_path"] = "/home/jp/.claude/x/memory/user_jp_profile.md"
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_rest", return_value=payload),
+        ):
+            try:
+                cli.cmd_search(self._args(fmt="table"))
+            except SystemExit:
+                pass
+
+        out = capsys.readouterr().out
+        assert "session-transcript copies" not in out
+        assert "⚠ quoted copy from a session transcript" in out
+
+    def test_compact_tag_derives_kind_for_an_unannotated_hit(self):
+        """``table`` derives a missing kind via ``provenance_note``; ``compact``
+        must not be the one renderer that silently drops the caveat."""
+        from mempalace import cli
+
+        assert cli._provenance_tag({"source_file": "abc.jsonl"}) == " ⟨transcript⟩"
+        assert cli._provenance_tag({"source_file": "/p/CLAUDE.md"}) == ""
+
+    def test_compact_tag_reports_both_flags(self):
+        from mempalace import cli
+
+        hit = {"source_kind": "transcript", "source_stale": True}
+        assert cli._provenance_tag(hit) == " ⟨transcript,stale⟩"
+
+    def test_header_warns_when_only_transcripts_and_diaries_matched(self, capsys):
+        """The real #451 query returns transcripts plus a palace diary chunk.
+
+        Neither shape is a document anyone maintains, so a later correction
+        could not be in this result set either — the warning has to fire here
+        too, with wording that does not overclaim "all transcripts".
+        """
+        from mempalace import cli
+
+        payload = self._fast_payload()
+        payload["results"][1] = {
+            "id": "diary_2g_20260906_074548_chunk_000020",
+            "wing": "2g",
+            "room": "diary",
+            "snippet": "OVERTURNED: five handsets refused ONE CELL",
+            "source_file": None,
+            "rank": 0.4501,
+        }
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_rest", return_value=payload),
+        ):
+            try:
+                cli.cmd_search(self._args(fmt="table"))
+            except SystemExit:
+                pass
+
+        out = capsys.readouterr().out
+        assert "! none of the 2 hits came from a curated document" in out
+        assert "all 2 hits are session-transcript copies" not in out
+
+    def test_quiet_suppresses_the_header_but_keeps_per_hit_notes(self, capsys):
+        from mempalace import cli
+
+        args = self._args(fmt="table")
+        args.quiet = True
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._call_daemon_rest", return_value=self._fast_payload()),
+        ):
+            try:
+                cli.cmd_search(args)
+            except SystemExit:
+                pass
+
+        out = capsys.readouterr().out
+        assert "session-transcript copies" not in out
+        assert "⚠ quoted copy from a session transcript" in out
