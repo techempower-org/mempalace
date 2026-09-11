@@ -26,7 +26,7 @@ entries:
   - id: search-source-provenance
     date: 2026-09-10
     bucket: Added
-    commit: 28518f2
+    commit: 5632dc2
     area: Search
     summary: "Every search hit carries source_kind (+ staleness when decidable) and the CLI renders the caveat"
     body: |
