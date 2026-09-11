@@ -1,0 +1,58 @@
+seq: 141
+id: precheck-postgres-prune-status-compress-mined
+date: '2026-09-11'
+bucket: Fixed
+commit: HEAD
+fork_pr: 481
+area: CLI
+summary: prune / status --json / compress / mined resolve the backend before any local-dir
+  test, so a Postgres palace is no longer refused
+body: |
+  #418 removed a local-directory precheck from `purge` and `sync`. The same
+  check survived in two more places, so four more commands still refused a
+  Postgres palace: `palace._open_collection_or_explain` — the shared "open it
+  or explain why not" helper, whose State A (`not os.path.isdir`) and State B
+  (`detect_backend_for_path() is None`) both ran before the backend was
+  opened — and `cmd_prune` plus `cmd_mined`, which each carried their own
+  `contains_palace_database` (a chroma-only `chroma.sqlite3` test) and a
+  hardcoded `ChromaBackend`.
+
+  Measured on a sidecar-only palace with `MEMPALACE_BACKEND=postgres` and a
+  DSN pointing at a closed port, where a working command must fail with
+  "connection refused": `prune --stale-days 99999` went from "No palace
+  found", exit 0, to "connection refused", exit 1; `compress --dry-run`,
+  `status --json` and `mined` likewise stopped asserting a missing database
+  that was never supposed to be there. `status --json` still exits 2 — the
+  palace genuinely is unavailable — but its hint now names the real reason.
+
+  All of them resolve the backend first and run the directory states only for
+  a local-mode store, keyed off `backend_stores_data_locally`. State B is
+  gated rather than removed: its purpose is that some local backends create
+  their DB file on first open, so probing one there would mutate the
+  filesystem during what is meant to be a read-only inspection — a hazard
+  that does not exist for a service-backed store, and a test asserts the
+  opener is not called in that state so the protection cannot be lost
+  quietly. Fixing the shared seam covered `_emit_local_status_json`,
+  `cmd_compress`, miner status and searcher's local fallback at once.
+
+  `prune` and `mined` additionally open through `palace.get_collection` (so
+  neither rejects a local `sqlite_exact` palace for not being chroma) and
+  name their target on every outcome — `Target: <palace> (<backend>)` in
+  text, `palace` and `backend` keys in every `--json` payload including the
+  error ones. `mined` was found by an AST audit of every `cmd_*` in review;
+  its daemon-strict route hides the local path on a daemon host, so the
+  refusal only surfaced with `--palace` or daemon-strict off. Both of its
+  output paths now exit 2, because the `--json` path always did and one
+  condition must not hand a text caller and a JSON caller different codes.
+
+  One bug was introduced and caught while extracting `mined`'s sequence into
+  a helper: the refusal renderer was chosen by whether the backend was known,
+  so a connection error — which knows its backend — printed "No palace found
+  at <dir>" and hid the real cause. A refusal naming the wrong reason is the
+  same defect family, and the unit tests could not see it because the JSON
+  payload carries the hint either way; the real-CLI probe against a closed
+  port found it. The renderer is now an explicit argument with its own test.
+tests: '21 (test_cli_precheck_postgres.py: TestOpenCollectionOrExplainResolvesBackendFirst x5, TestPruneOnServerBackend x6, TestMinedOnServerBackend x6, TestStatusJsonOnServerBackend x2, TestCompressOnServerBackend x1; plus 3 existing contract updates)'
+files:
+- mempalace/palace.py
+- mempalace/cli.py

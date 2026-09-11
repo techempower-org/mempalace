@@ -290,6 +290,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| prune / status --json / compress / mined resolve the backend before any local-dir test, so a Postgres palace is no longer refused | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | Hallways move from a 1 GB monolithic JSON file to an opt-in postgres table | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | test_init's sys.path assertion resolves entries against cwd, so it stops failing in every linked worktree | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | Fork-change entries split one-per-file; entry shas verified by ancestry and resolved after merge | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
