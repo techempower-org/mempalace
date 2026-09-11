@@ -802,68 +802,138 @@ def create_tunnel(
     target_wing = _require_name(target_wing, "target_wing")
     target_room = _require_name(target_room, "target_room")
 
-    # Single MempalaceConfig() per call — reused by _get_tunnel_file /
-    # _load_tunnels / _save_tunnels below. Each MempalaceConfig() re-reads
-    # mempalace.yaml from disk; before this change the helpers each
-    # instantiated their own, triggering several redundant disk reads per
-    # create_tunnel call (flagged by gemini-code-assist on #1469).
-    config = config or MempalaceConfig()
+    return create_tunnels(
+        [
+            {
+                "source_wing": source_wing,
+                "source_room": source_room,
+                "target_wing": target_wing,
+                "target_room": target_room,
+                "label": label,
+                "source_drawer_id": source_drawer_id,
+                "target_drawer_id": target_drawer_id,
+                "kind": kind,
+            }
+        ],
+        config=config,
+    )[0]
 
-    # Validate room existence for explicit tunnels only. Use the verbatim wing
-    # slugs here so #1504's hyphen-preserving write path remains intact.
-    if kind == "explicit":
-        col = _get_collection(config)
-        if not _check_room_exists(source_wing, source_room, col):
-            raise ValueError(f"Source room '{source_room}' does not exist in wing '{source_wing}'")
-        if not _check_room_exists(target_wing, target_room, col):
-            raise ValueError(f"Target room '{target_room}' does not exist in wing '{target_wing}'")
 
-    tunnel_id = _canonical_tunnel_id(source_wing, source_room, target_wing, target_room)
+_TUNNEL_DYNAMICS_FIELDS = ("strength", "stability", "last_activated", "access_count")
 
+
+def _build_tunnel(spec: dict) -> dict:
+    """The tunnel record for one spec, before it meets what is on disk."""
     tunnel = {
-        "id": tunnel_id,
-        "source": {"wing": source_wing, "room": source_room},
-        "target": {"wing": target_wing, "room": target_room},
-        "label": label,
-        "kind": kind,
+        "id": _canonical_tunnel_id(
+            spec["source_wing"], spec["source_room"], spec["target_wing"], spec["target_room"]
+        ),
+        "source": {"wing": spec["source_wing"], "room": spec["source_room"]},
+        "target": {"wing": spec["target_wing"], "room": spec["target_room"]},
+        "label": spec.get("label", ""),
+        "kind": spec.get("kind", "explicit"),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-    if source_drawer_id:
-        tunnel["source"]["drawer_id"] = source_drawer_id
-    if target_drawer_id:
-        tunnel["target"]["drawer_id"] = target_drawer_id
+    if spec.get("source_drawer_id"):
+        tunnel["source"]["drawer_id"] = spec["source_drawer_id"]
+    if spec.get("target_drawer_id"):
+        tunnel["target"]["drawer_id"] = spec["target_drawer_id"]
+    return tunnel
+
+
+def _apply_tunnel(spec: dict, tunnels: list, by_id: dict) -> dict:
+    """Merge one spec into an in-memory tunnel list. No I/O.
+
+    Exactly the create-or-refresh rule the per-call path always had: an
+    existing tunnel with the same canonical id keeps its ``created_at`` and
+    its accumulated L7 dynamics, gains an ``updated_at``, and is updated in
+    place; anything else is appended with dynamics defaults.
+
+    ``by_id`` makes the lookup O(1). The per-call path rescanned the whole
+    list for every tunnel, so a batch that reused it would trade one
+    quadratic term for another.
+    """
+    tunnel = _build_tunnel(spec)
+    existing = by_id.get(tunnel["id"])
+    if existing is not None:
+        # Preserve original creation timestamp on label updates.
+        tunnel["created_at"] = existing.get("created_at", tunnel["created_at"])
+        tunnel["updated_at"] = datetime.now(timezone.utc).isoformat()
+        # Preserve L7 dynamics across re-creation events. Without this, a
+        # label update (or any rebuild) would reset the connection's
+        # strength / stability / access_count — defeating the
+        # living-connection layer. Backfill any still-missing fields so
+        # legacy records also pick up defaults on next touch.
+        tunnel.update({k: existing[k] for k in _TUNNEL_DYNAMICS_FIELDS if k in existing})
+        initialize_dynamics_fields(tunnel)
+        existing.clear()
+        existing.update(tunnel)
+        return existing
+    initialize_dynamics_fields(tunnel)
+    tunnels.append(tunnel)
+    by_id[tunnel["id"]] = tunnel
+    return tunnel
+
+
+def create_tunnels(specs: list, config=None) -> list:
+    """Create or refresh many tunnels with ONE load and ONE save.
+
+    ``create_tunnel`` persists on every call — a full ``_load_tunnels`` and a
+    full atomic ``_save_tunnels`` each time — and it is called from inside the
+    per-entity loop of :func:`entity_tunnels_for_wing` and the per-wing loop
+    of :func:`compute_topic_tunnels`. N tunnels therefore cost N loads and N
+    rewrites, and the per-tunnel cost grows with the tunnels already on disk.
+    Measured on a throwaway palace: 100 tunnels 0.61 s, 1,000 tunnels 11.5 s,
+    2,000 tunnels 37.9 s — O(n²), extrapolating to ~16 min at 10K tunnels,
+    which is the 29-minute mine reported on #474. The file was 837 KB at
+    2,000 tunnels; this was never a big-file problem.
+
+    Batching makes it O(n). Each spec is a dict of the same arguments
+    ``create_tunnel`` takes. Results come back in spec order; a spec whose
+    endpoints resolve to a tunnel already in the batch refreshes it rather
+    than duplicating it, exactly as two sequential calls would.
+
+    Room validation for ``kind="explicit"`` runs for the whole batch BEFORE
+    the lock is taken, so a rejected batch leaves the file untouched rather
+    than half-written.
+    """
+    if not specs:
+        return []
+
+    # Single MempalaceConfig() for the batch — reused by _get_tunnel_file /
+    # _load_tunnels / _save_tunnels below. Each MempalaceConfig() re-reads
+    # mempalace.yaml from disk; before this the helpers each instantiated
+    # their own, triggering redundant disk reads per call (flagged by
+    # gemini-code-assist on #1469).
+    config = config or MempalaceConfig()
+
+    # Validate room existence for explicit tunnels only, and up front. Use the
+    # verbatim wing slugs here so #1504's hyphen-preserving write path remains
+    # intact. One _get_collection for the batch, not one per tunnel.
+    explicit = [s for s in specs if s.get("kind", "explicit") == "explicit"]
+    if explicit:
+        col = _get_collection(config)
+        for spec in explicit:
+            if not _check_room_exists(spec["source_wing"], spec["source_room"], col):
+                raise ValueError(
+                    f"Source room '{spec['source_room']}' does not exist "
+                    f"in wing '{spec['source_wing']}'"
+                )
+            if not _check_room_exists(spec["target_wing"], spec["target_room"], col):
+                raise ValueError(
+                    f"Target room '{spec['target_room']}' does not exist "
+                    f"in wing '{spec['target_wing']}'"
+                )
 
     # Serialize the load → mutate → save cycle. Without this, two concurrent
-    # create_tunnel calls can both read the same snapshot and the later
-    # writer silently drops the earlier writer's tunnel.
+    # writers can both read the same snapshot and the later one silently
+    # drops the earlier one's tunnels.
     with mine_lock(_get_tunnel_file(config)):
         tunnels = _load_tunnels(config)
-        for existing in tunnels:
-            if existing.get("id") == tunnel_id:
-                # Preserve original creation timestamp on label updates.
-                tunnel["created_at"] = existing.get("created_at", tunnel["created_at"])
-                tunnel["updated_at"] = datetime.now(timezone.utc).isoformat()
-                # Preserve L7 dynamics fields across re-creation events.
-                # Without this, a label update (or any re-create) would
-                # reset the connection's strength / stability / access_count
-                # — defeating the living-connection layer. Backfill any
-                # still-missing fields so legacy records also pick up
-                # defaults on next touch. Per PR #1578 review
-                # (gemini-code-assist, medium priority): use dict-update
-                # with a comprehension so the field list lives in one place
-                # and future schema expansion can't drop a field by accident.
-                _dyn_fields = ("strength", "stability", "last_activated", "access_count")
-                tunnel.update({k: existing[k] for k in _dyn_fields if k in existing})
-                initialize_dynamics_fields(tunnel)
-                existing.clear()
-                existing.update(tunnel)
-                _save_tunnels(tunnels, config)
-                return existing
-        # Brand-new tunnel — initialize dynamics from defaults.
-        initialize_dynamics_fields(tunnel)
-        tunnels.append(tunnel)
+        by_id = {t.get("id"): t for t in tunnels if isinstance(t, dict) and t.get("id")}
+        results = [_apply_tunnel(spec, tunnels, by_id) for spec in specs]
         _save_tunnels(tunnels, config)
-    return tunnel
+    return results
 
 
 def list_tunnels(wing: str = None, include_passive: bool = False, col=None, config=None):
@@ -1128,7 +1198,7 @@ def compute_topic_tunnels(
             wing_topics[normalize_wing_name(wing.strip())] = bucket
 
     wings = sorted(wing_topics.keys())
-    created: list[dict] = []
+    specs: list[dict] = []
     for i, wa in enumerate(wings):
         topics_a = wing_topics[wa]
         for wb in wings[i + 1 :]:
@@ -1142,16 +1212,18 @@ def compute_topic_tunnels(
                 # are valid; this just keeps the displayed room consistent.
                 topic_name = topics_a[key] if topics_a[key] else topics_b[key]
                 room = topic_room(topic_name)
-                tunnel = create_tunnel(
-                    source_wing=wa,
-                    source_room=room,
-                    target_wing=wb,
-                    target_room=room,
-                    label=f"{label_prefix}: {topic_name}",
-                    kind="topic",
-                    config=config,
+                specs.append(
+                    {
+                        "source_wing": wa,
+                        "source_room": room,
+                        "target_wing": wb,
+                        "target_room": room,
+                        "label": f"{label_prefix}: {topic_name}",
+                        "kind": "topic",
+                    }
                 )
-                created.append(tunnel)
+    # One load + one save for the whole pass (#474) -- see create_tunnels.
+    created = create_tunnels(specs, config=config)
     return created
 
 
@@ -1261,7 +1333,7 @@ def entity_tunnels_for_wing(
     if not entity_wings:
         return []
 
-    created: list = []
+    specs: list = []
     # Stable entity order so tunnels materialize deterministically across
     # runs — matters for tests and for diff-able tunnels.json files.
     for entity in sorted(entity_wings.keys()):
@@ -1275,14 +1347,18 @@ def entity_tunnels_for_wing(
         for other_norm in other_wings_norm:
             other_display = wings_for_entity[other_norm]
             room = f"entity:{entity}"
-            tunnel = create_tunnel(
-                source_wing=own_wing_display,
-                source_room=room,
-                target_wing=other_display,
-                target_room=room,
-                label=f"{label_prefix}: {entity}",
-                kind="entity",
-                config=config,
+            specs.append(
+                {
+                    "source_wing": own_wing_display,
+                    "source_room": room,
+                    "target_wing": other_display,
+                    "target_room": room,
+                    "label": f"{label_prefix}: {entity}",
+                    "kind": "entity",
+                }
             )
-            created.append(tunnel)
+    # One load + one save for the whole wing (#474). Persisting per tunnel
+    # made this O(n^2): measured 100 tunnels 0.61 s, 1,000 11.5 s, 2,000
+    # 37.9 s, extrapolating to ~16 min at 10K.
+    created = create_tunnels(specs, config=config)
     return created

@@ -153,6 +153,33 @@ Note:
     time so legacy underscore data and explicit-flag hyphen data both
     match queries in either form. See #1504.
 
+### `create_tunnels`
+
+```python
+def create_tunnels(specs: list, config = None) -> list
+```
+
+Create or refresh many tunnels with ONE load and ONE save.
+
+``create_tunnel`` persists on every call — a full ``_load_tunnels`` and a
+full atomic ``_save_tunnels`` each time — and it is called from inside the
+per-entity loop of :func:`entity_tunnels_for_wing` and the per-wing loop
+of :func:`compute_topic_tunnels`. N tunnels therefore cost N loads and N
+rewrites, and the per-tunnel cost grows with the tunnels already on disk.
+Measured on a throwaway palace: 100 tunnels 0.61 s, 1,000 tunnels 11.5 s,
+2,000 tunnels 37.9 s — O(n²), extrapolating to ~16 min at 10K tunnels,
+which is the 29-minute mine reported on #474. The file was 837 KB at
+2,000 tunnels; this was never a big-file problem.
+
+Batching makes it O(n). Each spec is a dict of the same arguments
+``create_tunnel`` takes. Results come back in spec order; a spec whose
+endpoints resolve to a tunnel already in the batch refreshes it rather
+than duplicating it, exactly as two sequential calls would.
+
+Room validation for ``kind="explicit"`` runs for the whole batch BEFORE
+the lock is taken, so a rejected batch leaves the file untouched rather
+than half-written.
+
 ### `list_tunnels`
 
 ```python
