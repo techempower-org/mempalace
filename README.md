@@ -291,6 +291,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 | Description | Upstream PR | Fork commit |
 |---|---|---|
 | purge / prune / mined share one open-and-refuse sequence and one exit-code contract | — | `HEAD` — pending resolution |
+| Entry shas resolve from the commit that added the entry file; strict check rejects an unresolved placeholder on main | — | `HEAD` — pending resolution |
 | KG write-through commits once per batch instead of once per drawer | — | `HEAD` — pending resolution |
 | `doctor --curated` reports curated docs newer than what the palace indexed | — | `HEAD` — pending resolution |
 | Curated hits order above the transcripts that quote them; diary hits say they have no source | — | `HEAD` — pending resolution |

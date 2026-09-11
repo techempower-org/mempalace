@@ -204,6 +204,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **Entry shas resolve from the commit that added the entry file; strict check rejects an unresolved placeholder on main** (`HEAD` — pending resolution)
+  Three gaps in the pipeline #480 introduced, each found by a different lane.
+
+  **`commit: HEAD` could not be resolved from `fork_pr` alone.** A lane
+  cannot know its own PR number while writing the entry — the same
+  chicken-and-egg as the sha — so #480's own entry shipped with no
+  `fork_pr` at all. Resolution is now primarily `git log --follow
+  --diff-filter=A` over the entry's own file: the commit that ADDED it is
+  the squash commit by construction, since the file arrives with the pull
+  request. Deterministic, offline, needs nothing from the author, and
+  immune to a squash subject reworded at merge time, which defeated 4 of
+  the 27 cases in the #472 sweep. `fork_pr` becomes a cross-check — a
+  disagreement refuses to resolve — and an unverifiable one is reported,
+  since GitHub's next number is not predictable and a guess is a
+  confidently wrong field.
+
+  ⚠️ The mechanism is applied ONLY to an entry whose commit is literally
+  `HEAD`. Every entry file predating the one-file-per-entry split was
+  created by the split's own commit, so asking "what added this file"
+  about an already-resolved entry returns the migration commit — it would
+  rewrite 137 correct historical shas to one wrong value that is an
+  ancestor of main, and would therefore pass the ancestry check forever.
+
+  **check-docs caught a wrong sha but was blind to a missing one.** Eight
+  entries carried `commit: HEAD` on main and step 2b saw none of them,
+  because the enumeration skipped the placeholder before the ancestry
+  predicate ever ran (and `git merge-base --is-ancestor HEAD HEAD` exits 0
+  regardless). `--strict-resolved` / `STRICT_RESOLVED=1` now rejects the
+  literal, wired to push-to-main only: a pull request legitimately carries
+  `HEAD` because the commit it will name does not exist yet.
+
+  **An unresolved entry rendered as a live link.**
+  `https://github.com/techempower-org/mempalace/commit/HEAD` is a valid
+  URL that resolves to whatever is at main's tip, so eight changelog links
+  and seven README rows pointed at an unrelated commit while looking
+  exactly like real references. They now render as plain text.
+
+  *Tests:* 30 (TestResolveHeadByFileAdd x6, TestFileAddAgainstRealGit x4, TestIncludeHead x3, plus loader/renderer/resolver coverage)
+  *Files:* `scripts/maintain-fork-changes.py`, `scripts/fork_changes.py`, `scripts/render-docs.py`, `scripts/check-docs.sh`, `.github/workflows/check-docs.yml`, `docs/fork-changes/README.md`
+
+
 - **Wake-up L1 stops leading with harness prompt-echo, diff fragments and tool-call receipts** (`HEAD` — pending resolution)
   #436 taught L1 to skip diary checkpoints, session manifests and compaction
   summaries. None of those are what it actually led with. Measured on the live
