@@ -129,6 +129,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
+- **purge / prune / mined share one open-and-refuse sequence and one exit-code contract** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  `purge`, `prune` and `mined` each grew their own *resolve backend → gate
+  the local precheck → open the drawers* sequence, across #418 and #459, one
+  at a time. The policy was identical every time; only the refusal messages
+  and the exit codes drifted:
+
+      condition                 purge    prune    mined
+      backend unresolvable        2        2        2
+      no local database           0        0        2
+      unreachable backend         1        1        2
+
+  The codes were never a matter of taste. `cli.py` has carried a contract
+  since #44 — 0 success, 1 no results, 2 palace unavailable, 64 bad args —
+  and every row above is "palace unavailable", so every cell is 2. The two
+  commands exiting **0** on a missing database were reporting a refusal as a
+  success: the defect #418 and #459 removed from the prose, still alive in
+  the exit status after both.
+
+  `_open_drawers_or_refuse` now owns the sequence and returns
+  `(collection, backend_name, target_label)`, so the target string stops
+  being duplicated too; `cli.py` loses 140 lines and gains 54. `1` keeps
+  meaning exactly what the contract says — the operation ran and selected
+  nothing, which is purge's zero-match case and nothing else. Purge's
+  post-open query and delete failures move 1 → 2 on the same reading, since
+  an operation that could not complete against the palace did not "select
+  nothing".
+
+  The new tests are a TABLE across all three commands rather than nine
+  hand-written cases, because the failure being prevented is divergence:
+  adding a command without adding it to the table should be the visible
+  omission. One superseded assertion turned out never to have tested what it
+  claimed — `test_prune_json_reports_the_target` omitted the backend env, so
+  it resolved chroma against a sidecar-only directory and asserted on the
+  refusal payload while its name promised the success one. It passed for the
+  wrong reason until this change made that refusal exit 2.
+
+  *Tests:* 22 (test_cli_palace_exit_codes.py: palace-unavailable table x18, no-results x2, json envelope x2; plus 4 superseded assertions updated)
+  *Files:* `mempalace/cli.py`
+
+
 - **Fork-change entries split one-per-file; entry shas verified by ancestry and resolved after merge** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
   Every PR in a wave inserted at the top of `entries:` in one
   `docs/fork-changes.yaml`, so every PR conflicted with every other one on that
