@@ -1,0 +1,51 @@
+seq: 143
+id: cli-tunnels-rebuild
+date: '2026-09-11'
+bucket: Added
+commit: HEAD
+fork_pr: 486
+area: CLI
+summary: "mempalace tunnels --rebuild --wing W — refresh the derived graph on purpose"
+body: |
+  After the #474 wave the derived graph — cross-wing topic tunnels,
+  within-wing hallways, cross-wing entity tunnels — refreshes **only as a side
+  effect** of a full-directory mine that actually files drawers.
+  palace-daemon#262 skips unchanged transcripts, the zero-upsert short-circuit
+  skips mines that filed nothing, ``--no-tunnels`` skips it explicitly, and
+  palace-daemon#264 has the daemon skip it for single-file and
+  ``.claude/projects/*/memory`` targets. Each of those is right on its own;
+  together they left no way to say "refresh the graph" deliberately.
+
+  ``mempalace tunnels --rebuild --wing W`` is that way, and it also closes a
+  gap the skips open: ``_compute_entity_tunnels_for_wing`` reads EVERY wing's
+  hallways, so a cross-wing tunnel can become available because wing B was
+  mined while wing A — whose drawers did not change — never picks it up.
+
+  It runs locally and, unlike the listing path, needs no daemon. Under
+  daemon-strict with no ``--palace`` it **refuses** (exit 2, naming the daemon
+  URL): rebuilding the local palace there would print +0/+0/+0 and exit 0, so
+  an operator who ran it *because* the graph was stale would be told it is
+  fresh. It takes ``mine_palace_lock`` — hallways are a whole-file
+  load/modify/save that carries other wings forward from its own load, so a
+  rebuild racing a drain mine silently drops one side's records, last
+  ``os.replace`` winning. It opens the collection with ``create=False`` so a
+  typo'd ``--palace`` cannot materialize an empty palace and then report
+  success against it, and it normalizes the wing the way the miner does
+  (``My-Project`` -> ``my_project``), since a raw slug matches no drawers and
+  prints a confident +0.
+
+  The three steps moved into ``miner.recompute_derived_graph``, which the
+  post-mine block now calls too — one definition, so a fourth derived step
+  cannot land in one caller and be forgotten in the other. Per-step fault
+  tolerance lives there; failures come back keyed by step and each caller
+  formats its own output.
+
+  There is deliberately no ``--all``. A whole-palace sweep pays
+  ``compute_hallways_for_wing``'s full load-and-rewrite of ``hallways.json``
+  once per wing: extrapolated from a measured 396 MB point (load 3.1 s, dump
+  8.4 s) to the 1.2 GB production file, ~44 s per wing and ~37 min across 50
+  wings — recreating the problem this verb exists to fix. The flag is accepted
+  and refused with that reason rather than left to a bare argparse error, and
+  it becomes cheap once hallways leave the monolithic JSON (#442).
+tests: "16 (test_cli_tunnels_rebuild)"
+files: [mempalace/cli.py, mempalace/miner.py]
