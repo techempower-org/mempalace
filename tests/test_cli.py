@@ -161,7 +161,12 @@ def test_cmd_purge_requires_filter(mock_config_cls, capsys, tmp_path):
 
 @patch("mempalace.cli.MempalaceConfig")
 def test_cmd_purge_no_matches(mock_config_cls, capsys, tmp_path):
-    """When the filter matches zero drawers, purge exits cleanly."""
+    """A zero-match purge is loud and exits non-zero (#418).
+
+    It used to print a one-line notice and exit 0 — the same shape a
+    successful purge has — so a purge aimed at the wrong palace was
+    indistinguishable from one that worked.
+    """
     palace = tmp_path / "palace"
     palace.mkdir()
     (palace / "chroma.sqlite3").write_text("")
@@ -170,12 +175,15 @@ def test_cmd_purge_no_matches(mock_config_cls, capsys, tmp_path):
 
     mock_col = MagicMock()
     mock_col.get.return_value = {"ids": []}
-    mock_backend = MagicMock()
-    mock_backend.return_value.get_collection.return_value = mock_col
-    with patch("mempalace.backends.chroma.ChromaBackend", mock_backend):
+    with (
+        patch("mempalace.palace.get_collection", return_value=mock_col),
+        pytest.raises(SystemExit) as exc,
+    ):
         cmd_purge(args)
+    assert exc.value.code == 1
     out = capsys.readouterr().out
-    assert "No drawers found matching" in out
+    assert "No drawers matched" in out
+    assert str(palace) in out
     mock_col.delete.assert_not_called()
 
 
@@ -190,9 +198,10 @@ def test_cmd_purge_wing_and_room_uses_and_filter(mock_config_cls, tmp_path):
 
     mock_col = MagicMock()
     mock_col.get.return_value = {"ids": []}
-    mock_backend = MagicMock()
-    mock_backend.return_value.get_collection.return_value = mock_col
-    with patch("mempalace.backends.chroma.ChromaBackend", mock_backend):
+    with (
+        patch("mempalace.palace.get_collection", return_value=mock_col),
+        pytest.raises(SystemExit),  # zero match exits 1 (#418)
+    ):
         cmd_purge(args)
     first_call = mock_col.get.call_args_list[0]
     assert first_call.kwargs["where"] == {"$and": [{"wing": "myproj"}, {"room": "drafts"}]}
@@ -247,9 +256,10 @@ def test_cmd_purge_source_file_only(mock_config_cls, tmp_path):
 
     mock_col = MagicMock()
     mock_col.get.return_value = {"ids": []}
-    mock_backend = MagicMock()
-    mock_backend.return_value.get_collection.return_value = mock_col
-    with patch("mempalace.backends.chroma.ChromaBackend", mock_backend):
+    with (
+        patch("mempalace.palace.get_collection", return_value=mock_col),
+        pytest.raises(SystemExit),  # zero match exits 1 (#418)
+    ):
         cmd_purge(args)
     first_call = mock_col.get.call_args_list[0]
     assert first_call.kwargs["where"] == {"source_file": "/abs/path/to/note.md"}
@@ -266,9 +276,10 @@ def test_cmd_purge_source_file_with_wing_uses_and_filter(mock_config_cls, tmp_pa
 
     mock_col = MagicMock()
     mock_col.get.return_value = {"ids": []}
-    mock_backend = MagicMock()
-    mock_backend.return_value.get_collection.return_value = mock_col
-    with patch("mempalace.backends.chroma.ChromaBackend", mock_backend):
+    with (
+        patch("mempalace.palace.get_collection", return_value=mock_col),
+        pytest.raises(SystemExit),  # zero match exits 1 (#418)
+    ):
         cmd_purge(args)
     first_call = mock_col.get.call_args_list[0]
     assert first_call.kwargs["where"] == {
@@ -2185,7 +2196,10 @@ def test_cmd_sync_no_palace_dir(mock_config_cls, tmp_path, capsys):
     palace_path = tmp_path / "nonexistent"
     mock_config_cls.return_value.palace_path = str(palace_path)
     args = argparse.Namespace(palace=None, dir=None, root=[], wing=None, dry_run=False)
-    cmd_sync(args)
+    # MempalaceConfig is a MagicMock here, so `_daemon_strict()` would read
+    # truthy and route to the daemon; pin it off to exercise the local path.
+    with patch("mempalace.cli._daemon_strict", return_value=False):
+        cmd_sync(args)
     captured = capsys.readouterr()
     assert "No palace found" in captured.out + captured.err
 
@@ -2198,7 +2212,8 @@ def test_cmd_sync_palace_dir_no_db(mock_config_cls, tmp_path, capsys):
 
     mock_config_cls.return_value.palace_path = str(tmp_path)
     args = argparse.Namespace(palace=None, dir=None, root=[], wing=None, dry_run=False)
-    cmd_sync(args)
+    with patch("mempalace.cli._daemon_strict", return_value=False):
+        cmd_sync(args)
     captured = capsys.readouterr()
     assert "has no chroma.sqlite3 yet" in captured.out + captured.err
     # Side-effect-free: backend not invoked.

@@ -547,6 +547,42 @@ def backend_requires_single_writer(backend_name: str) -> bool:
     return normalized not in _MULTI_PROCESS_WRITER_BACKENDS
 
 
+def backend_stores_data_locally(backend_name: str) -> bool:
+    """Return whether this backend keeps the drawers in the palace directory.
+
+    Answered from the ``local_mode`` / ``server_mode`` capability tokens every
+    in-tree backend declares, so a plugin backend gets the right answer by
+    declaring the token rather than by being added to a list here.
+
+    Callers use this to decide whether a "does the palace directory hold a
+    database?" precheck means anything. On a service-backed palace it does
+    not: postgres, pgvector, qdrant and a remote Milvus keep the drawers in
+    the service, and the directory holds at most sidecars (``dsn.env``,
+    ``hallways.json``, ``tunnels.json``, ``locks/``, ``wal/``).
+    ``PostgresBackend.detect()`` returns ``False`` unconditionally for exactly
+    that reason. Running the precheck anyway is what made ``purge`` and
+    ``sync`` refuse every Postgres palace with "No palace found at …", leaving
+    no working bulk delete on that deployment at all (#418).
+
+    An unregistered backend name answers ``True`` — the caller keeps its
+    directory guard rather than skipping a check it may still need.
+    """
+    normalized = backend_name.strip().lower()
+    if normalized == "milvus":
+        # Only embedded Milvus Lite stores in the palace directory; a Milvus
+        # server or Zilliz Cloud does not. Same split as
+        # ``backend_requires_single_writer``, for the same underlying reason.
+        from .backends.milvus import milvus_uri_is_server
+        from .config import MempalaceConfig
+
+        return not milvus_uri_is_server(MempalaceConfig().milvus_uri)
+    try:
+        backend_cls = get_backend_class(normalized)
+    except Exception:
+        return True
+    return "server_mode" not in getattr(backend_cls, "capabilities", frozenset())
+
+
 def get_backend_for_palace(palace_path: str, explicit: Optional[str] = None):
     """Return the resolved backend instance for ``palace_path``."""
     return get_backend(resolve_backend_name(palace_path, explicit=explicit))

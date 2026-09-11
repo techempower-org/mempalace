@@ -2270,8 +2270,107 @@ def cmd_sweep(args):
         sys.exit(1)
 
 
+def _print_sync_report(report: dict, *, dry_run: bool) -> None:
+    """Render a sync report. Shared by the local and daemon-routed paths."""
+    removed_suffix = "(would remove)" if dry_run else "(removed)"
+    print(f"  Scanned:        {report['scanned']}")
+    print(f"  Kept:           {report['kept']}")
+    print(f"  Gitignored:     {report['gitignored']}  {removed_suffix}")
+    print(f"  Missing:        {report['missing']}  {removed_suffix}")
+    print(f"  Unresolved:     {report['unresolved']}  (kept)")
+    print(f"  No source:      {report['no_source']}  (kept)")
+    print(f"  Out of scope:   {report['out_of_scope']}  (kept)")
+
+    by_source = report.get("by_source") or {}
+    if by_source:
+        top = sorted(by_source.items(), key=lambda kv: -kv[1])[:5]
+        label = "Top sources to remove" if dry_run else "Top sources removed"
+        print(f"\n  {label}:")
+        for src, n in top:
+            print(f"    {src}  ({n})")
+
+    if report["unresolved"]:
+        print("\n  Unresolved drawers are kept: nothing here could show their source file is gone.")
+        unresolved_sources = report.get("unresolved_by_source") or {}
+        if unresolved_sources:
+            top = sorted(unresolved_sources.items(), key=lambda kv: -kv[1])[:5]
+            for src, n in top:
+                print(f"    {src}  ({n})")
+            rest = len(unresolved_sources) - len(top)
+            if rest:
+                print(f"    and {rest} more source file(s)")
+
+    if dry_run:
+        if report["gitignored"] + report["missing"] > 0:
+            print("\n  Re-run with --apply to commit these deletions.")
+    else:
+        print(
+            f"\n  Removed {report['removed_drawers']} drawers, {report['removed_closets']} closets."
+        )
+
+    print(f"\n{'=' * 55}\n")
+
+
+def _sync_via_daemon(args) -> None:
+    """Run `sync` against the daemon's palace under daemon-strict (#418).
+
+    Without this, a client with no local palace fell into the directory
+    precheck and could not even preview with ``--dry-run``. ``mempalace_sync``
+    resolves source files against the *daemon host's* filesystem, which is
+    the right reference: that host is where the drawers were mined from.
+    """
+    target = _daemon_url() or "the palace daemon"
+    project_dirs = [os.path.expanduser(d) for d in ([args.dir] if args.dir else [])]
+    project_dirs += [os.path.expanduser(r) for r in (args.root or [])]
+    if len(project_dirs) > 1:
+        print(
+            "mempalace: the daemon-routed sync takes one project root at a time; "
+            "re-run per root, or pass --palace <dir> for a local palace.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    payload = {
+        "project_dir": project_dirs[0] if project_dirs else None,
+        "wing": args.wing,
+        "apply": not args.dry_run,
+    }
+    try:
+        data = _call_daemon_tool("mempalace_sync", payload)
+    except DaemonError as exc:
+        print(f"mempalace: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if not data.get("success", False):
+        print(f"mempalace: {data.get('error', 'sync failed')}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"\n{'=' * 55}")
+    print("  MemPalace Sync -- Gitignore-aware drawer prune")
+    print(f"{'=' * 55}")
+    print(f"  Target:   {target}")
+    if args.wing:
+        print(f"  Wing:     {args.wing}")
+    if payload["project_dir"]:
+        print(f"  Project:  {payload['project_dir']}")
+    print(
+        "  Mode:     DRY RUN (no deletions)"
+        if args.dry_run
+        else "  Mode:     APPLY (deleting drawers)"
+    )
+    print(f"{'-' * 55}\n")
+    _print_sync_report(data, dry_run=args.dry_run)
+
+
 def cmd_sync(args):
-    """Prune drawers whose source files are gitignored, deleted, or moved (#1252)."""
+    """Prune drawers whose source files are gitignored, deleted, or moved (#1252).
+
+    Where it runs (#418): ``--daemon`` submits to the local job queue;
+    daemon-strict with no ``--palace`` routes to the palace daemon; otherwise
+    the backend is resolved *before* the palace-directory precheck, and that
+    precheck is skipped for a service-backed store, which has no local
+    database file by design.
+    """
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
 
     if getattr(args, "background", False) and not getattr(args, "daemon", False):
@@ -2288,27 +2387,40 @@ def cmd_sync(args):
         _submit_daemon_cli_job("sync", payload, args, background=getattr(args, "background", False))
         return
 
+    if _daemon_strict() and not getattr(args, "palace", None):
+        _sync_via_daemon(args)
+        return
+
     from .palace import MineAlreadyRunning
     from .wal import _wal_log
     from .backends import detect_backend_for_path
-    from .palace import _backend_artifact_label, resolve_backend_name
+    from .palace import (
+        _backend_artifact_label,
+        backend_stores_data_locally,
+        resolve_backend_name,
+    )
     from .sync import sync_palace
 
-    if not os.path.isdir(palace_path):
-        _print_retired_local_palace_or_default(palace_path)
-        return
+    # Resolve the backend BEFORE any palace-directory precheck (#418): a
+    # service-backed palace has no local database file by design, so the
+    # precheck refused every Postgres palace -- including `--dry-run`, which
+    # could not even preview.
     try:
-        backend_name = resolve_backend_name(palace_path)
+        backend_name = resolve_backend_name(palace_path, explicit=_backend_arg(args))
     except Exception as exc:  # noqa: BLE001 - user-facing CLI guard
         print(f"\n  Could not resolve palace backend: {exc}", file=sys.stderr)
         return
-    if detect_backend_for_path(palace_path) is None:
-        print(
-            f"\n  Palace dir at {palace_path} exists but has no "
-            f"{_backend_artifact_label(backend_name)} yet."
-        )
-        print("  Run: mempalace mine <dir>")
-        return
+    if backend_stores_data_locally(backend_name):
+        if not os.path.isdir(palace_path):
+            _print_retired_local_palace_or_default(palace_path)
+            return
+        if detect_backend_for_path(palace_path) is None:
+            print(
+                f"\n  Palace dir at {palace_path} exists but has no "
+                f"{_backend_artifact_label(backend_name)} yet."
+            )
+            print("  Run: mempalace mine <dir>")
+            return
 
     project_dirs = []
     if args.dir:
@@ -2320,6 +2432,7 @@ def cmd_sync(args):
     print("  MemPalace Sync -- Gitignore-aware drawer prune")
     print(f"{'=' * 55}")
     print(f"  Palace:   {palace_path}")
+    print(f"  Backend:  {backend_name}")
     if args.wing:
         print(f"  Wing:     {args.wing}")
     if project_dirs:
@@ -2349,43 +2462,7 @@ def cmd_sync(args):
         print(f"mempalace: sync failed: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    removed_suffix = "(would remove)" if args.dry_run else "(removed)"
-    print(f"  Scanned:        {report['scanned']}")
-    print(f"  Kept:           {report['kept']}")
-    print(f"  Gitignored:     {report['gitignored']}  {removed_suffix}")
-    print(f"  Missing:        {report['missing']}  {removed_suffix}")
-    print(f"  Unresolved:     {report['unresolved']}  (kept)")
-    print(f"  No source:      {report['no_source']}  (kept)")
-    print(f"  Out of scope:   {report['out_of_scope']}  (kept)")
-
-    by_source = report.get("by_source") or {}
-    if by_source:
-        top = sorted(by_source.items(), key=lambda kv: -kv[1])[:5]
-        label = "Top sources to remove" if args.dry_run else "Top sources removed"
-        print(f"\n  {label}:")
-        for src, n in top:
-            print(f"    {src}  ({n})")
-
-    if report["unresolved"]:
-        print("\n  Unresolved drawers are kept: nothing here could show their source file is gone.")
-        unresolved_sources = report.get("unresolved_by_source") or {}
-        if unresolved_sources:
-            top = sorted(unresolved_sources.items(), key=lambda kv: -kv[1])[:5]
-            for src, n in top:
-                print(f"    {src}  ({n})")
-            rest = len(unresolved_sources) - len(top)
-            if rest:
-                print(f"    and {rest} more source file(s)")
-
-    if args.dry_run:
-        if report["gitignored"] + report["missing"] > 0:
-            print("\n  Re-run with --apply to commit these deletions.")
-    else:
-        print(
-            f"\n  Removed {report['removed_drawers']} drawers, {report['removed_closets']} closets."
-        )
-
-    print(f"\n{'=' * 55}\n")
+    _print_sync_report(report, dry_run=args.dry_run)
 
 
 def _resolve_search_format(args) -> str:
@@ -4250,10 +4327,117 @@ def cmd_rooms(args):
         sys.exit(1)
 
 
-def cmd_purge(args):
-    """Delete drawers by wing and/or room.
+def _purge_where(wing, room, source_file):
+    """Build the metadata filter and the human label for a purge selection."""
+    clauses = []
+    label_parts = []
+    if wing:
+        clauses.append({"wing": wing})
+        label_parts.append(f"wing={wing}")
+    if room:
+        clauses.append({"room": room})
+        label_parts.append(f"room={room}")
+    if source_file:
+        clauses.append({"source_file": source_file})
+        label_parts.append(f"source-file={source_file}")
+    if not clauses:
+        return None, ""
+    where = clauses[0] if len(clauses) == 1 else {"$and": clauses}
+    return where, " ".join(label_parts)
 
-    Uses ``collection.delete(where=...)`` — chromadb's filter-delete path
+
+def _purge_no_match(label: str, target: str) -> None:
+    """Report a zero-match purge distinguishably, and exit non-zero (#418).
+
+    A purge that matched nothing used to print a one-line notice and exit 0 —
+    the same shape a successful purge has. Run from a client whose local
+    palace was not the palace holding the drawers, that is indistinguishable
+    from success: the reporter saw "No drawers found matching source-file=…",
+    exit 0, and 115 drawers still listed for that exact path a moment later.
+    Naming the target and exiting 1 (grep's "selected nothing" convention)
+    makes the two outcomes tell apart from output *and* status.
+    """
+    print(f"\n  No drawers matched {label}")
+    print(f"  Target: {target}")
+    print("  Nothing was deleted. Check the filter and the target above.\n")
+    sys.exit(1)
+
+
+def _purge_via_daemon(*, wing, room, source_file, label, assume_yes) -> None:
+    """Run a purge against the daemon's palace under daemon-strict (#418).
+
+    The daemon exposes a source-file bulk delete
+    (``mempalace_delete_by_source``, which also clears the matching closets)
+    and nothing equivalent for wing/room. So a wing/room purge is refused
+    here rather than quietly falling through to whatever local palace
+    directory happens to exist — that silent retarget is the dangerous half
+    of #418, and "it deleted nothing from the wrong palace" is not a safer
+    failure than an error, it is a less visible one.
+
+    Shape mirrors the local path: probe with ``dry_run`` for the blast
+    radius, confirm, then commit.
+    """
+    from .migrate import confirm_destructive_action
+
+    target = _daemon_url() or "the palace daemon"
+    if not source_file:
+        print(
+            "mempalace: purge --wing/--room is not available over the palace daemon "
+            "(no bulk wing/room delete is exposed).",
+            file=sys.stderr,
+        )
+        print(
+            f"mempalace: run it on the palace host, or pass --palace <dir> to purge a "
+            f"local palace instead of {target}.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    def _call(dry_run: bool) -> dict:
+        try:
+            return _call_daemon_tool(
+                "mempalace_delete_by_source",
+                {"source_file": source_file, "dry_run": dry_run},
+            )
+        except DaemonError as exc:
+            print(f"\n  ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+
+    preview = _call(True)
+    if not preview.get("success", False):
+        print(f"mempalace: {preview.get('error', 'purge failed')}", file=sys.stderr)
+        sys.exit(1)
+
+    match_count = int(preview.get("match_count") or 0)
+    if match_count == 0:
+        _purge_no_match(label, target)
+
+    closet_count = int(preview.get("closet_match_count") or 0)
+    print(f"\n  Found {match_count:,} drawers matching {label}")
+    print(f"  Target: {target}")
+    if closet_count:
+        print(f"  Index entries to clear: {closet_count:,}")
+
+    if not assume_yes and not confirm_destructive_action(
+        f"Purge of {match_count:,} drawers", target
+    ):
+        return
+
+    print("  Deleting matching drawers...")
+    result = _call(False)
+    if not result.get("success", False):
+        print(f"\n  Delete failed: {result.get('error', 'unknown error')}\n", file=sys.stderr)
+        sys.exit(1)
+
+    deleted = int(result.get("deleted") or 0)
+    closets = int(result.get("closets_deleted") or 0)
+    print(f"\n  Purged {deleted:,} drawers and {closets:,} index entries from {target}\n")
+
+
+def cmd_purge(args):
+    """Delete drawers by wing, room, and/or source-file.
+
+    Uses ``collection.delete(where=...)`` — the backend's filter-delete path
     doesn't go through ``updatePoint`` / ``repairConnectionsForUpdate``,
     which is the upsert-only race from #521 that an earlier draft of this
     command tried to side-step with a nuke-and-rebuild. The simpler path
@@ -4262,72 +4446,99 @@ def cmd_purge(args):
     bypassing the backend abstraction.
 
     ``--room`` without ``--wing`` purges that room across ALL wings.
-    Not idempotent — running purge twice on the same criteria prints
-    "No drawers found" the second time.
+
+    Where it runs (#418): daemon-strict with no ``--palace`` routes to the
+    daemon's palace; otherwise the backend is resolved *before* any
+    palace-directory precheck, and the precheck is skipped entirely for a
+    service-backed store, which has no local database file by design. The
+    resolved target is printed on every outcome, including the zero-match
+    one, which exits 1 rather than 0.
     """
-    from .backends.chroma import ChromaBackend
+    from .backends import detect_backend_for_path
     from .migrate import confirm_destructive_action, contains_palace_database
+    from .palace import (
+        BackendMismatchError,
+        backend_stores_data_locally,
+        get_collection,
+        resolve_backend_name,
+    )
+
+    source_file = getattr(args, "source_file", None)
+    where, label = _purge_where(args.wing, args.room, source_file)
+    if where is None:
+        print("  Error: specify at least one of --wing, --room, --source-file")
+        return
+
+    if _daemon_strict() and not getattr(args, "palace", None):
+        _purge_via_daemon(
+            wing=args.wing,
+            room=args.room,
+            source_file=source_file,
+            label=label,
+            assume_yes=args.yes,
+        )
+        return
 
     palace_path = os.path.abspath(
         os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     )
 
-    if not os.path.isdir(palace_path) or not contains_palace_database(palace_path):
-        _print_retired_local_palace_or_default(palace_path)
-        return
+    try:
+        backend_name = resolve_backend_name(palace_path, explicit=_backend_arg(args))
+    except BackendMismatchError as exc:
+        print(f"\n  Backend mismatch at {palace_path}: {exc}")
+        print("  Select the matching backend or use a fresh palace directory.")
+        sys.exit(2)
+    except KeyError as exc:
+        print(f"\n  Unknown backend selected for {palace_path}: {exc.args[0] if exc.args else exc}")
+        print("  Set --backend or MEMPALACE_BACKEND to a registered backend.")
+        sys.exit(2)
 
-    source_file = getattr(args, "source_file", None)
-    clauses = []
-    if args.wing:
-        clauses.append({"wing": args.wing})
-    if args.room:
-        clauses.append({"room": args.room})
-    if source_file:
-        clauses.append({"source_file": source_file})
-
-    if not clauses:
-        print("  Error: specify at least one of --wing, --room, --source-file")
-        return
-    where = clauses[0] if len(clauses) == 1 else {"$and": clauses}
-
-    backend = ChromaBackend()
-    from .backends.base import PalaceRef
+    stores_locally = backend_stores_data_locally(backend_name)
+    if stores_locally:
+        # ``contains_palace_database`` is chroma-specific (chroma.sqlite3);
+        # the artifact probe covers the other local backends, which this
+        # command used to reject outright for not being chroma.
+        has_db = os.path.isdir(palace_path) and (
+            contains_palace_database(palace_path)
+            or detect_backend_for_path(palace_path) is not None
+        )
+        if not has_db:
+            _print_retired_local_palace_or_default(palace_path)
+            return
+        target = f"{palace_path} ({backend_name})"
+    else:
+        target = f"{backend_name} backend (palace {palace_path})"
 
     try:
-        col = backend.get_collection(
-            palace=PalaceRef(id=palace_path, local_path=palace_path),
+        col = get_collection(
+            palace_path,
             collection_name="mempalace_drawers",
+            create=False,
+            backend=backend_name,
         )
     except Exception as e:
+        # Exit non-zero: an unreachable backend is a purge that did not
+        # happen, and #418 is precisely about those looking like success.
         print(f"\n  Error reading palace: {e}")
-        return
+        sys.exit(1)
 
     # Probe match count via a `where=`-filtered get with no payload.
-    # ChromaCollection.get returns the typed result; we only need ids.
     try:
         matched = col.get(where=where, include=[])
     except Exception as e:
         print(f"\n  Error querying drawers: {e}")
-        return
+        sys.exit(1)
 
     match_ids = matched.get("ids") if isinstance(matched, dict) else getattr(matched, "ids", [])
     match_ids = match_ids or []
     match_count = len(match_ids)
 
-    label_parts = []
-    if args.wing:
-        label_parts.append(f"wing={args.wing}")
-    if args.room:
-        label_parts.append(f"room={args.room}")
-    if source_file:
-        label_parts.append(f"source-file={source_file}")
-    label = " ".join(label_parts)
-
     if match_count == 0:
-        print(f"\n  No drawers found matching {label}\n")
-        return
+        _purge_no_match(label, target)
 
     print(f"\n  Found {match_count:,} drawers matching {label}")
+    print(f"  Target: {target}")
 
     if not args.yes:
         if not confirm_destructive_action(f"Purge of {match_count:,} drawers", palace_path):
@@ -4338,10 +4549,10 @@ def cmd_purge(args):
         col.delete(where=where)
     except Exception as e:
         print(f"\n  Delete failed: {e}\n")
-        return
+        sys.exit(1)
 
     remaining = col.count()
-    print(f"\n  Purged {match_count:,} drawers. Remaining: {remaining:,}\n")
+    print(f"\n  Purged {match_count:,} drawers from {target}. Remaining: {remaining:,}\n")
 
 
 def cmd_prune(args):
@@ -10263,7 +10474,10 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
 
     p_purge = sub.add_parser(
         "purge",
-        help="Delete drawers by wing, room, and/or source-file (filtered delete via chromadb)",
+        help=(
+            "Delete drawers by wing, room, and/or source-file "
+            "(filtered delete via the resolved backend)"
+        ),
     )
     p_purge.add_argument("--wing", help="Wing to purge")
     p_purge.add_argument("--room", help="Room to purge (without --wing, purges across ALL wings)")
