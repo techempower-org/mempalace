@@ -253,6 +253,108 @@ class TestNearDuplicateIsDirectNotTransitive:
         assert ids.index("C") < ids.index("B"), "B keeps its place behind C"
 
 
+# ── a hit must never pass something it does not outrank ────────────────
+
+# One transcript that duplicates BOTH a diary (which it outranks) and a card
+# (which it does not). The shared halves are disjoint, so the diary and the
+# card do not duplicate each other.
+_SEGa = (
+    "a documented refuser cold booted onto the access point registered and "
+    "carried an answered call on the same sim and the same network code"
+)
+_SEGb = (
+    "the five handsets refused one cell and the fault was never inside their "
+    "modems which is what the corrected headline now records in full"
+)
+_SEGc = (
+    "the checkpoint hook filed its periodic summary at the end of the session "
+    "with no source file behind it that a reader could open and verify"
+)
+_SEGd = (
+    "this correction supersedes the earlier headline and is dated the sixth of "
+    "september after the measurement that overturned the original claim"
+)
+TXT_TRANSCRIPT = _SEGa + " " + _SEGb
+TXT_DIARY = _SEGa + " " + _SEGc
+TXT_CARD = _SEGb + " " + _SEGd
+
+
+class TestNeverPassesAHitItDoesNotOutrank:
+    """The rank check has to guard every hit PASSED, not just the hit earned from.
+
+    Regression executed by review: a transcript that duplicates a diary below
+    it in kind AND a card above it in kind earned the diary's index, and in
+    landing there it sailed past the card — demoting the curated hit below a
+    transcript that quotes it, which is the exact inverse of the feature.
+    """
+
+    def test_the_repro_has_the_similarities_it_needs(self):
+        assert is_near_duplicate(TXT_TRANSCRIPT, TXT_DIARY) is True
+        assert is_near_duplicate(TXT_TRANSCRIPT, TXT_CARD) is True
+        assert is_near_duplicate(TXT_CARD, TXT_DIARY) is False
+
+    def test_transcript_does_not_overtake_the_card_it_duplicates(self):
+        hits = [
+            _hit("diary", TXT_DIARY, id="DIARY"),
+            _hit("file", TXT_CARD, id="CARD"),
+            _hit("transcript", TXT_TRANSCRIPT, id="TRANSCRIPT"),
+        ]
+        prefer_curated(hits)
+        ids = [h["id"] for h in hits]
+        assert ids.index("CARD") < ids.index("TRANSCRIPT"), (
+            "the curated card must never end up below a transcript quoting it"
+        )
+        assert ids == ["DIARY", "CARD", "TRANSCRIPT"], (
+            "the card already outranks the transcript — there is nothing to do"
+        )
+
+
+class TestOrderingProperties:
+    """Randomised three-kind inputs. The suite missed the regression because
+    nothing covered one hit duplicating two others of DIFFERENT kinds."""
+
+    KINDS = ("file", "memory", "transcript", "diary", "unknown")
+    SEGMENTS = (_SEGa, _SEGb, _SEGc, _SEGd, _SEG1, _SEG2, _SEG3)
+
+    def _random_hits(self, rnd):
+        n = rnd.randint(3, 6)
+        out = []
+        for i in range(n):
+            parts = rnd.sample(self.SEGMENTS, rnd.randint(1, 2))
+            out.append(_hit(rnd.choice(self.KINDS), " ".join(parts), id=f"h{i}"))
+        return out
+
+    def test_is_idempotent_over_randomised_inputs(self):
+        import random
+
+        rnd = random.Random(451)
+        for case in range(4000):
+            hits = self._random_hits(rnd)
+            once = [h["id"] for h in prefer_curated(list(hits))]
+            twice = [h["id"] for h in prefer_curated(prefer_curated(list(hits)))]
+            assert once == twice, f"case {case}: not a fixed point, {once} -> {twice}"
+
+    def test_never_passes_a_hit_it_does_not_outrank(self):
+        """THE BOUND as an invariant over every pair, not just the promoted one."""
+        import random
+
+        from mempalace.result_ordering import _kind_rank
+
+        rnd = random.Random(4510)
+        for case in range(4000):
+            hits = self._random_hits(rnd)
+            before = {h["id"]: (i, _kind_rank(h)) for i, h in enumerate(hits)}
+            after = [h["id"] for h in prefer_curated(list(hits))]
+            pos = {hid: i for i, hid in enumerate(after)}
+            for a, (ia, ra) in before.items():
+                for b, (ib, rb) in before.items():
+                    if ia < ib and ra <= rb:
+                        assert pos[a] < pos[b], (
+                            f"case {case}: {b} (rank {rb}) overtook {a} (rank {ra}) "
+                            f"without outranking it"
+                        )
+
+
 # ── wiring: every interactive route applies the preference ──────────────
 
 

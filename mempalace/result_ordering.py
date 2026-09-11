@@ -66,6 +66,13 @@ NEAR_DUP_THRESHOLD = 0.35
 # caller asking for thousands gets the ranker's order rather than a stall.
 _MAX_PAIRWISE_RESULTS = 200
 
+# Passes are repeated until the order stops changing, so the value returned is
+# always a fixed point and a second call is a no-op. Termination is not merely
+# hoped for: a hit only ever moves up past hits it strictly outranks, which
+# strictly increases sum(rank * position), and that sum is bounded. The cap is
+# a belt-and-braces stop, never reached in the randomised property tests.
+_MAX_STABILISE_PASSES = 8
+
 # Lower sorts earlier. Curated documents a human maintains outrank a quoted
 # copy; a palace diary summary sorts last because it carries no citable
 # source at all (item G).
@@ -126,28 +133,71 @@ def _kind_rank(hit) -> int:
     return _KIND_RANK.get(kind, _DEFAULT_KIND_RANK)
 
 
+def _stabilise_once(order: list, ranks: dict, shingles: dict, thr: float):
+    """One ordering pass. Returns the new order, or None when nothing moved.
+
+    ``order`` is a list of result indices in their CURRENT order. Each entry
+    is given the earliest position it has earned, then the list is re-sorted.
+
+    The backward scan stops at the nearest earlier hit this one does not
+    outrank. That barrier is the bound: without it a hit could earn the index
+    of something it outranks far above and, in landing there, sail past a hit
+    in between that it does NOT outrank — which is how a curated card ended up
+    below a transcript that quotes it.
+    """
+    n = len(order)
+    earned = list(range(n))
+    for pos in range(n):
+        i = order[pos]
+        si = shingles[i]
+        if len(si) < _MIN_SHINGLES:
+            continue
+        # Nearest earlier hit this one does not outrank; it may not pass it.
+        lo = 0
+        for q in range(pos - 1, -1, -1):
+            if ranks[order[q]] <= ranks[i]:
+                lo = q + 1
+                break
+        for q in range(lo, pos):
+            sj = shingles[order[q]]
+            if len(sj) < _MIN_SHINGLES:
+                continue
+            if len(si & sj) / min(len(si), len(sj)) >= thr:
+                earned[pos] = q  # ascending, so the first match is the topmost
+                break
+    if all(earned[pos] == pos for pos in range(n)):
+        return None
+    ranked = sorted(range(n), key=lambda pos: (earned[pos], ranks[order[pos]], pos))
+    return [order[pos] for pos in ranked]
+
+
 def prefer_curated(results, threshold: Optional[float] = None):
     """Order curated hits above the near-duplicates that quote them, in place.
 
-    A hit moves above another hit only when BOTH hold:
+    Each hit rises to the earliest position it has **earned**: the index of the
+    topmost hit it directly duplicates, searching no further back than the
+    nearest earlier hit it does not outrank by kind (curated document →
+    transcript → diary). A hit that earns nothing keeps the ranker's index, so
+    hits in no duplicate relationship — the overwhelming majority — keep the
+    ranker's order exactly.
 
-    * it is a **direct** near-duplicate of that hit — they share text
-      themselves, never by way of a third chunk, and
-    * it outranks it by kind (curated document → transcript → diary).
+    Two properties this guarantees, both of them learned the hard way:
 
-    Directness is the whole bound and it is not decorative. Grouping by
-    connected component would make near-duplicate transitive: with A wholly
-    contained in B, and B sharing its tail with C, A would join C's group and
-    could be promoted over C despite sharing no 3-gram with it — a curated
-    document outranking something it does not duplicate, which is exactly
-    what this function promises not to do.
+    * **Nothing ever passes a hit it does not outrank.** The rank test guards
+      every hit *passed*, not merely the hit earned from. Guarding only the
+      latter let a transcript that duplicated both a diary below it and a card
+      above it earn the diary's index and overtake the card on the way — the
+      curated hit demoted below a copy quoting it, the exact inverse of this
+      function's purpose.
+    * **The result is a fixed point.** Passes repeat until the order settles,
+      so calling this twice changes nothing. A single pass is not enough: a
+      reorder creates new adjacencies and can manufacture fresh earns.
 
-    Each hit is therefore given the earliest position it has *earned* — the
-    index of the topmost hit it directly duplicates and outranks — and the
-    list is sorted by (earned position, kind, original position). A hit that
-    earns nothing keeps the ranker's index, so hits in no duplicate
-    relationship (the overwhelming majority) keep the ranker's order exactly,
-    and a hit that IS promoted moves no further than the copy it cleared.
+    Collateral overtaking WITHIN those bounds is real and intended: a promoted
+    hit passes any hit it outranks that happens to lie between it and the copy
+    it earned, whether or not it duplicates that one too. That is unavoidable
+    for a single-list ordering — the alternative is to leave the curated hit
+    buried — and it is bounded by the rank barrier above.
 
     Idempotent, tolerant of non-dict items and a non-list argument, and never
     raises: this runs on the return path of a search the caller already paid
@@ -165,28 +215,18 @@ def prefer_curated(results, threshold: Optional[float] = None):
     thr = NEAR_DUP_THRESHOLD if threshold is None else threshold
     shingles = {i: _shingles(h.get("text")) for i, h in indexed}
     ranks = {i: _kind_rank(h) for i, h in indexed}
-    ids = [i for i, _ in indexed]
+    order = [i for i, _ in indexed]
+    original = list(order)
 
-    # The earliest index each hit has earned. Only a DIRECT near-duplicate it
-    # outranks can pull a hit upward, and only as far as that hit.
-    earned = {i: i for i in ids}
-    for pos, i in enumerate(ids):
-        si = shingles[i]
-        if len(si) < _MIN_SHINGLES:
-            continue
-        for j in ids[:pos]:
-            if ranks[j] <= ranks[i]:
-                continue
-            sj = shingles[j]
-            if len(sj) < _MIN_SHINGLES:
-                continue
-            if len(si & sj) / min(len(si), len(sj)) >= thr:
-                earned[i] = min(earned[i], j)
+    for _ in range(_MAX_STABILISE_PASSES):
+        nxt = _stabilise_once(order, ranks, shingles, thr)
+        if nxt is None:
+            break
+        order = nxt
 
-    if all(earned[i] == i for i in ids):
+    if order == original:
         return results
 
-    order = sorted(ids, key=lambda i: (earned[i], ranks[i], i))
     moved = iter([results[i] for i in order])
     results[:] = [next(moved) if isinstance(h, dict) else h for h in results]
     return results
