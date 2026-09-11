@@ -82,10 +82,19 @@ Returns:
 ### `list_hallways`
 
 ```python
-def list_hallways(wing: Optional[str] = None, config = None) -> list[dict]
+def list_hallways(wing: Optional[str] = None, config = None, limit: Optional[int] = None, offset: Optional[int] = None) -> list[dict]
 ```
 
-List hallway records. Filter by ``wing`` if specified.
+List hallway records, optionally filtered by ``wing`` and paginated.
+
+On the postgres store the wing filter and the pagination are both SQL, so
+a wing-scoped call reads only that wing. On the JSON store the filter is
+still applied after the full load — same behaviour as before, which is
+why the postgres cutover is the actual fix rather than this signature.
+
+``limit``/``offset`` are new and optional: 797K records is not a sane
+payload at any speed, and the daemon needs a bounded page to be able to
+answer ``mempalace_list_hallways`` at all (palace-daemon#255).
 
 ### `delete_hallway`
 

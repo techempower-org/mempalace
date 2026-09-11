@@ -124,6 +124,10 @@
         "link": "/reference/python-api/general_extractor"
       },
       {
+        "text": "mempalace.hallway_store",
+        "link": "/reference/python-api/hallway_store"
+      },
+      {
         "text": "mempalace.hallways",
         "link": "/reference/python-api/hallways"
       },
@@ -214,6 +218,10 @@
       {
         "text": "mempalace.migrate",
         "link": "/reference/python-api/migrate"
+      },
+      {
+        "text": "mempalace.migrate_hallways",
+        "link": "/reference/python-api/migrate_hallways"
       },
       {
         "text": "mempalace.migrate_to_postgres",

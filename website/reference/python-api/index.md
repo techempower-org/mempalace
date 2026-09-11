@@ -39,6 +39,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.fact_checker`](./fact_checker) — fact_checker.py — Verify text against known facts in the palace.
 - [`mempalace.format_miner`](./format_miner) — format_miner.py — proposed for mempalace 3.3.6.
 - [`mempalace.general_extractor`](./general_extractor) — general_extractor.py — Extract 5 types of memories from text.
+- [`mempalace.hallway_store`](./hallway_store) — Hallway persistence — JSON file (default) or a postgres table (opt-in).
 - [`mempalace.hallways`](./hallways) — Hallways — within-wing entity-to-entity connectors.
 - [`mempalace.hlc`](./hlc) — hlc.py — Hybrid Logical Clock for RFC 004 op ordering
 - [`mempalace.hook_shell`](./hook_shell) — Compatibility helpers for legacy shell hooks.
@@ -62,6 +63,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.mcp_proxy`](./mcp_proxy) — Thin stdio front end for the MemPalace MCP server.
 - [`mempalace.mcp_server`](./mcp_server) — MemPalace MCP Server — read/write palace access for Claude Code
 - [`mempalace.migrate`](./migrate) — mempalace migrate — Recover a palace created with a different ChromaDB version.
+- [`mempalace.migrate_hallways`](./migrate_hallways) — Move ``hallways.json`` into the postgres hallway table (#442).
 - [`mempalace.migrate_to_postgres`](./migrate_to_postgres) — ChromaDB → Postgres (pgvector + AGE) migration tool.
 - [`mempalace.miner`](./miner) — miner.py — Files everything into the palace.
 - [`mempalace.multi_encoder`](./multi_encoder) — Multi-encoder retrieval — query N encoder-bound palaces, RRF-fuse.

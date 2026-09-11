@@ -1,0 +1,108 @@
+seq: 140
+id: hallways-postgres-store
+date: '2026-09-11'
+bucket: Performance
+commit: HEAD
+fork_pr: 479
+area: Performance
+summary: Hallways move from a 1 GB monolithic JSON file to an opt-in postgres table
+body: |
+  ``hallways.json`` on the production palace host grows fast enough that
+  any single figure is stale on arrival: 479 MB early in the evening,
+  **1,041,537,215 B / ~797K records / 21 wings** at 20:03, and
+  **1,142,562,893 B / 1,903,306 records / 50 wings** measured read-only a
+  few hours later. A duplication hypothesis was tested and refuted —
+  record count, distinct ids and distinct (wing, sorted-pair) tuples agree
+  exactly at 1,903,306 — so the growth is new wings plus n(n−1)/2 pair
+  combinatorics, not a writer bug.
+
+  Every hallway operation loaded and JSON-parsed the whole file, so the
+  ``wing`` argument bought nothing: ``list_hallways(wing)`` filtered in
+  Python after a full load, ``compute_hallways_for_wing`` paid the same
+  load to recover four dynamics fields per pair, and
+  ``_compute_entity_tunnels_for_wing`` loaded it a *second* time through
+  ``list_hallways`` — two parsed copies live at once, which is where a
+  mine subprocess's 1.6–4.1 GB RSS came from. At production scale that is
+  **~37 s of JSON I/O per mine**. The daemon could not fast-intercept the
+  tool at all (palace-daemon#255): it runs under a deliberate 2 GB cgroup
+  cap already at 98.4%, and the call was never fired at production
+  because the plausible outcome was the first OOM kill.
+
+  **What this does not fix, stated because an earlier draft claimed it
+  did:** the 29 minutes #442 reports for a 31-file memory sweep is not the
+  hallway load. It is ``create_tunnel`` calling ``_load_tunnels`` + atomic
+  ``_save_tunnels`` on every call from inside a loop (``palace_graph.py``
+  :840/:861, called at :1145 and :1278) — O(n²) in the tunnel count,
+  against a tunnels.json that is only 837 KB at 2000 tunnels. The sweep's
+  own open file was ``tunnels.json.tmp``, which said so. A memory sweep
+  still takes ~29 minutes after this lands; that fix is separate.
+
+  A new ``hallway_store`` puts the records in ``mempalace_hallways`` with
+  a ``(wing, co_occurrence_count DESC)`` index, so reads, the dynamics
+  lookup and the per-mine write are all proportional to the wing rather
+  than to the palace. Named columns carry what is queried; ``dynamics``
+  and ``extra`` jsonb carry the rest so a record round-trips losslessly
+  and a newer writer's fields are not truncated by an older reader.
+  Timestamps stay ``text`` rather than ``timestamptz`` on purpose — the
+  records hold ISO-8601 strings, and a timestamp type would normalize
+  offsets and sub-second precision, i.e. rewrite the user's data to say
+  something slightly different. Writes scrub NUL and lone surrogates
+  through the backend's own scrubber (#411): entity names are
+  transcript-derived, so one stray byte would otherwise abort an
+  800K-record import. Wing matching stays exact string equality, as the
+  JSON path had it — normalizing would be an improvement *and* a
+  behaviour change, and a storage move is the wrong place to make one
+  silently.
+
+  Two durability properties the review insisted on, both of which the
+  JSON path had for free and a naive port would have dropped:
+  ``replace_wing`` runs its DELETE + N INSERTs in **one transaction** (the
+  JSON path's temp-file + ``os.replace`` made a half-written wing
+  unreachable; N+1 autocommit statements would not), and the streaming
+  reader **raises on an unterminated array** rather than reporting a
+  truncated file as complete — which, combined with the resume state,
+  would otherwise have recorded a short read as the finished total. Reads
+  against a table the migration has not created yet return empty and name
+  the migration once, rather than an opaque error or a bare ``[]``
+  indistinguishable from an empty store.
+
+  ``python -m mempalace.migrate_hallways`` imports the legacy file —
+  idempotent (upsert by id), resumable (and it *refuses* to resume when
+  the source size or mtime changed, since the saved position is an
+  ordinal into that file's record sequence), and with a ``--dry-run``
+  that needs no configured store, because a rehearsal must not be harder
+  to run than the thing it de-risks. The reader streams with
+  ``json.JSONDecoder.raw_decode`` over a sliding buffer rather than
+  adding a parser dependency. Measured on a synthetic 201 MB /
+  400K-record file: ``json.load`` took **1,072 MB peak RSS / 2.28 s**, the
+  streaming reader **31 MB / 1.92 s** — 34x less memory and slightly
+  faster. The shipped reader then parsed the **live 1.14 GB production
+  file** end to end — 1,903,306 records, 27.2 s, 42 MB peak, no
+  exception, read-only — which is the migration's positive control
+  against real data rather than synthetic.
+
+  The dry run reports an entity-class breakdown and filters nothing. Of
+  154,692 distinct entities only 12,484 (8%) are word-shaped, while
+  identifier, path, url and template shapes are 47% — the first record in
+  the file links ``${this.baseUrl}/health``. Whether that belongs in the
+  palace is a judgement about the corpus, not about storage, and a silent
+  filter would be an irreversible edit made by the tool that was only
+  asked to move the data. The table makes those rows cheap to hold and
+  cheap to query, so filtering stays open after the import.
+
+  **JSON stays the default.** The ``hallway_backend`` flag
+  (``MEMPALACE_HALLWAY_BACKEND``) opts in; the production cutover is a
+  separate deliberate step after the import is verified. A postgres
+  selection with no DSN falls back to JSON with a warning rather than
+  raising, because an empty store reads as "this wing has no hallways",
+  which is worse than slow. All 110 pre-existing hallway tests pass
+  unchanged.
+tests: 61 (test_hallway_store 24, test_hallways_store_routing 9, test_migrate_hallways 28)
+files:
+- mempalace/hallway_store.py
+- mempalace/migrate_hallways.py
+- mempalace/hallways.py
+- mempalace/config.py
+- tests/test_hallway_store.py
+- tests/test_hallways_store_routing.py
+- tests/test_migrate_hallways.py
