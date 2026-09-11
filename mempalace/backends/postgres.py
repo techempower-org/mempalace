@@ -12,7 +12,7 @@ import logging
 import os
 from typing import Any, Optional
 
-from ..config import normalize_wing_name
+from ..config import normalize_wing_name, strip_lone_surrogates
 from .base import (
     BackendClosedError,
     BaseBackend,
@@ -40,6 +40,11 @@ VECTOR_INDEX_MIN_ROWS = 5_000
 VECTOR_INDEX_CHECK_INTERVAL_ROWS = 1_000
 
 _embedder = None
+
+# U+FFFD REPLACEMENT CHARACTER — the standard "this byte cannot be
+# represented" marker, used for both unstorable classes so the
+# substitution reads the same wherever it shows up in a drawer.
+_UNSTORABLE_REPLACEMENT = "\ufffd"
 
 
 def _load_psycopg2():
@@ -134,35 +139,107 @@ def _coerce_wing(raw: Any) -> str:
     return normalize_wing_name(wing) or FALLBACK_WING
 
 
-def _replace_nul_bytes(
-    documents: list[str],
-    metadatas: Optional[list[dict[str, Any]]],
-) -> None:
-    """Replace NUL bytes in-place before the rows reach postgres.
+def _scrub_text(value: str) -> str:
+    """Replace both byte classes Postgres refuses, in one pass over a string.
 
-    Postgres ``text`` and ``jsonb`` both refuse ``\\x00`` outright
-    (``psycopg.DataError``), so a raw device log or binary-tinged capture
-    would abort the whole mine. Verbatim storage of that byte is physically
-    impossible on this backend; the nearest-verbatim answer is U+FFFD (the
-    Unicode replacement character — the standard "this byte cannot be
-    represented" marker) plus an explicit ``nul_bytes_replaced`` count in
-    the drawer's metadata so the substitution is provenanced, never silent.
+    NUL first, lone surrogate second; each substitution is one character wide,
+    so the result is the same length as the input and neither pass can create
+    work for the other (U+FFFD is neither a NUL nor a surrogate).
     """
-    for i, doc in enumerate(documents):
-        if "\x00" not in doc:
-            continue
-        n = doc.count("\x00")
-        documents[i] = doc.replace("\x00", "�")
-        if metadatas is not None and isinstance(metadatas[i], dict):
-            metadatas[i]["nul_bytes_replaced"] = n
+    return strip_lone_surrogates(value.replace("\x00", _UNSTORABLE_REPLACEMENT))
+
+
+def _scrub_json_value(value: Any) -> Any:
+    """Recursively scrub a JSON-shaped metadata value.
+
+    ``json.dumps`` happily serializes both byte classes — a NUL becomes a
+    ``\\u0000`` escape, a lone surrogate a ``\\udXXX`` escape — and the
+    ``::jsonb`` cast then rejects the statement with "unsupported Unicode
+    escape sequence". So the walk has to happen *before* serialization, and
+    it has to reach nested containers and dict keys: the old top-level-only
+    pass let a NUL one level down abort the batch exactly as an unscrubbed
+    top-level one would.
+
+    Scrubbing is not injective — two keys differing only by a NUL collapse to
+    one, last wins. That does not arise in practice: metadata keys are fixed
+    field names and only transcript-derived values ever actually change.
+    """
+    if isinstance(value, str):
+        return _scrub_text(value)
+    if isinstance(value, dict):
+        return {_scrub_json_value(key): _scrub_json_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_scrub_json_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_scrub_json_value(item) for item in value)
+    return value
+
+
+def _scrub_unstorable(
+    *,
+    documents: Optional[list[str]] = None,
+    ids: Optional[list[str]] = None,
+    metadatas: Optional[list[Any]] = None,
+) -> None:
+    """Replace every unstorable byte in-place before the rows reach postgres.
+
+    Postgres ``text`` and ``jsonb`` refuse two classes of input outright: a
+    NUL (``psycopg.DataError``) and a lone UTF-16 surrogate (invalid UTF-8, so
+    psycopg cannot even encode the parameter). Either one anywhere in a mined
+    corpus aborts the whole batch, which is how a single stray byte in one
+    transcript blocks an entire mine. ``backends/pgvector.py`` has stripped
+    both since #1829/#1833; this backend had only the NUL half (#417), and
+    only over documents and top-level metadata values.
+
+    Verbatim storage of those bytes is physically impossible on this backend;
+    the nearest-verbatim answer is U+FFFD (the Unicode replacement character —
+    the standard "this byte cannot be represented" marker) plus an explicit
+    ``nul_bytes_replaced`` / ``lone_surrogates_replaced`` count in the
+    drawer's metadata, so the substitution is provenanced, never silent.
+    Counts describe the *document*, which is the verbatim payload; metadata is
+    scrubbed too but is bookkeeping, not the user's words.
+
+    ids are scrubbed defensively — drawer ids are SHA-256 hashes in practice,
+    so this is a no-op on the ``ON CONFLICT`` key — and read/delete paths
+    scrub the same way, so an id stored through this scrub is still reachable
+    by the id its caller holds.
+    """
+    if ids is not None:
+        for i, doc_id in enumerate(ids):
+            if isinstance(doc_id, str):
+                ids[i] = _scrub_text(doc_id)
+
+    if documents is not None:
+        for i, doc in enumerate(documents):
+            nuls = doc.count("\x00")
+            without_nul = doc.replace("\x00", _UNSTORABLE_REPLACEMENT) if nuls else doc
+            scrubbed = strip_lone_surrogates(without_nul)
+            # Both substitutions are one character wide, so positions line up
+            # and a zip-diff counts the surrogates without a second regex.
+            surrogates = sum(1 for a, b in zip(without_nul, scrubbed) if a != b)
+            if not nuls and not surrogates:
+                continue
+            documents[i] = scrubbed
+            meta = metadatas[i] if metadatas is not None and i < len(metadatas) else None
+            if not isinstance(meta, dict):
+                continue
+            if nuls:
+                meta["nul_bytes_replaced"] = nuls
+            if surrogates:
+                meta["lone_surrogates_replaced"] = surrogates
+
     if metadatas is None:
         return
-    for meta in metadatas:
+    for i, meta in enumerate(metadatas):
         if not isinstance(meta, dict):
             continue
-        for key, value in meta.items():
-            if isinstance(value, str) and "\x00" in value:
-                meta[key] = value.replace("\x00", "�")
+        scrubbed_meta = _scrub_json_value(meta)
+        if scrubbed_meta != meta:
+            # Rewrite through the caller's dict rather than replacing the list
+            # slot, so a caller holding a reference sees the same scrub the
+            # database does.
+            meta.clear()
+            meta.update(scrubbed_meta)
 
 
 def _validate_write_lengths(
@@ -257,7 +334,7 @@ class PostgresCollection(BaseCollection):
             metadatas=metadatas,
             embeddings=embeddings,
         )
-        _replace_nul_bytes(documents, metadatas)
+        _scrub_unstorable(documents=documents, ids=ids, metadatas=metadatas)
         self._ensure_setup(create=True)
         if embeddings is None:
             embeddings = _embed(documents)
@@ -533,6 +610,10 @@ class PostgresCollection(BaseCollection):
             raise UnsupportedFilterError("PostgreSQL backend does not support where_document")
         if ids is not None and not ids:
             raise ValueError("Expected ids to be a non-empty list in get")
+        # Stored ids went through the write scrub, so the lookup key has to as
+        # well or a scrubbed drawer becomes unreachable by the id its caller
+        # holds -- and a raw NUL in a bound text parameter is a DataError.
+        _scrub_unstorable(ids=ids)
         self._ensure_setup(create=True)
 
         spec = _IncludeSpec.resolve(include, default_distances=False)
@@ -596,6 +677,7 @@ class PostgresCollection(BaseCollection):
             raise ValueError("Expected ids to be a non-empty list in delete")
         if not ids and not where:
             return
+        _scrub_unstorable(ids=ids)
         self._ensure_setup(create=True)
 
         clauses = []
@@ -684,6 +766,7 @@ class PostgresCollection(BaseCollection):
         n = len(ids)
         if metadatas is not None and len(metadatas) != n:
             raise ValueError(f"metadatas length {len(metadatas)} does not match ids length {n}")
+        _scrub_unstorable(ids=ids, metadatas=metadatas)
         self._ensure_setup(create=True)
 
         cur = self._get_conn().cursor()
