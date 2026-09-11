@@ -1,0 +1,25 @@
+seq: 45
+id: mcp-stub-resources-prompts-list
+date: '2026-05-21'
+bucket: Fixed
+commit: 6ca0670
+area: Reliability
+summary: Stub resources/list + prompts/list so MCP clients stop ERROR-logging on connect
+body: |
+  OpenCode 1.15.x and other MCP clients probe ``resources/list``
+  and ``prompts/list`` on connect to discover server
+  capabilities. mempalace's MCP server only exposes ``tools/*``;
+  these probes returned ``-32601: Unknown method``, which
+  clients log as ERROR every session. Two log-noise lines per
+  session, surfacing as scary text in opencode's TUI.
+
+  Both methods are optional per the MCP spec. Return empty
+  lists instead of the error, matching what other MCP servers
+  without resources/prompts do (e.g. server-everything, the
+  filesystem reference server).
+tests: |
+  tests/test_mcp_server.py — two new TestProtocol cases asserting
+  empty-list shape and absence of ERROR.
+files:
+- mempalace/mcp_server.py
+- tests/test_mcp_server.py

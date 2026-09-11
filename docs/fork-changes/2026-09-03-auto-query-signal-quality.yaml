@@ -1,0 +1,25 @@
+seq: 111
+id: auto-query-signal-quality
+date: '2026-09-03'
+bucket: Fixed
+commit: 0d92cef
+area: Search
+summary: 'Auto-query signal quality: user''s-words depth query + wing inventory, peer-block stripping, identifier signals via BM25 fast route, exhaust filter, 0.50 floor, per-session dedupe, curated-first, visible receipts (#419 #420 #422 #424)'
+body: |
+  Fleet check-in of all 8 live sessions (2026-09-03): 7 had never deliberately
+  queried the palace, because the auto-query returned the same session-manifest
+  / diary AUTO-SAVE drawers every turn, fired on generic English scraped from
+  peer-agent messages, and never on domain identifiers. Fixes: the depth
+  refresh searches with the user's own words (wing-scoped, over-fetched) and
+  carries a wing inventory line; ``<cross-session-message>`` /
+  ``<teammate-message>`` / ``<system-reminder>`` blocks are stripped and
+  sentence-initial generic capitals no longer score; identifier-shaped tokens
+  are first-class signals retrieved per-term through the daemon's BM25 fast
+  route (20–300ms vs 3–5s hybrid on an 86K-drawer wing) with hybrid fallback;
+  sessions/diary/checkpoint exhaust and below-floor hits (similarity < 0.50,
+  BM25-only < 1.5) never inject; a drawer is never injected twice per
+  session; curated ``…/memory/*.md`` drawers rank first; every fired query
+  emits a ``RECEIPT`` the hook renders as a visible terminal line
+  (``✦ palace ← "…" [wing] → 3 hits via bm25-fast (34ms)``), including
+  timeouts and cached fires. Umbrella: #428.
+tests: 17 (test_auto_query_quality) + 5 updated

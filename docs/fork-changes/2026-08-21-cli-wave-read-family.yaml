@@ -1,0 +1,18 @@
+seq: 108
+id: cli-wave-read-family
+date: '2026-08-21'
+bucket: Added
+commit: 2848e96
+area: CLI
+summary: 'CLI wave 2/3: `mempalace wings`, `taxonomy`, `aaak spec`, `hallway`, `checkpoint --dry-run` (#356, #358, #360, #362)'
+body: |
+  Second lane: ``wings --sort name|count`` (REST-first via the
+  daemon's fast status endpoint — 0.33s live where the MCP tool
+  times out at 620K drawers, palace-daemon#239 tracks
+  fast-intercepts for the rest), ``taxonomy [--wing]``, ``aaak
+  spec`` (raw dialect spec on stdout), ``hallway list|delete``
+  (coexists with legacy ``hallways``; deprecation is #407), and
+  ``checkpoint --dry-run``. #360's ``--session``/``list`` flags were
+  deliberately not built — the underlying tool has no session
+  concept; palace-daemon#240 + #408 track growing one properly.
+tests: 82 (test_cli_wings, test_cli_taxonomy, test_cli_aaak, test_cli_hallway, test_cli_checkpoint)

@@ -1,0 +1,34 @@
+seq: 20
+id: mining-management-cli
+date: '2026-05-05'
+bucket: Added
+commit: 2e6ced9
+area: CLI
+summary: mempalace mined + purge --source-file (mining management surface)
+body: |
+  Closes the "removing manually mined data" half of JP's
+  mining-management ask. Adding is already covered by the existing
+  ``mempalace mine <dir>``; this PR adds the symmetric remove +
+  list surface.
+
+  ``mempalace purge --source-file <path>`` extends the existing
+  purge command with a third filter alongside ``--wing`` and
+  ``--room``. Composes with the others (single filter or
+  ``$and``). Uses ``collection.delete(where=...)`` — the same
+  filtered-delete path shipped by the original purge.
+
+  ``mempalace mined`` is the companion to ``mempalace status``
+  that groups by wing × source_file rather than wing × room.
+  Answers "which files have I mined into this wing?" so an
+  operator can pick targets for ``--source-file`` purge. Honors
+  ``--wing`` and ``--limit`` (default 50; ``--limit 0`` shows
+  all). Pushes the wing filter into the chromadb ``where``
+  clause so a wing-scoped view doesn't scan the full collection
+  (Copilot review on jphein/mempalace#4 caught the unfiltered
+  sweep). Argparse rejects negative ``--limit`` at parse time
+  via a ``_nonneg_int`` validator (also Copilot finding).
+tests: +8 — purge source-file (3) + cmd_mined (3, including dispatch + negative-limit reject) + 2 existing updated
+pr: 7
+files:
+- mempalace/cli.py
+- tests/test_cli.py

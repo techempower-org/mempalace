@@ -1,0 +1,19 @@
+seq: 121
+id: mcp-server-argv-guard
+date: '2026-09-03'
+bucket: Fixed
+commit: e3e0579
+area: Reliability
+summary: Only the MCP-server entrypoints parse argv at import; other importers get defaults (#409)
+body: |
+  Importing ``mempalace.mcp_server`` parsed the *importing* process's argv
+  at module scope: a live ``mempalace --palace X wings --json`` left
+  ``MEMPALACE_PALACE_PATH`` set process-wide, and ``--backend
+  not-a-real-backend`` anywhere in argv made the import raise ``KeyError``.
+  ``_is_server_entrypoint()`` gates the parse (mempalace-mcp / mcp_server.py
+  argv0, or ``__main__`` = mempalace.mcp_server/mcp_proxy;
+  ``MEMPALACE_MCP_PARSE_ARGV=1`` forces it). Fallout: the palace-daemon had
+  relied on this scrape by accident and fell back to ``~/.mempalace/palace``
+  — fixed in palace-daemon#250 (resolve ``--palace`` before the import) plus
+  an explicit env var on the host.
+tests: 5 (test_mcp_server_argv_guard, incl. subprocess imports both ways)

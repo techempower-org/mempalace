@@ -1,0 +1,20 @@
+seq: 58
+id: source-adapters-filesystem-conversations
+date: '2026-05-23'
+bucket: Added
+commit: 9a1facf
+area: CLI
+summary: Filesystem + conversation source adapters (#63)
+body: |
+  Thin adapter wrappers around ``miner.scan_project()`` and
+  ``convo_miner.scan_convos()`` implementing the
+  ``BaseSourceAdapter`` interface. ``FilesystemSourceAdapter``
+  yields ``DrawerRecord`` per chunk with route hints;
+  ``ConversationSourceAdapter`` does the same for conversation
+  transcript files.
+tests: 25 — test_sources_filesystem.py, test_sources_conversations.py
+files:
+- mempalace/sources/filesystem.py
+- mempalace/sources/conversations.py
+- tests/test_sources_filesystem.py
+- tests/test_sources_conversations.py

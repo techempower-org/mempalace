@@ -1,0 +1,40 @@
+seq: 100
+id: sync-upstream-368
+date: '2026-07-02'
+bucket: Changed
+commit: b46f18d
+area: Reliability
+summary: 'Sync upstream/develop through da5a48c (post-v3.5.0): remote MCP server w/ TLS + read-only, graph auto-population, Qdrant facets, list_drawers date filters, 213 commits'
+body: |
+  Merged 213 upstream commits (post-v3.5.0 ``da5a48c``). Notable
+  upstream additions: the turnkey secure remote MCP server with TLS and
+  a read-only server mode (#1877 / #1900), associative-graph
+  auto-population from mined sessions + ``cmd_hallways`` (#1895),
+  Qdrant server-side metadata facets (#1868), ``since``/``before``
+  date filters on ``list_drawers`` (#1128 / #1891), authored-timestamp
+  preservation from transcripts (#1890), ``mine_palace_lock``
+  re-entrancy for the HTTP transport (#1859), a pgvector metadata-only
+  fetch fix (#1892), SQLite magic-header ``detect()`` (#1893 / #1896),
+  FTS5 auto-heal (#1878), a host-root-logger fix (#1860 / #1885),
+  LaTeX extensions, and dependency bumps (ruff 0.15.20).
+
+  ~50 conflicted files resolved by composing rather than choosing
+  sides: ``tool_list_drawers`` carries BOTH the upstream date filters
+  and the fork tag filters; ``tool_status`` keeps the fork's postgres
+  fast path (#267) and gains the upstream facets sweep; the HTTP
+  transport keeps host pinning and gains TLS + read-only; the merged
+  plugin hook config stays the fork's five-event ms-timeout shape. The
+  merged MCP tool surface stays at 39 tools (upstream's 34 plus fork
+  tools); all doc and manifest tool-count claims reconciled against the
+  live ``mcp_server.TOOLS`` count.
+files:
+- mempalace/mcp_server.py
+- mempalace/searcher.py
+- mempalace/cli.py
+- mempalace/convo_miner.py
+- mempalace/embedding.py
+- mempalace/backends/base.py
+- mempalace/backends/pgvector.py
+- tests/conftest.py
+- tests/test_mcp_server.py
+- tests/test_backends.py

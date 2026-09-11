@@ -1,0 +1,17 @@
+seq: 120
+id: kg-age-connection-guard
+date: '2026-09-03'
+bucket: Fixed
+commit: 2135df7
+area: Reliability
+summary: AGE knowledge-graph connection survives a bad query (rollback) and a dead socket (reconnect once) (#405)
+body: |
+  ``KnowledgeGraphAGE`` is cached process-wide (``mcp_server._call_kg``, the
+  daemon), so one ``QueryCanceled`` (statement_timeout) left the transaction
+  aborted with no rollback and every later statement failed; a dead socket
+  (host suspend/resume) left the connection closed. Measured: one slow walk
+  took KG reads down for every client on the host, three times in a day.
+  ``_with_conn_retry`` wraps ``_run_cypher``/``_cypher_scalar``:
+  statement-level errors roll back and re-raise unchanged; connection-level
+  errors drop the socket, reconnect once, retry.
+tests: 5 (test_kg_age_reconnect, scripted fake psycopg2)

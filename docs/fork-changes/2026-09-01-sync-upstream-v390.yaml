@@ -1,0 +1,38 @@
+seq: 110
+id: sync-upstream-v390
+date: '2026-09-01'
+bucket: Changed
+commit: 09713d9
+area: Reliability
+summary: 'Sync upstream/develop through v3.9.0 (e8098348): 101 commits — durable config writes, strategy-aware candidate pools, BM25-under-threshold admission, search hub-forward, embeddinggemma batch override, cli_compatible search'
+body: |
+  Fourth large sync (merge commit, per the post-#394 rule). Upstream
+  brought: atomic + fsync'd config persistence with symlink-following
+  and unreadable-file quarantine (``_persist_file_config``), a
+  strategy-aware candidate pool (``_candidate_pool_limits`` — union
+  keeps the requested top-vector slice, the vector path stays 4×
+  wide through closet enrichment), BM25 lexical hits admitted under
+  a strict ``max_distance`` by computing their stored-embedding
+  distance (af7bca77 — replaces the old skip-entirely rule), CLI
+  search forwarding to a live hub, ``cli_compatible`` search for the
+  hub forwarder, an ``update`` CLI verb, and the embeddinggemma
+  ``session.run()`` sub-batch override (#2330).
+
+  Fork-preserved through 15 conflict files: hybrid-default search
+  (``candidate_strategy="hybrid"`` — validation extended rather than
+  upstream's vector/union set, with unset-vs-explicit preserved so
+  ``cli_compatible`` still rejects only explicit non-vector picks),
+  adaptmem_ft beside the new embeddinggemma batch kwarg, the
+  daemon-strict CLI search block ahead of upstream's hub-forward,
+  the drawer/read/graph CLI verb families in the dispatch dict, the
+  date-window full-pool rule composed with the new pre-enrichment
+  trim, and the postgres BM25 arm conservatively keeping the old
+  distance-guarantee (it has no stored-embedding access, so
+  upstream's admit-under-threshold path can't apply). The
+  ``sqlite_bm25_fallback`` top-up entries gained ``source_path`` /
+  ``authored_at`` — the one builder missing the shared entry shape,
+  exposed by the wider enrichment pool. Tool surface is 49 (upstream
+  absorbed most previously-upstreamed fork tools; their four still
+  fork-only tool docs re-added to ``mcp-tools.md``). Upstream's
+  version-gated repair test feature-detects ``pathname2url``
+  behavior instead (3.13 semantics were backported to 3.12.13).

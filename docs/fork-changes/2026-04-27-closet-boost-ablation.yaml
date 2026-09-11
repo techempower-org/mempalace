@@ -1,0 +1,31 @@
+seq: 14
+id: closet-boost-ablation
+date: '2026-04-27'
+bucket: Changed
+commit: 3cb03f3
+area: Search
+summary: Hoist CLOSET_RANK_BOOSTS to module level + record VecRecall ablation finding
+body: |
+  Two-step refactor + measurement. First (commit ``f558d3c``):
+  hoist ``CLOSET_RANK_BOOSTS = [0.40, 0.25, 0.15, 0.08, 0.04]`` and
+  ``CLOSET_DISTANCE_CAP`` from inside ``search_memories`` to module
+  scope so they can be tuned from the outside (env var, config flag,
+  or in-process patch for A/B benchmarking) without touching the
+  function. No behavior change; pure ablation enablement.
+
+  Then (commit ``3cb03f3``): A/B ablation against the 151K canonical
+  palace (12-probe set covering recent fork-side decisions + mined-file
+  content). Closet boost fires on ~20% of result rows, concentrated
+  in queries whose answer lives in mined files; closets are sparse on
+  chat-transcript queries (most fork-side decisions). When the boost
+  fired, it re-ordered chunks within a single source file rather than
+  displacing right answers with wrong ones — i.e. VecRecall's critique
+  ([discussions/1129](https://github.com/MemPalace/mempalace/discussions/1129),
+  "org-layer in retrieval path drops R@5") did not reproduce here.
+  Hybrid degrades to effectively pure-vector for transcript queries
+  and re-ranks within-file chunks for mined-file queries; neither
+  shape matches the failure mode VecRecall is fixing. Findings noted
+  in the comment block above the constants so future-us doesn't have
+  to re-run the experiment.
+files:
+- mempalace/searcher.py

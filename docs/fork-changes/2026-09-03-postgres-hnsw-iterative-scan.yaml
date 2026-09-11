@@ -1,0 +1,27 @@
+seq: 124
+id: postgres-hnsw-iterative-scan
+date: '2026-09-03'
+bucket: Fixed
+commit: 2ea774d
+area: Search
+summary: 'Wing-scoped vector search no longer returns 0 rows: enable pgvector hnsw.iterative_scan per connection'
+body: |
+  A filtered kNN (``WHERE wing = %s ORDER BY embedding <=> q LIMIT k``) is
+  planned as an HNSW index scan *then* a filter: the index hands back its
+  ``ef_search`` nearest rows palace-wide and the filter discards the ones
+  outside the wing, so a wing outside the global top-N got zero rows however
+  good its best match was (``EXPLAIN: Rows Removed by Filter: 47`` on the
+  757K-drawer production palace; same query unscoped returned 20, exact scan
+  returned 5). Two fleet sessions reported this as a "bm25-fast misroute with
+  no fallback" — every arm was genuinely empty. ``SET hnsw.iterative_scan =
+  relaxed_order`` is now issued on every new backend connection (pgvector
+  >= 0.8; session-scoped, connection is autocommit; tolerated on older
+  pgvector; ``MEMPALACE_PG_HNSW_ITERATIVE_SCAN`` knob). The CLI's
+  both-arms-empty case now sets a ``fallback`` field and carries hybrid's
+  warnings instead of a bare "0 results" under a bm25-fast banner.
+  Acceptance: the exact fleet repro went from 0 results to the curated fact
+  file at 0.575, top hit.
+tests: 6 (test_postgres_iterative_scan x5, test_cli_daemon both-empty)
+files:
+- mempalace/backends/postgres.py
+- mempalace/cli.py

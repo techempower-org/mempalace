@@ -1,0 +1,15 @@
+seq: 117
+id: pending-queue-drop-legacy-dir-requests
+date: '2026-09-03'
+bucket: Fixed
+commit: b5b774f
+area: Reliability
+summary: Replay drops legacy whole-project convos requests instead of re-mining them forever (#426)
+body: |
+  ``~/.mempalace/pending/*.jsonl`` held dir-shaped ``mode: convos`` entries
+  from before single-transcript ingest; every replay re-posted a whole
+  project directory mine (hours on the write lock) and the entry survived to
+  be replayed again. ``_is_legacy_dir_request()`` (convos mode, non-.jsonl
+  path under ``/.claude/projects/``) consumes them and reports
+  ``dropped_legacy``; the daemon now refuses them at ``/mine`` too.
+tests: 3 (test_pending_queue)

@@ -1,0 +1,27 @@
+seq: 12
+id: cherry-pick-1094
+date: '2026-04-26'
+bucket: Changed
+commit: 43d728d
+area: Reliability
+summary: 'Cherry-pick #1094 — coerce None metadatas at chromadb boundary'
+body: |
+  Fork main was carrying the per-site ``meta = meta or {}`` guards
+  from #999 in eight read paths but didn't have the boundary
+  coercion that closes the issue once for all callers. The typed
+  ``QueryResult``/``GetResult`` contract declares
+  ``metadatas: list[dict]``, never ``list[Optional[dict]]`` — so
+  every call site that forgot the per-site guard was a latent
+  ``AttributeError``. #1094 (open upstream, jp-authored) coerces
+  at ``ChromaCollection.query()`` / ``.get()`` so downstream
+  callers always receive ``list[dict]``. Per-site guards retained
+  as belt-and-suspenders for paths that might bypass the typed
+  wrappers. Three same-family fork-ahead PRs (#1198, #1201, #1083
+  review) all pointed at gaps that would have been impossible if
+  this pattern had been in place.
+tests: 6 in test_backends.py (mixed/all-None inner lists, padding regression, get-without-metadatas)
+pr: 1094
+pr_state: OPEN
+files:
+- mempalace/backends/chroma.py
+- tests/test_backends.py

@@ -1,0 +1,44 @@
+seq: 37
+id: kg-writethrough-middleware
+date: '2026-05-17'
+bucket: Added
+commit: 3321d83
+area: Reliability
+summary: Write-through middleware on PostgresCollection — entities populate AGE on every drawer write
+body: |
+  Phase 2 of the AGE-integration plan. Adds a write-through hook on
+  `PostgresCollection.add`/`upsert` that extracts entities from the
+  document and creates `(Drawer)-[:MENTIONS]->(Entity)` edges in
+  AGE. Means the KG is populated as the palace is filled, not as a
+  separate offline pass.
+
+  Plumbing:
+  - `PostgresCollection._insert_rows` — after the row commits, calls
+    `self._kg_writethrough(drawer_id, document, metadata)` if
+    registered. Hook errors caught + logged, never raised — KG
+    enrichment is opportunistic, never blocks writes.
+  - `PostgresCollection.set_kg_writethrough(hook)` — registration
+    API. Default (no hook) is zero overhead — vector-only behavior
+    byte-identical to pre-Phase-2.
+
+  New module `mempalace/kg_writethrough.py`:
+  - `make_age_writethrough(kg, extractor)` — canonical hook factory.
+    Caps at `max_entities_per_drawer` (default 100) so per-drawer
+    write latency stays bounded.
+  - `make_null_writethrough()` — no-op for tests / disabling.
+  - `make_writethrough_from_env()` — env-var-driven config:
+    `MEMPALACE_KG_WRITETHROUGH=1` + `MEMPALACE_KG_EXTRACTOR=regex|null`.
+  - `_builtin_regex_extractor` — fallback when SME's extractor isn't
+    importable. Captures capitalized proper nouns, hyphenated
+    identifiers, version strings.
+
+  Extractor is pluggable: any callable matching `(text) -> list[Entity]`
+  where Entity has `.name` works. Tested with SME's two-pass regex
+  extractor; spaCy and LLM extractors are next on the swap-in list.
+
+  Smoke test: fresh AGE graph + `coll.upsert(2 drawers about
+  Atakan/FT-300/AGE/mempalace-Phase-2)` → 10 entities, 8 MENTIONS
+  edges, all current.
+files:
+- mempalace/backends/postgres.py
+- mempalace/kg_writethrough.py

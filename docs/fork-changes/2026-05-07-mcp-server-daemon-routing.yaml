@@ -1,0 +1,56 @@
+seq: 24
+id: mcp-server-daemon-routing
+date: '2026-05-07'
+bucket: Added
+commit: 41359ba
+area: Reliability
+summary: daemon-route `mcp_server.py` via the `handle_request` JSON-RPC chokepoint
+body: |
+  Mirrors the `PALACE_DAEMON_URL` gate that `hooks_cli.py` shipped
+  on 2026-04-24 (the daemon-strict fix for the HNSW drift
+  incident). Closes the last in-process write path inside
+  `mempalace.mcp_server` that bypassed the daemon.
+
+  Adds `_daemon_strict()` and `_forward_to_daemon()` helpers and
+  gates at the JSON-RPC chokepoint in `handle_request()`: when
+  `PALACE_DAEMON_URL` is set and `PALACE_DAEMON_STRICT != "0"`,
+  every method (`initialize`, `tools/list`, `tools/call`, `ping`)
+  is forwarded to palace-daemon's `/mcp` proxy and the daemon's
+  response is returned verbatim. Notifications skip the network
+  round-trip per JSON-RPC spec.
+
+  Single chokepoint at `handle_request` is functionally equivalent
+  to per-handler gates — every JSON-RPC method funnels through it
+  — and avoids 30+ duplicated branches across the TOOLS dispatch.
+  No local chromadb client opens in strict mode. Startup
+  `_refresh_vector_disabled_flag()` HNSW probe is skipped when
+  daemon-strict (the daemon owns its palace's capacity).
+
+  `tests/conftest.py` updated to scrub
+  `PALACE_DAEMON_URL`/`PALACE_DAEMON_STRICT`/`PALACE_API_KEY` at
+  module load (matching the existing HOME-redirect pattern) so
+  existing local-path tests don't accidentally hit the live
+  daemon when run from a shell where the env var is set.
+
+  Pitchable upstream as a single-file replacement for the
+  standalone `palace-daemon/clients/mempalace-mcp.py` bridge —
+  anyone running `python -m mempalace.mcp_server` with the env
+  var set now gets daemon proxying natively.
+
+  Also: `~/.mempalace/config.json` had its `palace_path` key
+  removed (was pinning `/home/jp/Projects/mempalace-data/palace`);
+  falls back to default `~/.mempalace/palace`. With row 34 also
+  shipped, `mempalace-data/` (308 MB) has no live consumers and
+  is archivable.
+tests: |
+  15 new tests in `tests/test_mcp_server_daemon.py` — gate
+  semantics, `_forward_to_daemon` body shape, network-failure
+  surfacing as JSON-RPC error envelope, forwarded
+  `initialize`/`tools/call`/error propagation, sentinel TOOLS
+  patch proving no local handler runs in strict mode. End-to-end
+  smoke against `disks.jphe.in:8085` returns 160,351 drawers
+  from the canonical palace. Suite 1577 passed.
+files:
+- mempalace/mcp_server.py
+- tests/conftest.py
+- tests/test_mcp_server_daemon.py

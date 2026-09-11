@@ -1,7 +1,7 @@
 name: Check docs
 
 # Auto-trigger scripts/check-docs.sh whenever the fork-ahead doc surface
-# changes. Catches drift between docs/fork-changes.yaml (canonical source)
+# changes. Catches drift between docs/fork-changes/ (canonical source, one file per entry)
 # and the rendered FORK_CHANGELOG.md, stale commit hashes, mismatched
 # upstream PR states, and the README test count.
 #
@@ -15,7 +15,8 @@ on:
   push:
     branches: [main, develop]
     paths:
-      - 'docs/fork-changes.yaml'
+      - 'docs/fork-changes/**'
+      - 'docs/fork-changes-meta.yaml'
       - 'scripts/render-docs.py'
       - 'scripts/render-api-docs.py'
       - 'scripts/check-docs.sh'
@@ -28,7 +29,8 @@ on:
       - '.github/workflows/check-docs.yml'
   pull_request:
     paths:
-      - 'docs/fork-changes.yaml'
+      - 'docs/fork-changes/**'
+      - 'docs/fork-changes-meta.yaml'
       - 'scripts/render-docs.py'
       - 'scripts/render-api-docs.py'
       - 'scripts/check-docs.sh'

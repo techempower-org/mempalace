@@ -1,0 +1,28 @@
+seq: 87
+id: scripts-ship-prep
+date: '2026-05-28'
+bucket: Added
+commit: 4677db8
+area: Docs
+summary: scripts/ship-prep.sh — one command bumps README test count and runs all three doc renderers (#312)
+body: |
+  Every fork-ahead PR has needed the same hand-driven dance after a
+  rebase: bump ``README.md``'s "<N> tests pass on ``main``" phrase,
+  run ``scripts/render-docs.py --target all``, run
+  ``scripts/render-llms-full.py``, run ``scripts/render-api-docs.py``,
+  then ``scripts/check-docs.sh`` to verify. Five steps, four scripts,
+  one ``sed``. ``scripts/ship-prep.sh`` bundles them.
+
+  The script's pytest-discovery follows the same fallback chain
+  ``scripts/check-docs.sh`` uses (#311 — repo venv, then main
+  checkout's venv via ``git rev-parse --git-common-dir``, then
+  PATH), so it works from a worktree without an activated
+  environment. The test-count bump is idempotent — no-op if the
+  number is already correct — so re-running after a follow-up
+  commit is safe.
+
+  ``--no-check`` skips the trailing ``check-docs.sh`` verification
+  for the case where you intentionally want to inspect the
+  regenerated diff before re-running checks.
+files:
+- scripts/ship-prep.sh

@@ -1,0 +1,16 @@
+seq: 5
+id: deploy-script
+date: '2026-04-26'
+bucket: Added
+commit: 8252025
+area: CLI
+summary: scripts/deploy.sh — one-command Syncthing-aware redeploy
+body: |
+  Single command does the right shape: push fork main → wait for
+  Syncthing to reach ``/mnt/raid/projects/memorypalace`` on the deploy
+  host → ``systemctl --user restart palace-daemon`` → poll ``/health`` →
+  ssh-import-check that today's fork-ahead surface is loaded.
+  Replaces a three-step manual ritual that was easy to get wrong
+  (e.g. ``pip install --upgrade`` was a no-op on the editable install).
+files:
+- scripts/deploy.sh

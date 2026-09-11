@@ -1,0 +1,23 @@
+seq: 63
+id: cli-stats-dashboard
+date: '2026-05-24'
+bucket: Added
+commit: 6f994fb
+area: CLI
+summary: mempalace stats — palace analytics dashboard (#191)
+body: |
+  ``mempalace stats`` composes ``mempalace_status`` +
+  ``mempalace_kg_stats`` + ``mempalace_graph_stats`` (and optionally
+  ``mempalace_list_tags``) into a single read-only view of corpus
+  health. Renders wings with proportional bars, KG entity/triple
+  counts with a relationship-type preview, graph room/tunnel/edge
+  counts with the top cross-wing tunnel rooms, and an opt-in
+  ``--tags`` breakdown. Standard ``--json`` / ``--quiet`` / ``--top``
+  flags. Daemon-only — refuses to run when ``PALACE_DAEMON_URL`` is
+  unset rather than surfacing a stale split-brain view from local
+  chromadb. Partial daemon failures (e.g. KG offline) inline the
+  error in the affected section instead of blanking the dashboard.
+tests: 13 — test_cli_stats.py
+files:
+- mempalace/cli.py
+- tests/test_cli_stats.py

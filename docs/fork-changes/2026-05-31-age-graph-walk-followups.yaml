@@ -1,0 +1,47 @@
+seq: 93
+id: age-graph-walk-followups
+date: '2026-05-31'
+bucket: Performance
+commit: 43547c4
+area: Performance
+summary: 'AGE graph-walk: auto edge-endpoint indexes in backfill + bind anonymous RELATION targets (mempalace#335)'
+body: |
+  Follow-ups to the Cat 7b hybrid-latency root-cause (palace-daemon
+  ``docs/perf/2026-05-30-hybrid-graph-walk-latency.md``): the per-entity
+  graph-walk Cypher in ``searcher._graph_expand_*`` and the daemon's
+  ``/search/age-fused`` lookup were the entire hybrid-vs-union latency
+  delta, for two reasons now fixed here.
+
+  **Auto edge-endpoint indexes.** AGE only btree-indexes a label table's
+  own ``id``, never the ``start_id`` / ``end_id`` graphid columns the edge
+  walks join on — so every per-entity lookup parallel-seq-scanned the whole
+  edge table (MENTIONS 6.69M rows on the prod palace, ~5.8s cold for a hot
+  entity). ``KnowledgeGraphAGE._ensure_edge_endpoint_indexes`` now creates
+  ``idx_mentions_{start,end}_id`` + ``idx_relation_{start,end}_id``
+  (``CREATE INDEX IF NOT EXISTS``, skips any label whose table doesn't exist
+  yet), mirroring ``_ensure_drawer_unique_index``. ``backfill_age.backfill``
+  calls it after the edge pass so fresh palaces get the indexes
+  automatically. Names/columns are kept in sync with palace-daemon's
+  ``scripts/age_graph_indexes.sql`` + ``POST /backfill-age/indexes``
+  (the operator-online ``CONCURRENTLY`` path).
+
+  **Bind the anonymous RELATION target.** ``MATCH (a:Entity)-[r:RELATION]->()``
+  left the far endpoint anonymous, so AGE built a Parallel Append over every
+  vertex label (~1.58M rows) and nested-loop-joined to validate the endpoint,
+  spilling to ``/dev/shm``. RELATION is always (Entity)->(Entity); binding the
+  open end to ``:Entity`` collapses the Append to a single Entity scan and is
+  row-for-row identical (verified on a 300K-edge AGE graph: ``->()`` and
+  ``->(:Entity)`` both returned 1816 rows; with the start_id index the RELATION
+  scan became a bitmap index scan, 152ms→46ms). All four expand sites updated.
+
+  A third follow-up (raise ``mempalace-db`` off Docker's 64MB ``--shm-size``)
+  is deploy-side — the container is built from the sibling ``disks`` repo, not
+  provisioned here — so it's documented as an operator action in
+  ``docs/operators/2026-05-31-age-graph-walk-shm-size.md`` (required value:
+  ``--shm-size=256m``).
+tests: 6 — tests/test_knowledge_graph_age.py::{test_edge_endpoint_index_targets_are_the_four_we_expect, test_ensure_edge_endpoint_indexes_skips_absent_then_installs} + tests/test_searcher_stopwords.py::TestGraphExpandBoundEndpoint (seeds/entities anonymous-target guards); the index test is a @pgmark integration run against a live AGE container (skip-when-absent → install-when-present → idempotent)
+files:
+- mempalace/knowledge_graph_age.py
+- mempalace/backfill_age.py
+- mempalace/searcher.py
+- docs/operators/2026-05-31-age-graph-walk-shm-size.md

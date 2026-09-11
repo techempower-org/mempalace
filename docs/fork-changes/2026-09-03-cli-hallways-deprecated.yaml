@@ -1,0 +1,13 @@
+seq: 118
+id: cli-hallways-deprecated
+date: '2026-09-03'
+bucket: Changed
+commit: 1509c32
+area: CLI
+summary: Legacy hallways verb deprecated in favour of hallway list; now honours --json (#407)
+body: |
+  Prints a one-line stderr notice pointing at the first-class daemon-routed
+  verb and emits JSON when asked instead of silently ignoring ``--json`` (a
+  ``jq`` pipeline used to receive human text and exit 0). Kept for scripts;
+  removal is a later release.
+tests: 1 (test_cli_hallways)

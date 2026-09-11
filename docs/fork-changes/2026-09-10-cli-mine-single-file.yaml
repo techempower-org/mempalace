@@ -1,0 +1,37 @@
+seq: 127
+id: cli-mine-single-file
+date: '2026-09-10'
+bucket: Added
+commit: 180d8eb
+area: CLI
+summary: mempalace mine <file> --mode projects — targeted re-index of one curated document
+body: |
+  Projects mode required a directory, so refreshing one edited ``CLAUDE.md``
+  meant re-mining the whole tree and holding the palace write lock for as
+  long as that takes (the ``2g`` corpus that surfaced this is 111 MB). The
+  measured consequence: palace search kept returning the *transcript* copy
+  of a claim that ``2g/CLAUDE.md`` had since refuted. The indexed copy of
+  the card was filed 2026-09-01T14:13; the claim landed in the file on 09-03
+  and the REFUTED banner on 09-05, so the indexed chunk contained neither.
+  Transcripts are mined continuously by the Stop/PreCompact hooks; curated
+  project docs are mined only by a manual whole-directory run nobody makes.
+  A path naming a regular file now mines exactly that file, as part of its
+  project: the root is the nearest ancestor carrying ``.git`` /
+  ``mempalace.yaml`` (``resolve_project_root``), which supplies the wing and
+  the relative path room detection keys off — so ``~/Projects/2g/CLAUDE.md``
+  is wing ``2g``. The file's existing drawers are REPLACED rather than
+  duplicated (``process_file`` already deletes by absolute ``source_file``;
+  the single-file path returns the same resolved absolute path a directory
+  walk produces, so the delete finds them), and the stored-mtime skip still
+  applies, so re-queuing an unchanged file costs nothing.
+  ``scan_project``'s per-file gate is extracted to
+  ``file_passes_scan_gates``; ``scan_single_file`` applies the identical
+  gates without the walk, so there is no second filtering policy to drift.
+  The one deliberate difference: a rejection of a file the operator named BY
+  NAME explains itself on stderr, where the tree walk stays silent. A
+  ``.jsonl`` handed to projects mode is now an explicit exit-2 error naming
+  ``--mode convos`` instead of a silent no-op.
+tests: 36 (test_miner_single_file x24, test_cli_mine_single_file x12)
+files:
+- mempalace/miner.py
+- mempalace/cli.py

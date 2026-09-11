@@ -1,0 +1,42 @@
+seq: 88
+id: scripts-maintain-fork-changes
+date: '2026-05-28'
+bucket: Added
+commit: 9060e09
+area: Docs
+summary: 'scripts/maintain-fork-changes.py + ship-prep step 1: resolve commit:HEAD placeholders and de-dup yaml entries (#316)'
+body: |
+  Two mechanical cleanups that the rebase chain landing #311 / #312
+  / #314 / #315 surfaced as recurring drift, now bundled into a
+  reusable script and wired into ``scripts/ship-prep.sh`` as
+  step 1:
+
+  1. **commit:HEAD resolution.** Authors write ``commit: HEAD`` on
+     the PR branch because the squash-merge SHA isn't known yet.
+     Nothing in the existing flow rewrites the placeholder
+     post-merge, so the rendered ``FORK_CHANGELOG.md`` accumulates
+     broken ``[HEAD](commit/HEAD)`` links. The pass scans each
+     entry's text for ``#NN`` references and looks up the closing
+     commit via ``git log`` matching priority order: closes/fixes >
+     trailing ``(#N)`` in subject > any mention. Highest priority
+     wins; entries without a resolvable ``#NN`` are left alone.
+
+  2. **De-duplication by ``id:``**. Long rebase chains (e.g. #310
+     rebased over #309 → #314 → #315) re-insert the same entry
+     each iteration if the conflict resolution takes ``--ours`` on
+     the yaml. The pass keeps the first occurrence and drops the
+     rest, reporting what it removed.
+
+  Both passes are idempotent — running on a clean tree produces
+  no diff. ``--check`` mode reports drift without writing.
+  ``--no-resolve-head`` / ``--no-dedup`` opt-outs cover the case
+  where the author wants the raw current state.
+
+  ``scripts/ship-prep.sh`` (#312) now runs this as step 1 so the
+  check-docs run that closes the chain catches any drift the
+  maintenance pass missed.
+tests: 10 — tests/test_maintain_fork_changes.py (dedup drops second occurrence + idempotent on clean yaml + handles three copies, resolve_head replaces when match found + leaves when no match + dry-run + picks first resolvable in window + first wins when multiple match + indentation preserved, build_issue_to_sha respects closing-phrase priority)
+files:
+- scripts/maintain-fork-changes.py
+- scripts/ship-prep.sh
+- tests/test_maintain_fork_changes.py

@@ -1,0 +1,42 @@
+seq: 18
+id: transcript-ingest-via-daemon
+date: '2026-05-05'
+bucket: Fixed
+commit: 09d2ca6
+area: Reliability
+summary: Restore transcript ingest via daemon /mine when PALACE_DAEMON_URL is set
+body: |
+  Daemon-strict mode (introduced 2026-04-24 in commits ``8c90c0f``
+  + ``0e97b19`` to fix the HNSW drift incident) skipped all three
+  local mining paths when ``PALACE_DAEMON_URL`` was set, on the
+  assumption a daemon-side writer would do the work instead. The
+  diary-checkpoint half got that writer via ``/silent-save``, but
+  the transcript-ingest half did not. So for ~11 days every Claude
+  Code Stop hook left a checkpoint summary in the recovery
+  collection and zero verbatim transcript drawers in
+  ``mempalace_drawers``. ``mempalace_search`` lost visibility into
+  recent sessions even though MCP, daemon, and HNSW were all
+  healthy.
+
+  Replace the three skip-and-bail branches
+  (``_maybe_auto_ingest``, ``_mine_sync``, ``_ingest_transcript``)
+  with POSTs to the daemon's existing ``/mine`` endpoint via a new
+  ``_post_daemon_mine()`` helper. Daemon-side path translation
+  (so a remote daemon can find client-side paths at its own mount
+  points) handled via a companion palace-daemon PR introducing
+  ``PALACE_DAEMON_PATH_MAP``.
+
+  Behavior change: transcript ingest now routes to the project
+  wing derived via ``_wing_from_transcript_path()``. Replaces
+  hardcoded ``"sessions"``; produces e.g. ``wing_memorypalace`` /
+  ``wing_realmwatch`` per transcript. (Subsequently dropped the
+  ``wing_`` prefix in commit ``86d4700``.)
+
+  Companion: jphein/palace-daemon#1 ``feat(/mine): translate
+  client-side paths via PALACE_DAEMON_PATH_MAP``, merged
+  2026-05-05.
+tests: +6 — _post_daemon_mine (URL/body/api-key/error paths) + daemon-routed branches in all three mining functions
+pr: 2
+files:
+- mempalace/hooks_cli.py
+- tests/test_hooks_cli.py

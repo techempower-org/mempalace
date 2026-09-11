@@ -1,0 +1,52 @@
+seq: 81
+id: cli-tags-and-overlap-fast-path
+date: '2026-05-28'
+bucket: Added
+commit: ea5d567
+area: Search
+summary: RRF vs convex-blend rerank — A/B measurement on our corpus (#162)
+body: |
+  Closes the measurement promised by #162 (the harness landed
+  in #247 — this PR runs it). Adds a self-contained ``--mine-corpus``
+  mode to ``scripts/eval_fusion_ab.py`` that mines the named
+  directory into a fresh local ChromaDB palace and runs the
+  convex-vs-RRF A/B against it. Doesn't touch the production daemon
+  or share GPU capacity with real callers; the prior
+  ``--i-know-the-backfill-is-done`` gate stays on the
+  ``--palace-path`` mode for future daemon-side wiring.
+
+  The probe-set loader now accepts both the v2 dict shape
+  (``{"_meta": ..., "probes": [{query, expected, why}, ...]}``,
+  which the only checked-in probe file ``scripts/probes_v2_git_derived.json``
+  uses) and the legacy list-of-lists shape. This matches the
+  multi-encoder eval harness's loader so probe sets are
+  interchangeable between the two.
+
+  Findings + per-probe data in
+  ``docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.md``
+  (the human-readable summary) and the companion ``.json`` (raw
+  ranks + deltas for follow-up analysis). **One-line:** RRF
+  underperforms the convex blend on this corpus — MRR 0.4075 →
+  0.3758 (−0.0318), Recall@10 52% → 47% (−5 pp), 20 regressions
+  to 10 improvements. The convex blend's vector-heavy weighting
+  (0.6/0.4) is doing real work; RRF's score-scale-agnostic
+  treatment loses strong vector signal in the rank-1-under-convex
+  cases. Convex stays the default; ``fusion_mode="rrf"`` stays
+  shipping as the explicit opt-in for callers who want it.
+
+  Not in scope:
+
+  * Running against the production palace. The daemon's
+    ``/search/hybrid`` hard-codes ``candidate_strategy="hybrid"``
+    and doesn't forward a ``fusion_mode`` body field, so RRF can't
+    be driven remotely today. Filed forward as a palace-daemon
+    change if the A/B result motivates it.
+  * Sweeping the RRF ``k`` smoothing constant. Default 60 (Cormack
+    2009); a sweep is a follow-up if RRF is competitive enough to
+    be worth refining.
+tests: 29 — tests/test_eval_fusion_ab.py (probe-loader accepts v2 dict + legacy list shapes, rejects scalars and dicts-without-probes-list; main rejects --mine-corpus + --palace-path together; main refuses --palace-path without --i-know-the-backfill-is-done; pre-existing run-orchestration + scoring-math tests retained)
+files:
+- scripts/eval_fusion_ab.py
+- tests/test_eval_fusion_ab.py
+- docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.md
+- docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.json

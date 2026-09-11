@@ -1,0 +1,22 @@
+seq: 8
+id: drawer-id-surfacing
+date: '2026-04-26'
+bucket: Added
+commit: 9a8bb77
+area: Search
+summary: Surface drawer_id in search/diary/recovery payloads
+body: |
+  ChromaDB's primary key was always returned by ``query()`` and ``get()``
+  but never plumbed into result-building loops; consumers (e.g.
+  familiar.realm.watch's citation-popover loop) couldn't link a hit
+  back to the underlying drawer. Three call sites updated for parity:
+  ``searcher.search_memories`` (vector path + sqlite BM25 fallback),
+  ``mcp_server.tool_session_recovery_read``, ``mcp_server.tool_diary_read``.
+  Defensive zip with id-pad: production chromadb always returns ids,
+  but several test mocks omit them — pad with ``None`` when absent so
+  existing fixtures keep working without touching N tests.
+tests: 1 integration + 1 inline assertion
+files:
+- mempalace/searcher.py
+- mempalace/mcp_server.py
+- website/reference/mcp-tools.md

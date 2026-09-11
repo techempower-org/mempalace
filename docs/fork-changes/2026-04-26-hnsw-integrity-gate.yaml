@@ -1,0 +1,29 @@
+seq: 7
+id: hnsw-integrity-gate
+date: '2026-04-26'
+bucket: Fixed
+commit: 645ba20
+area: Reliability
+summary: Integrity gate prevents quarantine_stale_hnsw from destroying healthy indexes
+body: |
+  Previous behavior fired whenever ``sqlite_mtime - hnsw_mtime`` exceeded
+  the (lowered, in #1173) 300s threshold. ChromaDB 1.5.x flushes HNSW
+  asynchronously and a clean shutdown does not force-flush, so the
+  on-disk HNSW is always meaningfully older than ``chroma.sqlite3`` —
+  that's the steady state, not corruption. Quarantine renamed valid
+  HNSW segments on every cold-start; chromadb created empty replacements;
+  vector recall went to 0/N until rebuild. Confirmed in production on
+  the disks daemon journal 2026-04-26 06:56:45: three of three healthy
+  253MB segments quarantined on cold-start with 538-557s gaps. Fix:
+  stage 2 integrity gate sniffs the chromadb segment metadata file
+  for its protocol/terminator bytes (PROTO ``\x80`` head, STOP ``\x2e``
+  tail) and a non-trivial size, **without deserializing**. Healthy
+  segment with mtime drift → keep in place; truncated/zero-filled →
+  quarantine.
+tests: 4 in test_backends.py (renames-corrupt, leaves-healthy-with-drift, leaves-no-metadata, renames-truncated)
+pr: 1173
+pr_state: MERGED
+files:
+- mempalace/backends/chroma.py
+- tests/test_backends.py
+merged_date: 2026-04-26

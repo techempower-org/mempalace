@@ -1,0 +1,43 @@
+seq: 31
+id: repair-empty-meta-sentinel
+date: '2026-05-11'
+bucket: Fixed
+commit: 949cb20
+area: Reliability
+summary: Coerce empty + None metadata to sentinel in both rebuild paths
+body: |
+  ChromaDB 1.5.x rejects both None and empty-dict entries in the
+  `metadatas` list (raises `ValueError: Expected metadata to be a
+  non-empty dict`). Two functions in `mempalace/repair.py` construct
+  the metadatas list that feeds chromadb's upsert during a rebuild:
+
+  - `_extract_drawers` (around line 139) — extracts drawers from
+    sqlite ground truth for rebuild; passes them straight through.
+  - `_rebuild_one_collection` (around line 816) — collects the
+    extracted drawers and calls `col.upsert(...)`.
+
+  Both were vulnerable to the same ValueError, which would abort
+  a multi-hour palace rebuild ~80% of the way through if a
+  historical drawer had a sparse metadata row. Mempalace drawers
+  always carry at least wing/room, so this is defensive against
+  corruption in `embedding_metadata` or pre-rooms-and-wings data.
+
+  Fix coerces both None and empty-dict entries to a sentinel
+  `{"_repaired_empty_meta": True}` that satisfies chromadb's
+  validator AND is discoverable later via
+  `where={"_repaired_empty_meta": True}` so an operator can find
+  and investigate the rows the rebuild papered over.
+
+  The `_extract_drawers` slice is covered by upstream PR #1459;
+  the `_rebuild_one_collection` slice is fork-only — the bug
+  surfaces only when a rebuild reaches the upsert path after
+  extraction, which is the specific operational shape this fork's
+  151K+ drawer palace has been exercising. JP's parallel-session
+  work originally landed both fixes on the
+  `fix/repair-empty-metadata` branch (filed upstream as #1459 for
+  the first slice); cherry-picked onto fork main as `949cb20` so
+  both fixes are live on `jphein/mempalace` immediately.
+pr: 1459
+pr_state: MERGED
+files:
+- mempalace/repair.py

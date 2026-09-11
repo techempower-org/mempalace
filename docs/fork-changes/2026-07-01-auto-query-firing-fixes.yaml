@@ -1,0 +1,37 @@
+seq: 99
+id: auto-query-firing-fixes
+date: '2026-07-01'
+bucket: Fixed
+commit: fad3e27
+area: Search
+summary: 'Auto-query firing fixes: frozen turn counter, dead wing scoring, lowercase entities, turn-1 cadence'
+body: |
+  Auto-query was injecting on only ~1.7% of real prompts because of
+  three defects, not a threshold preference (found by a read-only
+  investigation against the 3,935-decision corpus). The hook derived
+  its session id from the never-set ``CLAUDE_SESSION_ID`` env var, so
+  the time-based fallback minted a fresh id every prompt and froze the
+  turn counter at 1 — the periodic depth signal could never fire. Wing
+  scoring was dead in production: ``mempalace_list_wings`` over
+  ``/mcp`` scans every drawer and times out, so ``known_wings`` was
+  always empty and the +3/+2 bonuses never fired. And the capital-only
+  entity regex made lowercase project names invisible.
+
+  Fixes: session id now comes from the hook's stdin JSON (fallback
+  ``CLAUDE_CODE_SESSION_ID``); wings are fetched from the fast
+  ``/status/fast`` route and cached to disk so scoring survives a
+  sleeping daemon; a lowercase wing/alias pass (word-boundary,
+  min-length 5, common-word blocklist) registers terse lowercase
+  mentions; path/orchestration stopwords stop junk fires on
+  ``~/Projects`` fragments; the depth refresh fires on turn 1 and
+  every 10 turns (most sessions are short — turn-15 left the majority
+  with zero recall); an optional known-entities registry is loaded
+  when present. The firing threshold is intentionally unchanged.
+tests: 21 tests (TestDepthSignal, TestLowercaseWingMatch, TestPathAndOrchestrationNoise, TestWingCache, TestKnownEntitiesLoad, TestSessionIdFromStdin)
+files:
+- mempalace/auto_query/signals.py
+- mempalace/auto_query/__main__.py
+- hooks/palace-auto-query.sh
+- tests/test_auto_query_signals.py
+- tests/test_auto_query_main.py
+- tests/test_auto_query_hook.py

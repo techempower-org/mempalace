@@ -1,0 +1,47 @@
+seq: 132
+id: cli-mine-background-replay-drain
+date: '2026-09-10'
+bucket: Fixed
+commit: 823547f
+area: CLI
+summary: '`mempalace replay` asks the daemon to queue each mine instead of waiting on the palace write lock'
+body: |
+  ``hooks_cli._post_daemon_mine`` has sent ``"background": true`` since
+  #433 and gets a 202 in ~2.5 ms. ``cli._post_daemon_mine_cli`` — a
+  separate copy of the same request builder — was never updated, so
+  everything routed through it asked the daemon to run the mine inline
+  and waited for a gap in the palace write lock. Since
+  ``pending_queue.replay(post)`` archives an entry only when ``post``
+  returns True, ``mempalace replay`` inherited that wait: measured
+  2026-09-10 under normal checkpoint load, 120 s of runtime drained
+  **one** request (34 → 33) while the daemon's own mine queue sat at
+  142-207 entries with its drainer holding the flock. The queue the flag
+  exists to unblock was blocked by the flag's absence.
+
+  ``_post_daemon_mine_cli`` now takes a keyword-only ``background`` and
+  always puts the key on the wire, false included — the daemon's field
+  defaults to ``False``, so an omitted key and an explicit false behave
+  identically there, which is precisely why the omission survived from
+  #433 unnoticed. ``replay`` passes ``True``; success there means the
+  daemon holds the request in its durable pending-mines queue rather than
+  that the mine has finished, which is the right contract for a hand-off
+  and is stated in the docstring. A queued 202 already reached the
+  success path (``urlopen`` raises only on >= 400); what it lacked was
+  being read, so the daemon's ``systemMessage`` is printed instead of raw
+  JSON and the line reads "queued" rather than "accepted". ``--background``
+  now applies to the palace-daemon route as well as the local job queue —
+  both mean "do not wait" — and errors only when neither route applies. A
+  daemon predating the field ignores it and blocks as before.
+
+  The daemon-strict call site is also where #455 put
+  ``_derive_daemon_mine_wing``, so the two changes met on one line in a
+  rebase. Resolving toward either side alone is silent — the tree is
+  clean and the resolver's own tests pass — and taking this side would
+  have reverted #455, filing a single mined file under a wing named for
+  the file (``claude_md``) instead of its project. Three tests in
+  ``tests/test_cli_mine_single_file.py`` now pin the interaction: the
+  wing refusal fires with ``background`` set, and a queued mine still
+  derives the project's wing.
+tests: '13 (test_cli_daemon: TestPostDaemonMineCliBackground x5, TestCmdMineBackgroundFlag x4; test_pending_queue: replay-requests-background, replay-drains-against-background-only-daemon; test_cli_mine_single_file: background x wing-derivation x3)'
+files:
+- mempalace/cli.py

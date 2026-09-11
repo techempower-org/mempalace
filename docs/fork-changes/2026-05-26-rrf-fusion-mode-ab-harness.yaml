@@ -1,0 +1,33 @@
+seq: 70
+id: rrf-fusion-mode-ab-harness
+date: '2026-05-26'
+bucket: Added
+commit: 6c9d10c
+area: Search
+summary: RRF fusion mode + convex-vs-RRF A/B harness (#162)
+body: |
+  ``search_memories`` gains a ``fusion_mode`` parameter selecting how the
+  merged candidate pool is finally ranked: ``"convex"`` (default — the
+  existing weighted vector+BM25 blend in ``_hybrid_rank``) or ``"rrf"``
+  (Reciprocal Rank Fusion of the vector and BM25 rank orderings via the
+  pure ``mempalace.rrf`` primitives). RRF fuses rank positions rather than
+  blending incomparable cosine/Okapi score scales — the question #82 left
+  untested when it found raw-vector RRF lift didn't survive the hybrid
+  pipeline.
+
+  ``scripts/eval_fusion_ab.py`` is the A/B apparatus: runs both pipelines
+  over a probe set (same ``[query, expected, why]`` JSON format as the
+  multi-encoder harness) and reports MRR / Recall@5 / Recall@10 plus
+  per-probe rank deltas. The scoring math is pure and unit-tested; the
+  live run is gated behind an explicit acknowledgement flag and DEFERRED
+  until the KG backfill completes, since running it hits daemon ``/search``
+  and steals GPU/daemon capacity. Honors
+  ``feedback_test_retrieval_against_our_corpus`` — A/B on our corpus, not
+  trusted from literature.
+tests: tests/test_rrf_rank.py (13), tests/test_eval_fusion_ab.py (18)
+pr: 247
+files:
+- mempalace/searcher.py
+- scripts/eval_fusion_ab.py
+- tests/test_rrf_rank.py
+- tests/test_eval_fusion_ab.py

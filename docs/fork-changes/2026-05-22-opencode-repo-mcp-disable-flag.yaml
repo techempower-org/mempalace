@@ -1,0 +1,24 @@
+seq: 46
+id: opencode-repo-mcp-disable-flag
+date: '2026-05-22'
+bucket: Fixed
+commit: 47018e5
+area: CLI
+summary: Disable repo-level MCP entry by default + venv-python fallback
+body: |
+  First attempt at the daemon-routed-vs-local-spawn double-server
+  problem from upstream PR #1567's ``.opencode/opencode.json``.
+  Set ``enabled: false`` on the repo entry; switched the spawn
+  command from bare ``python -m mempalace.mcp_server`` to
+  ``.venv/bin/python -m mempalace.mcp_server`` so a contributor
+  flipping ``enabled`` back to true would actually find mempalace
+  installed (uv-managed clones have it in the venv, not on PATH).
+
+  Superseded same-day by ``opencode-repo-config-empty-mcp``
+  (#110) — opencode's config merger doesn't actually honor
+  ``enabled: false`` for command overrides, so the entry had to
+  be stripped entirely.
+files:
+- .opencode/opencode.json
+superseded_by:
+- opencode-repo-config-empty-mcp

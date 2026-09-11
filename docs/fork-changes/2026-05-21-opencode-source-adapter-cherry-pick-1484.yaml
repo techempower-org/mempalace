@@ -1,0 +1,52 @@
+seq: 41
+id: opencode-source-adapter-cherry-pick-1484
+date: '2026-05-21'
+bucket: Added
+commit: 2ffe652
+area: CLI
+summary: OpenCodeSourceAdapter (RFC 002) — retrospective ingest of OpenCode SQLite sessions
+body: |
+  Cherry-pick of upstream PR #1484. Adds
+  `mempalace/sources/opencode.py` — an RFC 002 `BaseSourceAdapter`
+  that ingests OpenCode AI-coding-CLI session transcripts from
+  `~/.local/share/opencode/opencode.db` into the palace, formatted
+  to match `convo_miner`'s exchange-pair drawer shape.
+
+  Five-commit cherry-pick:
+
+  - `2c368c6` — initial adapter (482-line `opencode.py`, 6
+    opencode-namespaced reference transformations in
+    `transforms.py`, entry-point registration, 28 tests, sample
+    SQLite-schema-verbatim fixture)
+  - `3ff7043` — gemini-code-assist review fixes: missing
+    `opencode_session_version` in metadata (broke incremental
+    `is_current`), `_skip_requested` private access, `filed_at`
+    hoisted out of chunk loop, PEP 8 import position
+  - `9531532` — igorls review fixes: ruff F401/E402 in tests,
+    route-hint wing/drawer-stage precedence mismatch (RFC 002 §2.5),
+    unjustified `# noqa` cleanup
+  - `18ab021` + `2ffe652` — CI ruff 0.4.x format passes
+
+  Adapter conformance via RFC 002 §7.3 declared-transformation
+  round-trip; one drawer per exchange-pair; `source_file` shape
+  `opencode://<absolute-db-path>#session=<sid>`; wing routes from
+  `session.directory` basename (matching the live-capture plugin's
+  taxonomy); incremental ingest works via `opencode_session_version`.
+
+  Originated from JakobSachs's spadework on upstream PR #23 (DB
+  schema reverse engineering, session/message/part traversal,
+  tool-input/tool-output stripping). PR #23 is still OPEN but
+  CONFLICTING and unresponsive since 2026-04-08; #1484 carries
+  `Co-authored-by: JakobSachs` per coordination on #23.
+tests: 28 OpenCode adapter tests pass; full suite 2133 passed / 33 skipped (zero regressions on fork main + 60-commit upstream sync baseline)
+pr: 1484
+pr_state: OPEN
+files:
+- mempalace/sources/opencode.py
+- mempalace/sources/transforms.py
+- mempalace/sources/context.py
+- pyproject.toml
+- tests/test_sources_opencode.py
+- tests/fixtures/opencode/sample_session_2026_05_12/README.md
+- tests/fixtures/opencode/sample_session_2026_05_12/build_fixture.py
+- tests/test_corpus_origin_integration.py

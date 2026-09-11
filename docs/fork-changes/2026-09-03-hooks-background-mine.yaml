@@ -1,0 +1,16 @@
+seq: 114
+id: hooks-background-mine
+date: '2026-09-03'
+bucket: Fixed
+commit: 79b192b
+area: Reliability
+summary: Hooks ask the daemon to run checkpoint mines in the background (202 + serial drain) — no more 30s timeouts, journaled replays, and double mines
+body: |
+  ``_post_daemon_mine`` sends ``background: true``. The daemon (palace-daemon
+  #242–#244) queues the mine, answers 202 in ~2ms, drains serially, requeues
+  on palace-lock contention instead of quarantining, and recovers an
+  interrupted batch at startup. Before: ``/mine`` blocked until the subprocess
+  finished, the hook's 30s timeout fired on every real mine, a replay was
+  journaled, and the daemon finished the original anyway — every long mine
+  ran twice and the write lock stayed hot (#426; design palace-daemon#233).
+tests: 1 updated (test_hooks_cli payload contract)

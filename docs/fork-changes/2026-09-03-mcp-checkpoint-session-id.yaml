@@ -1,0 +1,13 @@
+seq: 115
+id: mcp-checkpoint-session-id
+date: '2026-09-03'
+bucket: Fixed
+commit: e5e31f0
+area: Reliability
+summary: tool_checkpoint forwards session_id to the diary write; declared in both tool schemas (#408)
+body: |
+  ``mempalace_checkpoint`` dropped the caller's ``session_id`` on the way to
+  ``tool_diary_write``, so checkpoint diaries could not be tied back to the
+  session that wrote them. Threaded through and declared in
+  ``mempalace_checkpoint.diary`` and ``mempalace_diary_write``.
+tests: 2 (test_checkpoint_session_id)

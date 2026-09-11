@@ -1,0 +1,52 @@
+# Non-entry keys of the fork-change manifest (#473).
+#
+# Entries live one-per-file in docs/fork-changes/. This file holds what is
+# NOT per-entry: it changes when an upstream PR merges, not once per fork
+# PR, so a shared file on that cadence does not recreate the conflict the
+# split was for.
+
+merged_upstream:
+  trim_after_days: 30
+  notes:
+  - Trim entries from this list once they're more than ~30 days old.
+  - See CHANGELOG.md (upstream) for the full released history.
+  entries:
+  - pr: 1024
+    title: Configurable chunk_size / chunk_overlap / min_chunk_size
+    merged: 2026-05-15
+  - pr: 1173
+    title: quarantine_stale_hnsw on make_client + cold-start gate + integrity sniff
+    merged: 2026-04-26
+  - pr: 1177
+    title: '`.blob_seq_ids_migrated` marker guard (closes #1090)'
+    merged: 2026-04-26
+  - pr: 1198
+    title: _tokenize None-document guard in BM25 reranker
+    merged: 2026-04-26
+  - pr: 1201
+    title: palace_graph.build_graph skips None metadata
+    merged: 2026-04-26
+  - pr: 659
+    title: diary `wing` parameter
+    merged: 2026-04-23
+  - pr: 661
+    title: graph cache with write-invalidation
+    merged: 2026-04-22
+  - pr: 673
+    title: deterministic hook saves
+    merged: 2026-04-22
+  - pr: 1021
+    title: Claude Code 2.1.114 stdout/silent_save fixes
+    merged: 2026-04-22
+  - pr: 999
+    title: None-metadata guards across read paths
+    merged: 2026-04-18
+  - pr: 1000
+    title: quarantine_stale_hnsw shipped
+    released_in: v3.3.2
+  - pr: 1023
+    title: PID file guard prevents stacking mine processes
+    released_in: v3.3.2
+  - pr: 681
+    title: Unicode checkmark → ASCII
+    released_in: v3.3.2

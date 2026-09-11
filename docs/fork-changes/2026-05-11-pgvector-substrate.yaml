@@ -1,0 +1,98 @@
+seq: 26
+id: pgvector-substrate
+date: '2026-05-11'
+bucket: Added
+commit: 5e90c72
+area: Reliability
+summary: 'PostgreSQL backend via #665 cherry-pick + fork-side adaptations + smoke tests'
+body: |
+  Cherry-pick of skuznetsov's upstream PR
+  [#665](https://github.com/MemPalace/mempalace/pull/665) — adds a
+  PostgreSQL backend built on the merged #995 / RFC 001
+  `BaseBackend` contract. Supports `pg_sorted_heap` when the
+  extension is installed; falls back to `pgvector` (the path this
+  fork actually runs). INSERT … SELECT FROM unnest() + ON CONFLICT
+  for batch writes; lazy vector index creation after a row-count
+  threshold; first-class `wing` / `room` columns with btree
+  indexes; metadata as `jsonb` with `$eq` / `$ne` / `$in` / `$nin`
+  / `$and` / `$or` filter translation. Optional install via
+  `pip install -e ".[postgres]"` — only adds `psycopg2-binary`,
+  no new ML dependency stack.
+
+  Composition stance is WAIT-for-#665 to merge upstream rather
+  than fork-port. Full rationale at
+  `docs/internal/pgvector-665-decision.md` (commit `fbd8dbd`):
+  conflict surface is moderate (~51 LOC across `palace.py` +
+  `tests/test_backends.py` + trivial README/uv.lock); #665 is
+  comprehensive and architecturally aligned; the `pg_sorted_heap`
+  codepath is gated by extension availability so our deployment
+  runs the pgvector fallback cleanly. Documented Plan-B trigger:
+  switch to fork-port path if no #665 maintainer activity past
+  2026-06-08.
+
+  Four fork-side adaptations rode along with the cherry-pick:
+
+  - **`palace.py` compat shim** (`5e90c72`). `_DEFAULT_BACKEND`
+    re-aliased to `get_backend("chroma")` so existing
+    `mcp_server.py` cache-clearing on `._clients` / `._freshness`
+    and the `palace.close_palace` call site keep working without
+    callers migrating to the new abstraction. Migration of those
+    five call sites is a follow-up commit; the shim is
+    transitional, not permanent.
+
+  - **`palace.get_collection()` accepts None for collection_name**
+    (`5c7f234`). Upstream #665 tightened the contract from
+    `Optional[str] = None` to `str = DEFAULT_COLLECTION_NAME` and
+    resolved the default only when the literal sentinel was
+    passed. Fork-side callers
+    (`searcher.search_memories`, `convo_miner`, `sweeper`,
+    `diary_ingest`, etc.) pass `collection_name=None` per the
+    pre-#665 fork convention; the tight contract propagated None
+    to chromadb and produced 30 test_searcher failures. Accepting
+    both forms (None and `DEFAULT_COLLECTION_NAME`) restores the
+    green floor without disturbing #665's structure.
+
+  - **`test_palace_get_collection_uses_configured_collection_name`
+    signature update** (`941342b`). `fake_get_collection` now
+    accepts `palace=PalaceRef` and `options=` kwargs;
+    monkeypatches via `MEMPALACE_COLLECTION_NAME` env var rather
+    than the legacy `get_configured_collection_name` function
+    (which is now a thin back-compat wrapper around
+    `MempalaceConfig().collection_name`).
+
+  - **Smoke tests** (`04c6294`). Three `pytest.skipif`-gated
+    integration tests in `tests/test_backends_postgres.py` —
+    backend registration as singleton, drawer add/get round-trip,
+    L2 distance ordering. Documented in
+    `docs/internal/pgvector-665-decision.md` as the contract
+    proxy for "the backend is end-to-end working." Activated by
+    setting `TEST_POSTGRES_DSN`; skipped by default so machines
+    without postgres still see a green floor.
+
+  Substrate stood up on the homelab: `mempalace-db` container at
+  `disks.jphe.in:5433` (LAN-bound, internal-only) running PG16 +
+  pgvector 0.8.2 + AGE 1.6.0 via `apache/age:release_PG16_1.6.0` +
+  apt-installed `postgresql-16-pgvector`. Password in Vaultwarden
+  as `mempalace-db-postgres`. Init via `init.sql` mounted at
+  `/docker-entrypoint-initdb.d/`. Build context at
+  `/opt/mediaserver/mempalace-db/`.
+tests: |
+  1851 passed, 1 skipped, 106 deselected (with `TEST_POSTGRES_DSN`
+  set). +23 vs the pre-cherry-pick 1828 baseline — 20 from #665's
+  new postgres backend tests, 3 from the new smoke file. Zero
+  regressions in non-postgres paths.
+pr: 665
+pr_state: OPEN
+files:
+- mempalace/backends/postgres.py
+- mempalace/backends/__init__.py
+- mempalace/backends/registry.py
+- mempalace/palace.py
+- mempalace/config.py
+- pyproject.toml
+- tests/test_backends.py
+- tests/test_backends_postgres.py
+- tests/test_config_extra.py
+- docs/internal/pgvector-665-decision.md
+- docs/postgres_backend.md
+- scripts/install_pg_backend.sh

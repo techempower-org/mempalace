@@ -1,0 +1,40 @@
+seq: 39
+id: backfill-age-from-existing-drawers
+date: '2026-05-17'
+bucket: Added
+commit: b3f0206
+area: Reliability
+summary: Backfill AGE graph from existing drawer table — restartable, checkpointed
+body: |
+  Phase 4 of the AGE-integration plan. New module
+  `mempalace/backfill_age.py` with CLI entry point that reads the
+  drawer table once and builds the full Wing/Room/Drawer/MENTIONS
+  graph in AGE. Companion to `migrate_to_postgres` — that script
+  copies chroma → postgres, this one copies postgres-drawers →
+  postgres-AGE.
+
+  Design:
+  - Restartable via `mempalace_kg_backfill_state` checkpoint table
+    (phase, key) — re-running skips already-processed (wing, room)
+    or drawer keys.
+  - Idempotent via MERGE on identity columns; safe to re-run.
+  - Bounded memory via named server-side cursor — never loads the
+    full drawer table into memory.
+  - Configurable scope: `--wing memorypalace` for one wing,
+    `--skip-palace` to add only entity edges to existing structure,
+    `--skip-entities` for fast "high-level palace map" first pass.
+
+  Companion `add_mention(drawer_id, entity_name)` method on
+  `KnowledgeGraphAGE` for the (Drawer)-[:MENTIONS]->(Entity) edge
+  pattern. CREATE-ALWAYS edge semantics (no upsert) — matches the
+  SQLite KG triples-table behavior. AGE 1.6.0 doesn't support `SET`
+  on edge properties or `coalesce` in SET, so callers that want
+  idempotency track state externally (backfill checkpoint table
+  does this).
+
+  Tested on `sme_lme_bench` (1181 docs wing chunks → 6015 entities
+  + 13721 MENTIONS edges in 5.85 min). Production palace projection:
+  ~22 hours for 274K drawers — overnight job.
+files:
+- mempalace/backfill_age.py
+- mempalace/knowledge_graph_age.py

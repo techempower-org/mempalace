@@ -1,0 +1,39 @@
+seq: 30
+id: hooks-routing-via-palace-daemon
+date: '2026-05-11'
+bucket: Fixed
+commit: 42ded2e
+area: Reliability
+summary: Route Stop/PreCompact hooks through palace-daemon/clients/hook.py
+body: |
+  Replaces the bash wrapper invocation pattern in
+  `.claude-plugin/hooks/hooks.json` with a single Python entrypoint
+  via the daemon's hook client. Both Stop and PreCompact now invoke
+  `python3 /home/jp/Projects/palace-daemon/clients/hook.py` with
+  explicit `--hook stop --harness claude-code` /
+  `--hook precompact --harness claude-code` arguments and a 30s
+  timeout.
+
+  Description on the manifest names this the 'post-2026-05-11
+  split-brain fix' — the daemon's hook client now owns the routing
+  decision (daemon vs local) instead of forking it across two
+  bash scripts that previously made independent decisions about
+  where to send the work. Hooks weren't firing reliably under the
+  previous shape; the staged file (`hooks.json.layer2-staged`,
+  created 2026-05-11 06:01) just needed promotion.
+
+  The previously-active `mempal-stop-hook.sh` and
+  `mempal-precompact-hook.sh` stay in the tree — they're still
+  tested by `tests/test_claude_plugin_hook_wrappers.py` and may be
+  invoked by non-Claude-Code agents through different paths.
+  They're alternate invocation surfaces, not dead code.
+
+  Fork-only deployment config: the absolute path
+  `/home/jp/Projects/palace-daemon/clients/hook.py` is specific
+  to JP's homelab layout. Won't go to upstream as-is; the path
+  shape would need to become discovery-based first (similar to
+  how `MEMPALACE_PYTHON` + `$PLUGIN_ROOT/venv/bin/python3` +
+  system fallback works in CLAUDE.md row 19's venv-aware
+  resolution pattern).
+files:
+- .claude-plugin/hooks/hooks.json

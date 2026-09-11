@@ -1,0 +1,19 @@
+seq: 61
+id: warp-adapter
+date: '2026-05-23'
+bucket: Added
+commit: 2e85585
+area: CLI
+summary: Warp terminal source adapter (#62)
+body: |
+  ``WarpSourceAdapter`` ingests both command sessions (grouped by
+  ``session_id``) and AI queries from Warp's SQLite database at
+  ``~/.local/state/warp-terminal/warp.sqlite``. Commands are
+  formatted as terminal transcripts with prompt-like prefixes;
+  AI queries are formatted as exchange-pair markdown. Graceful
+  degradation if ``ai_queries`` table is absent.
+tests: 27 — test_sources_warp.py
+files:
+- mempalace/sources/warp.py
+- tests/test_sources_warp.py
+- pyproject.toml

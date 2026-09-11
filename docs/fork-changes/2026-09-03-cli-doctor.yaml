@@ -1,0 +1,15 @@
+seq: 122
+id: cli-doctor
+date: '2026-09-03'
+bucket: Added
+commit: 04dde83
+area: CLI
+summary: mempalace doctor — one-screen health check of the memory workflow (bridge, daemon, wing, hooks, replay)
+body: |
+  Five check lines: MCP bridge resolvable on PATH, daemon reachable + palace
+  size, this project's wing present (drawers + rank), save hooks firing
+  (hook.log freshness), replay backlog. Exits non-zero if a layer is broken;
+  ``--json`` for scripts. Guards the failure mode where the MCP bridge was
+  unresolvable fleet-wide for days and nothing surfaced it (#425). Validated
+  all-green by a fresh session on turn 1.
+tests: 4 (test_cli_doctor)

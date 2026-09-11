@@ -1,0 +1,57 @@
+seq: 82
+id: cli-why-and-tunnels-fast-path
+date: '2026-05-28'
+bucket: Added
+commit: fdcd0b4
+area: CLI
+summary: 'mempalace why + tunnels — explain a drawer + inventory cross-wing tunnels (slice of #191)'
+body: |
+  Two more verbs join the daemon-fast-path family started by
+  ``tags`` / ``overlap`` / ``list`` / ``move`` / ``stats`` /
+  ``cypher`` / ``graph``. Same shape: daemon-only, ``--format=table``
+  (default) or ``--format=json`` / ``--json``, sibling failure-mode
+  exit codes (1 for daemon-down or unreachable, 2 for input
+  validation or inner-error envelopes).
+
+  ``mempalace why <drawer_id>`` answers "why would this drawer
+  surface?" by composing three read-only daemon calls into one
+  report — no ``searcher.py`` changes, pure orchestration over
+  existing read paths. (1) ``mempalace_get_drawer`` for the wing,
+  room, tag set, and content snippet. (2) A read-only Cypher hop
+  against AGE for the drawer's ``:MENTIONS``-Entity edges, top-N
+  by mention count (``--entities``, default 10) — the drawer ID
+  is sanitized through ``sanitize_kg_value`` and inlined as a
+  Cypher literal because the daemon's ``/cypher`` endpoint accepts
+  only ``{cypher, graph}``. (3) ``mempalace_search`` keyed on the
+  drawer's own first non-blank paragraph for the nearest semantic
+  neighbors (``--neighbors``, default 5); the drawer itself is
+  filtered out (self-distance 0). A 500 on the entities hop (AGE
+  not configured on a chroma-only backend) degrades to an empty
+  MENTIONS block — the report still renders. The minimum-viable
+  "debugging lens" for retrieval calibration work: see *where* a
+  drawer lives, *what* it links to in the KG, and *what siblings*
+  it sits next to in vector space — all without standing up a
+  notebook.
+
+  ``mempalace tunnels [--wing W] [--passive]`` wraps the existing
+  ``mempalace_list_tunnels`` MCP tool. Default returns explicit
+  tunnels only (the agent-wired records at
+  ``~/.mempalace/tunnels.json``); ``--passive`` opts in to the
+  inferred passive overlap (rooms appearing in 2+ wings,
+  computed from ``graph_stats`` per issue #75's
+  explicit/passive merge). ``--wing W`` filters to tunnels
+  touching one wing. The daemon already had this read path
+  exposed via MCP; the missing piece was the CLI surface —
+  previously you had to call ``stats`` and grep, or hit the
+  MCP endpoint directly with curl.
+
+  Slice of #191 (Polished CLI experience). No upstream PR yet;
+  both verbs depend on daemon-side state (``mempalace_list_tags``,
+  ``mempalace_list_tunnels``, ``/cypher``, ``mempalace_search``)
+  that upstream doesn't have, so they ship fork-only until either
+  the daemon merges or there's a generic local-palace adapter.
+tests: 36 — tests/test_cli_why.py (three-block report with location/MENTIONS/NEIGHBORS rendering, self-drawer filtered from neighbors, JSON envelope shape, get_drawer + /cypher + mempalace_search composition with drawer-id-as-literal Cypher, /cypher 500 degrades to empty entities not failure, --neighbors/--entities limits, missing/whitespace drawer_id rejection, daemon-down/unreachable + drawer-not-found + search-down exit codes, argparse wiring incl. --neighbors negative rejection); tests/test_cli_tunnels.py (table with kind column, empty payload, --wing scope label in header, --passive opts in mixed kinds, JSON pass-through, --wing/--passive forwarding to mempalace_list_tunnels arguments, daemon-down + inner-error exit codes, argparse wiring)
+files:
+- mempalace/cli.py
+- tests/test_cli_why.py
+- tests/test_cli_tunnels.py

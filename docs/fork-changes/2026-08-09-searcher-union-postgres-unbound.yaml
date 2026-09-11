@@ -1,0 +1,24 @@
+seq: 102
+id: searcher-union-postgres-unbound
+date: '2026-08-09'
+bucket: Fixed
+commit: 96f83d7
+area: Search
+summary: 'Searcher: restore mempalace_search on postgres — guard capability-path conversion in union merge (UnboundLocalError since the 2026-07-02 sync)'
+body: |
+  The ``b46f18d`` upstream sync kept upstream's unconditional tail of
+  ``_merge_bm25_union_candidates`` (``bm25_extra = []`` + ``for hit in
+  lexical.hits``) after the fork's postgres dispatch branch. On the
+  postgres backend the fetched BM25 candidates were clobbered and the
+  loop read ``lexical`` — bound only on the capability path — raising
+  ``UnboundLocalError`` on every union/hybrid search. MCP
+  ``mempalace_search`` and REST ``/search`` 500'd from 2026-07-02
+  until the 2026-08-09 deploy (issues #378/#384); ``/health`` stayed
+  green throughout, which spawned palace-daemon#229 (``/health/ready``).
+  The fix binds both names before the try and converts lexical hits
+  only when the capability path fetched them; ``TestUnionPostgresPath``
+  now guards the arm for the next sync (#383 watch item).
+tests: TestUnionPostgresPath — first coverage of the fork-only postgres arm
+files:
+- mempalace/searcher.py
+- tests/test_hybrid_candidate_union.py

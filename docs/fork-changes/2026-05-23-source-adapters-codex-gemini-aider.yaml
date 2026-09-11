@@ -1,0 +1,24 @@
+seq: 59
+id: source-adapters-codex-gemini-aider
+date: '2026-05-23'
+bucket: Added
+commit: 0c23165
+area: CLI
+summary: 'Codex, Gemini, and Aider source adapters (#61, #59)'
+body: |
+  Three new corpus-origin adapters: ``CodexSourceAdapter`` parses
+  Codex CLI JSONL (``session_meta`` + ``event_msg``),
+  ``GeminiSourceAdapter`` parses Gemini CLI JSONL
+  (``session_metadata`` + ``user``/``gemini``), and
+  ``AiderSourceAdapter`` parses Aider markdown chat history
+  (``# aider chat started at`` headers + ``####`` user turns).
+  All registered as entry points.
+tests: 31 — test_sources_codex.py, test_sources_gemini.py, test_sources_aider.py
+files:
+- mempalace/sources/codex.py
+- mempalace/sources/gemini.py
+- mempalace/sources/aider.py
+- tests/test_sources_codex.py
+- tests/test_sources_gemini.py
+- tests/test_sources_aider.py
+- pyproject.toml

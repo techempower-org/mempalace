@@ -1,0 +1,17 @@
+seq: 54
+id: uncertainty-aware-retrieval-research
+date: '2026-05-22'
+bucket: Added
+commit: 43547c4
+area: Docs
+summary: 'Research doc: uncertainty-aware retrieval analysis (#84)'
+body: |
+  ``docs/research/uncertainty-aware-retrieval.md`` analyses the
+  MIT CSAIL paper *Beyond Binary Rewards* (Damani et al.,
+  arXiv:2507.16806) for applicability to mempalace's hybrid
+  search stack. The headline technique (RLCR) does not transfer
+  directly; two transferable kernels proposed: calibrated
+  ``confidence`` field via isotonic regression, and Brier-score
+  eval column in the harness. Closes #84.
+files:
+- docs/research/uncertainty-aware-retrieval.md

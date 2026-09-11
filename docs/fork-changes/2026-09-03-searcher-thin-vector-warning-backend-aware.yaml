@@ -1,0 +1,16 @@
+seq: 113
+id: searcher-thin-vector-warning-backend-aware
+date: '2026-09-03'
+bucket: Fixed
+commit: 43d3a28
+area: Search
+summary: Thin-vector warning no longer tells pgvector users to rebuild an HNSW index
+body: |
+  The ``vector ranked N — run mempalace repair to rebuild the HNSW index``
+  warning is a ChromaDB diagnosis. On postgres the same shape means the query
+  has no semantic neighbour inside the distance threshold (an identifier-soup
+  query on a healthy 86K-drawer wing scored 0.359 and an agent nearly ran a
+  long, pointless rebuild under the write lock). Backend-aware wording now
+  explains the threshold and suggests identifiers / broader phrasing /
+  ``--max-distance``, stating explicitly that it is not an index fault.
+tests: 2 (test_vector_underdelivered_warning)

@@ -1,0 +1,48 @@
+seq: 21
+id: retire-recovery-collection
+date: '2026-05-05'
+bucket: Changed
+commit: 0b945e1
+area: Search
+summary: Retire mempalace_session_recovery collection + read tool
+body: |
+  Follow-up to drop-checkpoint-write-path. With nothing writing
+  to the recovery collection anymore (hooks moved to verbatim-only
+  on the parent branch), the read paths and migration code that
+  fed it become dead. Delete them.
+
+  Removed in mempalace/:
+  ``_SESSION_RECOVERY_COLLECTION`` / ``get_session_recovery_collection``
+  / ``_CHECKPOINT_TOPICS`` (palace.py); ``_get_session_recovery_collection``
+  / ``_recovery_collection_cache`` / topic-routing branch in
+  ``tool_diary_write`` / ``tool_session_recovery_read`` handler
+  and TOOLS dict registration (mcp_server.py);
+  ``migrate_checkpoints_to_recovery`` (migrate.py); ``cmd_repair``
+  ``--mode reorganize`` (cli.py).
+
+  Removed in tests/: full ``test_session_recovery.py`` (12
+  tests); ``TestMigrateCheckpointsToRecovery`` class
+  (test_migrate.py, 6 tests); ``TestCheckpointRouting`` and
+  ``TestSessionRecoveryRead`` classes (test_mcp_server.py).
+
+  Removed in docs/: ``mempalace_session_recovery_read`` section
+  from ``website/reference/mcp-tools.md``.
+
+  Production data on disk was untouched by this code change.
+  A separate one-shot operation deleted the collection
+  (``client.delete_collection('mempalace_session_recovery')``)
+  after dumping its 1,032 archived entries to
+  ``~jp/backups/mempalace_session_recovery-2026-05-05.json``
+  on disks. Also referenced from the
+  ``2026-05-05-verbatim-only-design.md`` spec.
+tests: −18 (12 from test_session_recovery.py + 6 from test_migrate.py)
+pr: 8
+files:
+- mempalace/palace.py
+- mempalace/mcp_server.py
+- mempalace/migrate.py
+- mempalace/cli.py
+- website/reference/mcp-tools.md
+- tests/test_session_recovery.py
+- tests/test_migrate.py
+- tests/test_mcp_server.py

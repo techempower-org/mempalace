@@ -1,0 +1,53 @@
+seq: 6
+id: cherry-pick-1085
+date: '2026-04-26'
+bucket: Performance
+commit: 6be6fff
+area: Performance
+summary: 'Cherry-pick #1085 — batch ChromaDB inserts in miner (10–30× faster)'
+body: |
+  Cherry-picked from upstream PR
+  [#1085](https://github.com/MemPalace/mempalace/pull/1085) (@midweste,
+  OPEN as of 2026-04-26). New ``_build_drawer()`` helper + ``add_drawers()``
+  batch-insert path; ``process_file`` hands the full chunk list to
+  ``add_drawers`` instead of looping per-chunk. Hoists ``datetime.now()``
+  and ``os.path.getmtime()`` to file-level (2 syscalls per file instead
+  of 2N). Reported 10–30× mining speedup upstream. Fork-side resolution
+  preserved fork's existing ``DRAWER_UPSERT_BATCH_SIZE=1000``; aliased
+  upstream's ``CHROMA_BATCH_LIMIT`` to it. **2026-05-16:** #1085 was
+  closed by @midweste, superseded by merged upstream
+  [#1185](https://github.com/MemPalace/mempalace/pull/1185) (wider
+  scope: same batching + optional GPU acceleration). The fork-side
+  cherry-pick is now a no-op against develop; drop on next sync.
+  **2026-05-24:** reassessed and kept — *absorbed into fork
+  architecture*. Over the 73 commits to ``miner.py``,
+  ``convo_miner.py``, and ``format_miner.py`` since the cherry-pick
+  landed, the fork built on top of these primitives in ways
+  upstream #1185 does not provide:
+
+  1. ``add_drawers()`` is a fork-only public API
+     (``mempalace/miner.py``). Upstream #1185 inlined batching into
+     ``process_file`` and exposed no public batch function. The
+     fork's ``add_drawers`` returns the fork-only
+     ``(added, batch_ids, warnings)`` tuple wired to room-taxonomy
+     validation (#86) and is consumed by ``test_room_taxonomy.py``.
+  2. ``DRAWER_UPSERT_BATCH_SIZE`` / ``CHROMA_BATCH_LIMIT`` are
+     fork-only sub-batching knobs. Upstream does one giant upsert
+     per file (OOM risk on pathological files); the fork
+     sub-batches in groups of 1000. The knob is referenced from
+     ``miner.py``, ``convo_miner.py``, and ``format_miner.py``,
+     and monkeypatched by ``test_miner.py`` /
+     ``test_convo_miner_unit.py`` to drive the sub-batch loops.
+  3. ``_build_drawer_metadata`` carries fork-only Tier 6a
+     extensions (``line_start``, ``line_end``, ``content_date``)
+     that closet pointers depend on. Tested at
+     ``tests/test_miner.py``.
+
+  Net: the cherry-pick is no longer redundant with upstream and
+  must not be dropped. Closes
+  [#165](https://github.com/techempower-org/mempalace/issues/165).
+pr: 1085
+pr_state: CLOSED
+files:
+- mempalace/miner.py
+supersedes: []

@@ -1,0 +1,18 @@
+seq: 62
+id: cli-source-flag
+date: '2026-05-23'
+bucket: Added
+commit: 5ed9fa7
+area: CLI
+summary: 'CLI wiring: mempalace mine --source <adapter> (#57)'
+body: |
+  ``mempalace mine --source <name>`` routes through the adapter's
+  ``ingest()`` method. Supports ``--source list`` to enumerate
+  installed adapters, ``--dry-run`` for preview via
+  ``source_summary()``, wing override, and incremental skip checks.
+  Handles ``KeyboardInterrupt`` gracefully with partial-progress
+  reporting.
+tests: 13 — test_cli_source.py
+files:
+- mempalace/cli.py
+- tests/test_cli_source.py

@@ -1,0 +1,25 @@
+seq: 1
+id: kind-filter
+date: '2026-04-25'
+bucket: Fixed
+commit: f9f5cc4
+area: Search
+summary: kind= filter on search_memories excludes Stop-hook checkpoints (transitional)
+body: |
+  Three values: ``"content"`` (default, excludes), ``"checkpoint"``
+  (recovery/audit only), ``"all"`` (no filter). Two same-day architecture
+  corrections: (a) the where-clause filter (``topic $nin [...]``) tripped
+  a chromadb 1.5.x filter-planner bug; the exclusion moved to post-filter
+  only ([398f42f](https://github.com/jphein/mempalace/commit/398f42f));
+  (b) vector top-N is dominated by checkpoints on this palace, so
+  post-filter alone empties the result set without aggressive over-fetch
+  — pull size raised to ``max(n*20, 100)`` for ``kind != "all"`` (this commit).
+  Safety net during the transition; once Phase D ships and existing
+  checkpoints migrate, the post-filter and over-fetch hack become
+  deletable.
+tests: 9 in TestCheckpointFilter
+files:
+- mempalace/searcher.py
+- mempalace/mcp_server.py
+- tests/test_searcher.py
+supersedes: []

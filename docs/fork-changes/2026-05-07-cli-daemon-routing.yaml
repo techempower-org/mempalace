@@ -1,0 +1,52 @@
+seq: 25
+id: cli-daemon-routing
+date: '2026-05-07'
+bucket: Added
+commit: 22ef562
+area: CLI
+summary: daemon-route `mempalace status` / `search` / `mine` when PALACE_DAEMON_URL is set
+body: |
+  Companion to the `mcp_server` routing in commit `41359ba`. Closes
+  the last desktop-side path that opened a local chromadb client.
+
+  Adds `_daemon_strict()`, `_call_daemon_tool()`,
+  `_post_daemon_mine_cli()` helpers in `cli.py` mirroring the gate
+  already in `mempalace.hooks_cli` and `mempalace.mcp_server`.
+  `cmd_status`, `cmd_search`, `cmd_mine` route through the daemon
+  when `PALACE_DAEMON_URL` is set:
+
+  - Read paths (`status`, `search`) → JSON-RPC `tools/call` against
+    the daemon's `/mcp` endpoint. Output is formatted to match
+    the local `miner.status` / `searcher.search` printers — same
+    human-readable shape, with the daemon URL surfaced in the
+    header so the reader knows which view they're looking at.
+
+  - Write path (`mine`) → POST `/mine` (same endpoint
+    `hooks_cli._post_daemon_mine` already uses). CLI-friendly
+    errors print to stderr and exit non-zero; hooks_cli's variant
+    logs silently because a missed-mine isn't worth crashing a
+    hook.
+
+  `--palace <path>` always overrides routing — explicit path
+  means the user asked for THAT palace, not the canonical one.
+
+  Local-only commands (`init`, `repair`, `export`, `sweep`,
+  `purge`, `mined`, `wakeup`) stay local because they need on-host
+  filesystem access (HNSW rebuild, palace dump, sweeper
+  deduplication state). When `mempalace-data/` is archived those
+  commands will fail with "no palace found" until pointed
+  elsewhere with `--palace` — that's the right "your data is at
+  the daemon, not local" signpost.
+
+  Live smoke against `disks.jphe.in:8085`: `mempalace status`
+  returns 160,351 drawers, `mempalace search "daemon routing"`
+  returns properly-formatted hits.
+tests: |
+  14 new tests in `tests/test_cli_daemon.py` — gate semantics,
+  `_call_daemon_tool` body shape + JSON-RPC error surfacing,
+  `_post_daemon_mine_cli` body shape + stderr-on-failure, mine
+  routing in both projects and convos modes, fall-through-to-local
+  when env var is unset. Suite 1591 passed (1577 + 14 new).
+files:
+- mempalace/cli.py
+- tests/test_cli_daemon.py

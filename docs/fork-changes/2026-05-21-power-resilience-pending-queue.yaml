@@ -1,0 +1,37 @@
+seq: 35
+id: power-resilience-pending-queue
+date: '2026-05-21'
+bucket: Added
+commit: 0c34464
+area: Reliability
+summary: Pending-writes journal + replay so daemon outages stop being silent
+body: |
+  Closes a silent-data-loss gap exposed by the 2026-05-17 power
+  event: when ``PALACE_DAEMON_URL`` is set and the daemon's
+  backend is unreachable, the hook write path (``_post_daemon_mine``)
+  logged the failure and dropped the request — no local fallback,
+  no retry, no user-visible signal. Hooks fell silent for ~3 days
+  before noticed.
+
+  New ``mempalace/pending_queue.py`` appends each dropped request
+  to ``~/.mempalace/pending/YYYY-MM-DD.jsonl`` (fsynced, atomic).
+  ``mempalace replay`` and the session-start hook drain the queue
+  by re-issuing requests to the daemon once it recovers, with
+  ``(dir, wing, mode)`` dedup so a long outage doesn't replay the
+  same target dozens of times.
+
+  Session-start hook also emits a one-line ``systemMessage``
+  warning when the daemon ``/health`` is non-OK or the queue has
+  pending entries — throttled to once per ``session_id``.
+tests: |
+  tests/test_pending_queue.py (16 tests: enqueue, count, replay,
+  dedup, atomic rewrite, CLI integration, partial-failure exit code).
+  tests/test_hooks_cli.py: added 3 session-start cases + extended
+  ``test_post_daemon_mine_returns_false_on_error`` to assert the
+  enqueue side effect.
+files:
+- mempalace/pending_queue.py
+- mempalace/hooks_cli.py
+- mempalace/cli.py
+- tests/test_pending_queue.py
+- tests/test_hooks_cli.py

@@ -1,0 +1,51 @@
+seq: 76
+id: cli-cypher-readonly
+date: '2026-05-26'
+bucket: Added
+commit: 32a41b1
+area: CLI
+summary: mempalace cypher — read-only Cypher query CLI (#191)
+body: |
+  A new ``mempalace cypher`` subcommand — the arbitrary-walk escape
+  hatch that composes with the snapshot view shipped in
+  ``mempalace graph``. Wraps the palace daemon's
+  ``POST /cypher`` endpoint, which runs the supplied query against
+  Apache AGE on the postgres backend inside a ``READ ONLY``
+  transaction (write verbs are rejected server-side with SQLSTATE
+  25006 → HTTP 403). The CLI does **not** re-implement a
+  client-side blocklist of write verbs — that would drift; the
+  daemon is the source of truth for what is read-only.
+
+  Flags: positional ``QUERY`` (required), ``--graph`` (default
+  ``mempalace_kg``), ``--format table|json|csv``, ``--limit N``
+  (advisory hint only — the daemon's ``statement_timeout`` from PR
+  #228 is the real ceiling for runaway queries).
+
+  Failure modes mirror ``cmd_list`` / ``cmd_graph`` with one
+  addition for the read-only contract. Daemon-unreachable
+  (``DaemonError`` from timeout or network failure) prints a
+  stderr hint and exits 1. Non-2xx HTTP statuses are classified
+  through a tri-state return: ``403`` triggers a friendly
+  ``"this endpoint is read-only; rewrite as MATCH/RETURN"`` hint
+  and exits 2; ``401``/``404``/``503`` exit 1 with the generic
+  unreachable message. An inner-error envelope from the daemon
+  (``{"error": "..."}`` with no ``rows`` / ``data``) exits 2 — but
+  a response carrying *both* ``rows`` and an ``error`` field is
+  treated as success, since the rows present mean the query did
+  run (defensive against deprecation-warning chatter).
+
+  Empty / whitespace-only queries exit 2 without contacting the
+  daemon at all — instant feedback, zero daemon load.
+
+  No new MCP tool is added — the AI path already drives AGE via
+  the daemon's ``POST /cypher`` directly. This bridges operators
+  and scripts to the same endpoint with structured output and
+  sane exit codes.
+
+  Slice of the polished-CLI umbrella issue #191, building on the
+  ``mempalace list`` (cli-list-drawer-browser) and
+  ``mempalace graph`` (cli-graph-kg-snapshot) slices.
+tests: 21 — tests/test_cli_cypher.py (flag propagation, three formats, empty rows, daemon-down + 403 read-only hint)
+files:
+- mempalace/cli.py
+- tests/test_cli_cypher.py

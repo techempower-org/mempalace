@@ -1,0 +1,24 @@
+seq: 4
+id: hnsw-cold-start-gate
+date: '2026-04-25'
+bucket: Fixed
+commit: 70c4bc6
+area: Reliability
+summary: Gate quarantine_stale_hnsw to once-per-palace-per-process
+body: |
+  ``make_client()`` previously invoked ``quarantine_stale_hnsw`` on every
+  reconnect; under steady write load the proactive check kept firing,
+  racking up ``.drift-*`` directories every 10–30 minutes. New
+  ``ChromaBackend._quarantined_paths: set[str]`` caps it to one fire on
+  first open per palace per process. Real cold-start drift still caught
+  (replicated/restored palace); real runtime errors still caught via
+  palace-daemon's ``_auto_repair``, which calls ``quarantine_stale_hnsw``
+  directly and bypasses this gate.
+tests: 2 in test_backends.py (single-fire-per-palace, per-palace independence)
+pr: 1173
+pr_state: MERGED
+files:
+- mempalace/backends/chroma.py
+- tests/test_backends.py
+- tests/conftest.py
+merged_date: 2026-04-26

@@ -1,0 +1,33 @@
+seq: 95
+id: sync-upstream-340
+date: '2026-06-11'
+bucket: Changed
+commit: 373fdf2
+area: Reliability
+summary: 'Sync upstream/develop through v3.4.0 (2ec4bae): RFC-001 backend stack, diary checkpoints restored, 113 commits'
+body: |
+  Merged 113 upstream commits (~40 PRs) including the v3.4.0 release
+  and the RFC-001 pluggable-backend stack (#1679, #1727 metric-aware
+  similarity, #1731/#1734 embedder identity, #1732 advisory-locked
+  maintenance hooks), wing-normalize (#1675/#1702 — opt-in
+  ``migrate-wings``, vetted safe for the production palace),
+  delimiter-safe drawer ids (#1666, new drawers only), the
+  additive-mining ``file_already_mined`` fix, and miner robustness
+  (#1137/#1100/#1102/#1622/#1602). Headline resolutions: **diary
+  checkpoints restored** (JP, 2026-06-11) — the silent stop-hook path
+  writes a themed, agent_name-filed diary entry AND ingests the
+  verbatim transcript, marker advancing only on confirmed diary
+  write; ``palace.get_collection`` unified (upstream resolution +
+  mismatch protection + embedder-identity enforcement, fork postgres
+  DSN options + KG write-through); searcher keeps the fork pipeline
+  with upstream's metric-aware ``_distance_to_similarity`` threaded
+  through ``_hybrid_rank``; backend precedence aligned to RFC 001
+  (config.json beats ``MEMPALACE_BACKEND``); MCP server now 39 tools.
+  Suite: 4230 passed (was 3908 collected, now 4282).
+files:
+- mempalace/palace.py
+- mempalace/searcher.py
+- mempalace/mcp_server.py
+- mempalace/hooks_cli.py
+- mempalace/config.py
+- mempalace/cli.py

@@ -1,0 +1,42 @@
+seq: 84
+id: kg-add-triple-retry-within-worker
+date: '2026-05-28'
+bucket: Fixed
+commit: 36c0b02
+area: KG
+summary: kg_triple_worker retries add_triple within-worker on transient psycopg errors instead of abandoning to lease-reclaim (#298)
+body: |
+  When postgres dropped a connection mid-``add_triple`` (network
+  blip, OOM-restart, statement-timeout fire) the worker would
+  surface the exception, mark the drawer's queue row in the
+  ``claimed-but-not-completed`` state, and abandon the in-flight
+  triples. The drawer would then wait for the 15-minute
+  ``CLAIM_LEASE_SECONDS`` window to expire (PR #277) before any
+  worker re-claimed it. Lease-reclaim is the correct shape for
+  permanently-dead workers, not transient connection blips on a
+  live worker.
+
+  This change wraps the cypher execute in a small retry helper —
+  :func:`_execute_with_retry` — that catches the two psycopg error
+  families that fire on dropped connections (``OperationalError``,
+  ``InterfaceError``) and retries with linear backoff (default
+  2s, 4s, 6s; 12-second upper bound) before giving up. Other
+  exceptions (cypher syntax errors, ``_cypher_literal`` rejects,
+  ``DataError`` from a bad value) propagate on the first attempt —
+  retrying those would mask bugs and burn time.
+
+  Tuning knob: ``PALACE_KG_ADD_TRIPLE_MAX_ATTEMPTS`` env var
+  (default 3). The hard floor stays the lease-reclaim path — if
+  every retry fails, the drawer still survives via the dead-worker
+  reclaim that PR #277 provides.
+
+  Observed in production 2026-05-28 09:59 PDT: postgres
+  OOM-killed by its cgroup memory cap (tracked separately at
+  techempower-org/familiar.realm.watch#50). Six in-flight triples
+  on a single drawer were abandoned; the drawer recovered ~15
+  minutes later via lease-reclaim. With this change the recovery
+  would have been ~12 seconds.
+tests: 6 — tests/test_kg_triple_worker.py (succeeds first attempt, recovers after OperationalError, recovers after InterfaceError, raises after max attempts, does not retry non-transient ValueErrors, env override PALACE_KG_ADD_TRIPLE_MAX_ATTEMPTS)
+files:
+- mempalace/kg_triple_worker.py
+- tests/test_kg_triple_worker.py

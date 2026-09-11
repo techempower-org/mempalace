@@ -1,0 +1,16 @@
+seq: 57
+id: auto-query-signal-fix
+date: '2026-05-23'
+bucket: Fixed
+commit: 33e780e
+area: Search
+summary: Widen auto-query signal patterns for natural recall phrases
+body: |
+  The ``_EXPLICIT_RE`` pattern in ``auto_query/signals.py`` only
+  matched ``remind me`` — missed ``remember``, ``do we have``,
+  ``what did we``, etc. Added 6 new patterns covering natural
+  recall phrases. Also fixed shell pre-filter ordering bug (turn
+  counter was computed after the filter that referenced it) and
+  bumped hook timeout from 2000ms to 5000ms.
+files:
+- mempalace/auto_query/signals.py

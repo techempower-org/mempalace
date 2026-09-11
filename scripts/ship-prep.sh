@@ -19,7 +19,7 @@
 # Exit codes:
 #   0 — everything clean and ready to commit
 #   1 — one of the steps failed (likely a stale derived doc or a real
-#       drift requiring a fork-changes.yaml entry)
+#       drift requiring a docs/fork-changes/ entry)
 #   2 — internal error (not in a git repo, no pytest at all)
 #
 # Usage:
@@ -60,9 +60,9 @@ if [ -z "$pytest_bin" ] || [ ! -x "$pytest_bin" ]; then
 fi
 
 # ── 1. fork-changes.yaml maintenance (HEAD resolution + de-dup, #316) ──
-step "1/6  docs/fork-changes.yaml maintenance"
+step "1/6  docs/fork-changes/ maintenance"
 python scripts/maintain-fork-changes.py || fail "maintain-fork-changes.py failed"
-ok "fork-changes.yaml clean"
+ok "fork-changes entries clean"
 
 # ── 2. test count bump ──────────────────────────────────────────────────
 step "2/6  README test count"

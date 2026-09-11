@@ -1,0 +1,18 @@
+seq: 107
+id: cli-wave-drawer-family
+date: '2026-08-21'
+bucket: Added
+commit: 836d1a1
+area: CLI
+summary: 'CLI wave 1/3: `mempalace drawer get|add|delete|update` and `duplicate check` (#355, #363)'
+body: |
+  First lane of the ten-issue CLI wave (#191 umbrella): first-class
+  ``drawer`` verbs and ``duplicate check``. ``drawer update``
+  rewrites metadata only — a guard test pins that content is
+  immutable (verbatim-always). ``drawer delete`` gates on
+  ``--confirm``. Introduced the canonical ``_import_mcp_server()``
+  helper every later lane adopted: repairs the #225 stdout hijack
+  around local-path imports, prefers the caller's live stream over
+  mcp_server's import-time snapshot, and documents the one residual
+  case (stdout already aliased to stderr on entry) as out of scope.
+tests: 66 (test_cli_drawer, test_cli_duplicate)

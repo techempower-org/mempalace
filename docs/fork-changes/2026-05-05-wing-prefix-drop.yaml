@@ -1,0 +1,34 @@
+seq: 22
+id: wing-prefix-drop
+date: '2026-05-05'
+bucket: Changed
+commit: 86d4700
+area: Search
+summary: Drop wing_ prefix from transcript-derived wings to converge with operator mines
+body: |
+  The fork-only ``_wing_from_transcript_path`` returned
+  ``wing_<project>`` for hook-derived wings, but operator-mined
+  content from ``mempalace mine ~/Projects/X`` lands in a bare-name
+  wing. Result: every project that had both manual-mined content
+  AND hook-mined transcripts had its drawers split between
+  ``wing_X`` and ``X`` — silently invisible to a search filtered
+  by either name.
+
+  Drop the prefix. Fallback ``wing_sessions`` → ``sessions``
+  (which already exists with 2,132 drawers in the canonical
+  151K palace, so future fallback content converges with older
+  fallback content too).
+
+  One-shot data-side rename also applied to the live palace via
+  direct SQL UPDATE on chromadb's ``embedding_metadata`` table:
+  9 wings totaling 36,189 drawers renamed in a single transaction.
+  Hyphen normalization (``wing_realm-sigil`` → ``realm_sigil``,
+  ``kiyo-xhci-fix`` → ``kiyo_xhci_fix``,
+  ``clock-realm-watch`` → ``clock_realm_watch``) bundled in via
+  a follow-up SQL pass to converge with the new
+  ``normalize_wing_name`` output.
+tests: −2 / +0 (assertions updated to bare-name shape; 9 string literals adjusted)
+pr: 9
+files:
+- mempalace/hooks_cli.py
+- tests/test_hooks_cli.py

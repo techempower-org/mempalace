@@ -1,0 +1,24 @@
+seq: 109
+id: cli-wave-graph-diary
+date: '2026-08-21'
+bucket: Added
+commit: ff9ee22
+area: CLI
+summary: 'CLI wave 3/3: `mempalace diary`, `kg`, `walk` and `rate` first-class verbs (#354, #357, #359, #361)'
+body: |
+  Third lane of the CLI wave: ``diary write|read --agent``, ``kg
+  add|invalidate|timeline`` (no ``kg stats`` — redundant with
+  ``status``, parser-rejection test pins the decision), ``walk``
+  with ``--follow palace|tunnels``, and ``rate``. Destructive verbs
+  gate on ``--confirm`` and refuse hard when non-interactive.
+  ``kg timeline`` documents the backend's 100-row cap
+  (``_KG_TIMELINE_TOOL_CAP``) instead of silently truncating.
+
+  All three lanes route daemon-first through the shared helpers that
+  landed with the wave: ``_import_mcp_server()`` (stdout-hijack
+  repair around the mcp_server import, with a subprocess test
+  pinning the statement-order property it relies on) and the
+  env-scoped ``--palace`` context manager (``MEMPALACE_PALACE_PATH``
+  snapshot taken above the import, so mcp_server's module-scope argv
+  parse can't leak it — #409 tracks moving that parse into main()).
+tests: 83 (test_cli_diary, test_cli_kg, test_cli_walk, test_cli_rate)

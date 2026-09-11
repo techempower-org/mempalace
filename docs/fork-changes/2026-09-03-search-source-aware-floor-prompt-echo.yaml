@@ -1,0 +1,16 @@
+seq: 123
+id: search-source-aware-floor-prompt-echo
+date: '2026-09-03'
+bucket: Fixed
+commit: 31b74d9
+area: Search
+summary: Curated memory-file hits clear a lower confidence floor; harness prompt-echo drawers filtered as exhaust
+body: |
+  The flat 0.50 floor (#422) suppressed a correct 0.486 curated-memory-file
+  hit — "flat thresholds punish exactly the corpus you just added" (fleet
+  finding, openwrt-a0). One-fact-per-file ``memory/*.md`` drawers now clear
+  ``floor - 0.10``. Harness prompt-echo drawers ("Investigate per the
+  method…", "Get started. Read…") are instruction text mirrored back, not
+  knowledge — filtered like session manifests in auto-query and wake-up L1
+  (gnome-speaks-46).
+tests: 3 (test_auto_query_quality)

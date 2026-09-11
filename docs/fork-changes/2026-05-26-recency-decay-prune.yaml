@@ -1,0 +1,43 @@
+seq: 73
+id: recency-decay-prune
+date: '2026-05-26'
+bucket: Added
+commit: 558d327
+area: Search
+summary: Recency decay weighting in search + mempalace prune --stale-days CLI (#158)
+body: |
+  Two derivative-store extensions that sit *next to* the verbatim record,
+  neither of which touches stored content.
+
+  **Recency weighting.** ``search_memories`` can apply a small, bounded
+  distance shift based on a drawer's age (``mempalace.recency``):
+  exponential decay so a fresh drawer is nudged up, fading to half its
+  boost after one half-life. The shift is capped (max 0.03 cosine-distance
+  units, below the weakest closet-boost rung) so it can reorder neighbours
+  but never push a relevant drawer out of the result set — 100% recall is
+  preserved. A drawer with no parseable ``filed_at`` is treated as ageless
+  (zero adjustment), never penalized. The signal ships **dark**: gated by
+  ``PALACE_RECENCY_BOOST`` (default off, ``=1`` enables) so we A/B it on our
+  own corpus before trusting it; half-life is tunable via
+  ``PALACE_RECENCY_HALFLIFE_DAYS``. Read live, so the daemon picks up the
+  toggle without a restart.
+
+  **Prune CLI.** ``mempalace prune --stale-days N`` removes drawers older
+  than N days from an optional ``--wing`` / ``--room`` scope. Because it
+  destroys data on a *time* predicate rather than an explicit selection, it
+  is **dry-run by default** — nothing is deleted unless ``--confirm`` is
+  passed. Undated drawers are never pruned (we don't delete a drawer we
+  can't date). Age is decided in Python (chromadb ``where=`` can't
+  range-compare the ISO-timestamp string), then deletion is by explicit id
+  list.
+
+  Upstream tracks Weibull decay + a Tier-0 LLM rerank in
+  MemPalace/mempalace#1032 (informational); the fork-side contribution is
+  the independent prune CLI and the off-by-default recency knob. Fully
+  local: no network, no external API, no telemetry.
+tests: 20 — tests/test_recency_prune.py (age parsing, recency adjustment, searcher integration, prune CLI)
+files:
+- mempalace/recency.py
+- mempalace/searcher.py
+- mempalace/cli.py
+- tests/test_recency_prune.py

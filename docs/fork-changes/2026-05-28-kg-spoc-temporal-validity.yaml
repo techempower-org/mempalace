@@ -1,0 +1,54 @@
+seq: 80
+id: kg-spoc-temporal-validity
+date: '2026-05-28'
+bucket: Added
+commit: b87ce05
+area: Search
+summary: KG triples gain SPOC context slot + worker auto-derives valid_from from drawer metadata (#161)
+body: |
+  KG triples now carry a fourth axis — ``context`` — that anchors a
+  fact to where it was witnessed (e.g. ``drawer:abc123``,
+  ``conversation:2026-05-28``). The ``add_triple`` write path on the
+  AGE backend stores it as a property on the ``RELATION`` edge; every
+  read path (``query_triples``, ``query_entity``, ``query_relationship``,
+  ``timeline``) surfaces it in the result dict. Triples written
+  before this slot existed read back with ``context=None``, so
+  consumers don't need a missing-key check.
+
+  The async KG-extraction worker (``kg_triple_worker.py``) now:
+
+  * **Anchors every auto-extracted triple** to its witnessing drawer
+    via ``context=f"drawer:{drawer_id}"`` — the SPOC fourth axis is
+    always populated on auto-derived facts.
+  * **Auto-derives ``valid_from``** from the drawer's metadata
+    when the LLM extractor doesn't supply one. Priority order is
+    ``timestamp`` (sweeper / convo_miner) → ``filed_at`` (legacy diary)
+    → ``session_created_at`` (opencode adapter); first non-empty
+    wins. Missing keys leave ``valid_from`` open, which read paths
+    already treat as "active since forever."
+  * **Defers to the extractor** when it does emit an explicit
+    ``valid_from`` — a date the LLM parsed out of the prose
+    ("starting May 2025") is more specific than the drawer's
+    authored time and takes precedence.
+
+  The MCP-tool surface grew matching parameters:
+
+  * ``mempalace_kg_add`` accepts ``context`` (AGE backend stores;
+    SQLite silently ignores so callers don't need to branch on
+    backend).
+  * ``mempalace_kg_timeline`` accepts ``as_of`` and validates it
+    through the same ISO-8601 gate as ``mempalace_kg_query``. The
+    accepted value round-trips in the response so callers can echo
+    the temporal slice.
+
+  No AGE schema migration was needed — the slot is just an
+  additional property on existing edges. Triples written before this
+  change continue to read back cleanly with ``context=None``.
+tests: 20 — tests/test_kg_triple_worker.py (context-cypher inclusion/omission, `_derive_valid_from` priority/None paths, worker anchors context=drawer:id, derives valid_from from metadata timestamp, extractor valid_from wins over drawer timestamp, missing timestamp writes open valid_from); tests/test_knowledge_graph_age.py (add_triple persists context, optional/omitted, query_entity returns context, timeline with as_of, timeline without entity respects as_of, timeline returns context field); tests/test_mcp_server.py (kg_timeline rejects invalid as_of, includes as_of in response, default omits as_of, kg_add rejects context with null bytes)
+files:
+- mempalace/knowledge_graph_age.py
+- mempalace/kg_triple_worker.py
+- mempalace/mcp_server.py
+- tests/test_knowledge_graph_age.py
+- tests/test_kg_triple_worker.py
+- tests/test_mcp_server.py

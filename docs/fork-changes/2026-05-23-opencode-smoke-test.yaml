@@ -1,0 +1,15 @@
+seq: 60
+id: opencode-smoke-test
+date: '2026-05-23'
+bucket: Added
+commit: a9ed72b
+area: Testing
+summary: OpenCode adapter smoke test against real DB (#56)
+body: |
+  Nine smoke tests validating the OpenCode adapter against the real
+  18MB database (35 sessions, 69 drawers). Verifies shape, content
+  format, wing derivation, source_file stability, metadata flatness,
+  and session uniqueness. Excluded from default CI via ``@slow`` mark.
+tests: 9 — test_opencode_smoke.py (marked @slow)
+files:
+- tests/test_opencode_smoke.py

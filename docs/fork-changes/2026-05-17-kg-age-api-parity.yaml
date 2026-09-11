@@ -1,0 +1,49 @@
+seq: 36
+id: kg-age-api-parity
+date: '2026-05-17'
+bucket: Added
+commit: ff7187d
+area: Reliability
+summary: 'KnowledgeGraphAGE API parity with SQLite KG: add_entity, invalidate, query_entity, query_relationship, timeline, seed_from_entity_facts'
+body: |
+  Phase 1 of the AGE-integration plan. Brings `KnowledgeGraphAGE` to
+  API parity with `mempalace.knowledge_graph.KnowledgeGraph` (the
+  SQLite backend). Previously only `add_triple`, `query_triples`,
+  `stats`, `clear` were implemented; the 5 missing methods make AGE
+  a drop-in replacement for SQLite without requiring callsite
+  changes.
+
+  Methods added (all mirror SQLite semantics):
+  - `add_entity(name, entity_type, properties)` — MERGE pattern;
+    last-write-wins on type/properties since AGE 1.6.0 has no `ON
+    CREATE SET`.
+  - `invalidate(subject, predicate, object_, ended)` — SET valid_to
+    on every active matching triple; inverted-interval guard reads
+    existing valid_from first and rejects if ended < valid_from.
+  - `query_entity(name, as_of, direction)` —
+    outgoing/incoming/both direction filter + as_of temporal filter.
+  - `query_relationship(predicate, as_of)` — filter triples by
+    relation_type, optional temporal filter.
+  - `timeline(entity_name, limit)` — chronological ORDER BY with
+    default limit 100.
+  - `seed_from_entity_facts(entity_facts)` — bulk-load from
+    ENTITY_FACTS dict shape used by `fact_checker.py`.
+  - `_entity_id(name)` — id derivation helper matching SQLite KG.
+
+  AGE Cypher dialect gaps documented + worked around:
+  - No `ON CREATE SET` → unconditional `SET` on MERGE.
+  - No multi-column `RETURN` with AS aliases inside dollar-quoted
+    `cypher()` — wired the existing `_run_cypher` alias-parsing path
+    to handle all 6 methods cleanly.
+  - No list literals (`RETURN [a, b]`) — workaround not needed for
+    these methods, but documented for downstream callers.
+
+  Smoke-tested end-to-end: 3 triples (`Atakan -[works_on]-> adaptmem`,
+  `Atakan -[works_on]-> mempalace-PRs`, `FT-300 -[trained_by]->
+  Atakan`); query_entity outgoing → 2 results; query_entity incoming
+  → 1; invalidate(`mempalace-PRs`) → 1 affected, re-query shows
+  `valid_to=2026-05-17, current=False`; timeline returns 3 rows
+  ordered by valid_from; stats: entities=4, triples=3,
+  current_facts=2, expired_facts=1.
+files:
+- mempalace/knowledge_graph_age.py

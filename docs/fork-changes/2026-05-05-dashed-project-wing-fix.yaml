@@ -1,0 +1,32 @@
+seq: 23
+id: dashed-project-wing-fix
+date: '2026-05-05'
+bucket: Fixed
+commit: d76134d
+area: Reliability
+summary: Preserve dashed project names in transcript-derived wings
+body: |
+  Two findings from Copilot review on jphein/mempalace#9 that
+  surfaced a real bug: the previous primary regex's
+  ``encoded.rsplit('-', 1)[-1]`` rule collapsed
+  ``-home-jp-Projects-realm-watch`` → ``watch`` instead of
+  preserving ``realm-watch``. Reorder the resolution: try the
+  explicit ``-Projects-<name>`` segment FIRST (preserves dashes),
+  fall back to the last-dash-token only when the path is in a
+  non-Projects layout (``~/dev/<parent>/<project>``,
+  ``~/Users/<user>/<folder>/<project>``).
+
+  Also routes the result through
+  ``mempalace.config.normalize_wing_name`` (lowercases, replaces
+  spaces/hyphens with underscores) so hook-derived wings match
+  operator-mined wing names exactly. Same project mined two ways
+  now produces one wing.
+
+  Net behavior: ``-Projects-realm-watch`` → ``realm_watch``
+  (matches what ``mempalace mine ~/Projects/realm-watch`` produces
+  via ``normalize_wing_name(convo_path.name)``).
+tests: +4 — dashed-project, dashed-project-uppercase, operator-mine-convergence assertion
+pr: 10
+files:
+- mempalace/hooks_cli.py
+- tests/test_hooks_cli.py

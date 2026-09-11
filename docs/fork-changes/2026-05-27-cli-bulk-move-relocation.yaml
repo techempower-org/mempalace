@@ -1,0 +1,42 @@
+seq: 79
+id: cli-bulk-move-relocation
+date: '2026-05-27'
+bucket: Added
+commit: 1ca544b
+area: CLI
+summary: mempalace bulk-move — multi-drawer metadata relocation by source wing/room (#191)
+body: |
+  ``mempalace bulk-move --wing W --room R --to-wing W2 --to-room R2``
+  is the multi-drawer complement to ``move``. It selects every drawer
+  matching a source wing/room via offset-paginated ``GET /list`` and
+  PATCHes each match to a target wing/room. As with ``move``, the
+  verbatim-always principle forbids touching drawer text — there is
+  **no ``--content`` flag**, and the parser rejects it.
+
+  The safety model is deliberately conservative because the command
+  mutates many drawers at once:
+
+  * a **source filter is required** — at least one of ``--wing`` /
+    ``--room`` — so it can never operate on the whole palace by
+    accident (exit 2 if absent);
+  * a **target is required** — at least one of ``--to-wing`` /
+    ``--to-room`` (exit 2 if absent);
+  * **dry-run is the default** — without ``--apply`` it prints a
+    per-drawer ``cur → target`` preview and sends zero PATCH calls;
+  * ``--apply`` **prompts for confirmation on a TTY** (skip with
+    ``--yes``) and **refuses to run unattended** — non-TTY or
+    ``--json`` without ``--yes`` exits 2 — so a pipeline can't
+    silently mass-mutate the palace;
+  * one drawer's PATCH failing **never aborts the batch** — failures
+    are collected and reported (``moved N, failed M`` with the failed
+    ids), and the process exits 2 if any failed.
+
+  Failure modes mirror the ``list`` / ``move`` sibling family:
+  daemon unreachable / 404 / 401 / 403 during listing → exit 1;
+  missing selection or target, or any PATCH failure → exit 2;
+  ``--format=json`` emits a structured ``{matched, dry_run, moved,
+  failed, source, target}`` envelope.
+tests: 23 — tests/test_cli_bulk_move.py (validation of required source filter and target, dry-run default with no-PATCH assertion, --apply+--yes happy path, TTY prompt accept/decline, non-TTY/json refusal without --yes, partial-failure continue+report, DaemonError during PATCH, pagination across multiple /list pages, list-failure exit 1, inner-error exit 2, json envelope shapes, argparse wiring incl. --content rejection)
+files:
+- mempalace/cli.py
+- tests/test_cli_bulk_move.py

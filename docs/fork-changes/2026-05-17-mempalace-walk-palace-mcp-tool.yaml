@@ -1,0 +1,33 @@
+seq: 40
+id: mempalace-walk-palace-mcp-tool
+date: '2026-05-17'
+bucket: Added
+commit: 8022ecb
+area: Search
+summary: mempalace_walk_palace MCP tool — agent walks the palace via AGE Cypher
+body: |
+  Phase 6 of the AGE-integration plan. Exposes the "agent walks into
+  the palace finding wings, rooms, drawers" metaphor as a single MCP
+  tool over the unified palace+entity graph (Wing → Room → Drawer →
+  MENTIONS → Entity) built across Phases 1-4 in this branch.
+
+  Three traversal modes via mutually-exclusive anchors:
+  - `start_wing="memorypalace"` — walks down the hierarchy: rooms
+    (d=1), drawers (d=2), entities (d=3)
+  - `start_room="problems"` — drawers across all wings (d=1), then
+    entities (d=2)
+  - `start_entity="pgvector"` — inverse walk: drawers mentioning it
+    (d=1), then the rooms+wings containing them (d=2)
+
+  Result envelope: `{start, depth, walk: [{wing, room, drawer, entity}],
+  stats: {wings_touched, rooms_touched, drawers_touched, entities_touched}}`.
+
+  Smoke-tested on `sme_lme_bench`: `walk_palace(start_entity='pgvector',
+  depth=2)` returns the 3 drawers mentioning it plus their containing
+  rooms+wings; `walk_palace(start_room='postgres', depth=2)` returns
+  the postgres.py drawer plus its 3 mentioned entities.
+
+  Requires `MEMPALACE_BACKEND=postgres` and AGE graph populated via
+  `kg_writethrough` (Phase 2) or `backfill_age` (Phase 4).
+files:
+- mempalace/mcp_server.py

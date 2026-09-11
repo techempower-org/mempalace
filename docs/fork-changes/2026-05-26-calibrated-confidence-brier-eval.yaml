@@ -1,0 +1,42 @@
+seq: 68
+id: calibrated-confidence-brier-eval
+date: '2026-05-26'
+bucket: Added
+commit: 43547c4
+area: Search
+summary: Calibrated confidence field on search results + Brier-score eval column
+body: |
+  Surfaces an optional ``confidence`` field alongside each search hit:
+  a calibrated probability that the hit is relevant, derived from the
+  raw ``similarity`` via isotonic regression on a labeled probe set.
+  The new ``mempalace/calibration.py`` provides a ``Calibrator``
+  (sklearn isotonic when available, pure-python Pool-Adjacent-Violators
+  fallback otherwise), JSON save/load, and the ``brier_score`` /
+  ``expected_calibration_error`` scoring rules.
+
+  ``search_memories`` loads the calibrator from a configured path
+  (``calibration_path`` — env ``MEMPALACE_CALIBRATION_PATH`` or
+  ``config.json``) and applies it after the hybrid re-rank. When no
+  calibrator is configured or the file is missing, no ``confidence``
+  field is emitted — the system never fakes a calibrated score, and
+  callers already handle the absent key. Hits with ``similarity=None``
+  (BM25-only / graph-source) carry no vector signal and so get no
+  confidence. Default behavior is unchanged: calibration is opt-in.
+
+  ``scripts/eval_multi_encoder_rrf.py`` gains a Brier-score + ECE
+  column so future retrieval changes can be evaluated on calibration
+  quality, not just rank quality (MRR/Recall). The column is only
+  populated when a calibrator is configured; otherwise the eval prints
+  a note rather than a misleading zero. Implements
+  techempower-org/mempalace#167; analysis in
+  docs/research/uncertainty-aware-retrieval.md.
+tests: 30 — tests/test_calibration.py (27), tests/test_searcher_confidence.py (3), plus 3 in tests/test_config.py
+pr: null
+files:
+- mempalace/calibration.py
+- mempalace/searcher.py
+- mempalace/config.py
+- scripts/eval_multi_encoder_rrf.py
+- tests/test_calibration.py
+- tests/test_searcher_confidence.py
+- tests/test_config.py

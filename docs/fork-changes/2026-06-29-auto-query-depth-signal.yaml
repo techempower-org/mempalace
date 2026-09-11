@@ -1,0 +1,25 @@
+seq: 98
+id: auto-query-depth-signal
+date: '2026-06-29'
+bucket: Added
+commit: 864d7a4
+area: Search
+summary: 'Auto-query: periodic depth signal, unknown-entity 0->1 bump, broader temporal patterns'
+body: |
+  Added a content-independent periodic depth signal to auto-query: a
+  broad project-scoped palace pull that re-anchors context mid-session
+  to counteract "lost in the middle" attention degradation. Routed at
+  priority 1.5 (below task resumption, above content-derived signals).
+  Also bumped unknown-entity score 0 -> 1 (a bare capitalized name is
+  a weak-but-real recall signal) and broadened the temporal patterns
+  (recently, a while ago, few days ago, last sprint, back when, used
+  to). Landed with the PostCompact timeout-bounds fix for the plugin
+  hook config.
+tests: 26 tests (TestDepthSignal, TestDepthRoute, broadened temporal patterns)
+files:
+- mempalace/auto_query/signals.py
+- mempalace/auto_query/router.py
+- mempalace/auto_query/__init__.py
+- mempalace/auto_query/runner.py
+- tests/test_auto_query_signals.py
+- tests/test_auto_query_router.py

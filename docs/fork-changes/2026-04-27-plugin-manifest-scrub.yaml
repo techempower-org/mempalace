@@ -1,0 +1,29 @@
+seq: 13
+id: plugin-manifest-scrub
+date: '2026-04-27'
+bucket: Fixed
+commit: 9f91e18
+area: Reliability
+summary: Strip embedded API key from .claude-plugin/ manifests; rely on env inheritance
+body: |
+  ``.claude-plugin/.mcp.json`` and ``.claude-plugin/hooks/hooks.json``
+  shipped with a real (rotated) API key embedded as a literal in the
+  manifest's ``env`` block, plus my homelab daemon URL. Both are
+  committed plugin templates that get pulled into every plugin install.
+
+  Fix in two commits: ``8119149`` reverted both manifests to the
+  upstream-shape (no env block, in-process MCP), then ``9f91e18``
+  restored daemon-routing on ``.mcp.json`` (URL + path) but **without**
+  the embedded credential — ``PALACE_API_KEY`` now inherits at runtime
+  from ``~/.claude/settings.local.json``'s ``env`` block (which
+  Claude Code passes to spawned MCP servers and hooks).
+
+  Net: my fork-main carries the daemon-routed config matching production
+  deployment; the literal credential lives one place only (gitignored
+  ``settings.local.json``); future plugin installs inherit env rather
+  than carrying a stale embedded key. Companion to palace-daemon
+  [PR #12](https://github.com/rboarescu/palace-daemon/pull/12) which
+  fixes the same class of embedded-default in ``clients/palace-mode``.
+files:
+- .claude-plugin/.mcp.json
+- .claude-plugin/hooks/hooks.json

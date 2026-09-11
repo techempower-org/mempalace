@@ -1,0 +1,26 @@
+seq: 48
+id: opencode-repo-config-empty-mcp
+date: '2026-05-22'
+bucket: Fixed
+commit: 7133eee
+area: CLI
+summary: Empty repo .opencode/opencode.json mcp block — disabled flag wasn't being respected
+body: |
+  ``.opencode/opencode.json`` from upstream PR #1567 spawns a
+  local ``mempalace.mcp_server`` when opencode launches in the
+  repo root. On daemon-routed setups this creates **two MCP
+  servers exposing different palaces** — the user-level wrapper
+  hitting the daemon, and the repo-level spawn hitting the
+  local store. PR #108 attempted ``enabled: false`` but opencode
+  merges entries by name across configs and the repo
+  ``command`` overrode the user-level one anyway.
+
+  This PR strips the ``mcp`` block from the repo config
+  entirely. User-level wrapper becomes the sole source of truth.
+  Contributors who don't have a daemon set up can add their own
+  user-level config or a ``.opencode/opencode.local.json``
+  (gitignored).
+files:
+- .opencode/opencode.json
+supersedes:
+- opencode-repo-mcp-disable-flag

@@ -1,0 +1,23 @@
+seq: 56
+id: native-rename-wing
+date: '2026-05-23'
+bucket: Performance
+commit: d045f83
+area: CLI
+summary: Native rename_wing backend operation + CLI command (#154)
+body: |
+  The ``mempalace_rename_wing`` MCP tool was unusably slow on
+  postgres — the inherited ``update()`` re-embedded every document
+  via ``upsert()``. Fix: ``PostgresCollection.rename_wing()``
+  override with single ``UPDATE SET wing = %s WHERE wing = %s``
+  (atomic, milliseconds for 20K+ drawers). Also adds
+  ``PostgresCollection.update()`` metadata-only fast path,
+  simplifies MCP tool from 40-line loop to 3-line delegation,
+  and adds ``mempalace rename-wing`` CLI subcommand with daemon
+  routing and ``--dry-run`` support.
+tests: 7 — test_backends.py, test_mcp_server.py, test_cli.py
+files:
+- mempalace/backends/base.py
+- mempalace/backends/postgres.py
+- mempalace/cli.py
+- mempalace/mcp_server.py

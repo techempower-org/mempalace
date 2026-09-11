@@ -1,0 +1,39 @@
+seq: 92
+id: embedding-adaptmem-ft-backend
+date: '2026-05-29'
+bucket: Added
+commit: 5fba6d8
+area: Search
+summary: 'pluggable adaptmem_ft encoder backend selectable via MEMPALACE_EMBEDDING_MODEL (closes #308)'
+body: |
+  The fork's encoder layer (``mempalace/embedding.py``) previously
+  selected between ``minilm`` and ``embeddinggemma`` via
+  ``MEMPALACE_EMBEDDING_MODEL``. AdaptMem-trained encoders (FT on
+  LongMemEval, SentenceTransformer-shaped) now slot in as a third
+  backend ``adaptmem_ft``, loading a local checkpoint from
+  ``MEMPALACE_ADAPTMEM_PATH``. Local-first is preserved — nothing is
+  downloaded; the path must already exist on the user's machine.
+
+  The backend subclasses ``chromadb.api.types.EmbeddingFunction``
+  (not the bare ``__call__`` + ``name()`` pattern the other two use),
+  so ``Collection.query`` finds ``embed_query`` and does not silently
+  fall back to the default embedder — the trap documented at
+  ``mempalace/embedding.py:110-131``. ``name()`` returns ``"default"``
+  so an existing 384-dim MiniLM palace accepts queries from this EF
+  without an embedding-function-name rejection (a different vector
+  space still requires ``rebuild-index``).
+
+  The model loads lazily on first ``__call__`` (import-safe, cheap to
+  construct) with a helpful install error if ``sentence_transformers``
+  is absent. Off by default — selecting it is a deliberate user
+  choice, never a silent fallback.
+
+  Note: the adaptmem ``kaggle_bundle_bi/ft-300-base`` export is
+  config + tokenizer only (no weight file), so it is not a loadable
+  checkpoint as-is; the smoke test skips until a complete checkpoint
+  lands. Tracked on the adaptmem side.
+tests: 19 + 1 opt-in smoke — tests/test_adaptmem_ft.py (EmbeddingFunction-subclass identity / embed_query presence, name()=='default' spoof, lazy load on first encode call, MEMPALACE_ADAPTMEM_PATH resolution from env→config→None, dispatch from get_embedding_function, sentence_transformers lazy-import error message, device resolution, class-cache isinstance stability; smoke test loads the real checkpoint when a complete one is present, skips gracefully on the config+tokenizer-only ft-300-base export)
+files:
+- mempalace/embedding.py
+- mempalace/config.py
+- tests/test_adaptmem_ft.py

@@ -1,0 +1,36 @@
+seq: 34
+id: backend-unreachable-error-mapping
+date: '2026-05-21'
+bucket: Fixed
+commit: 0c34464
+area: Reliability
+summary: MCP server distinguishes 'backend unreachable' from 'no palace found'
+body: |
+  The CLI's misleading ``Run: mempalace init <dir>`` hint was
+  the diagnostic blocker during the 2026-05-17 outage: the daemon
+  was up, postgres was down, and every search returned "No palace
+  found" — pointing JP at a re-init that wasn't the problem.
+
+  ``mempalace/mcp_server.py:_get_collection_postgres`` now records
+  the last connection error in a module-level slot, and
+  ``_no_palace()`` reads it to return one of three responses:
+
+    * ``palace.backend_unreachable`` — for psycopg2 OperationalError
+      (the actual power-event failure), with hint
+      ``Check: docker ps mempalace-db``.
+    * ``palace.backend_error`` — for any other backend exception,
+      with hint to check ``journalctl -u palace-daemon``.
+    * ``"No palace found"`` — only when there's no recent error
+      (the legitimate uninitialised case).
+
+  Backend cache is also dropped on failure so the daemon's pool
+  reconnects cleanly when postgres comes back, without needing a
+  daemon restart.
+tests: |
+  tests/test_mcp_server_backend_unreachable.py (5 tests: default,
+  OperationalError mapping, generic error mapping, error capture
+  on failure, error cleared on successful reopen).
+files:
+- mempalace/mcp_server.py
+- mempalace/cli.py
+- tests/test_mcp_server_backend_unreachable.py

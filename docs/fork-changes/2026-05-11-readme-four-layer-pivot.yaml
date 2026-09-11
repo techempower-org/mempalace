@@ -1,0 +1,66 @@
+seq: 28
+id: readme-four-layer-pivot
+date: '2026-05-11'
+bucket: Changed
+commit: 55b36ca
+area: Docs
+summary: README pivots to the four-layer model + Auto Dream as vindication of the verbatim-vs-derivative axis
+body: |
+  Substantial README rewrite (+137/-100) reflecting three things
+  that landed between the previous refresh (`a67be3f`, the
+  2026-05-10 develop sync) and now:
+
+  - **Four-layer model promoted to the lede.** Storage / encoder /
+    retrieval / consumption as independently improvable surfaces;
+    the empirical claim that model size doesn't fix invocation
+    discipline (RLM-Qwen-7B and RLM-Llama-70B both ceiling at
+    46.67% recall while Familiar's deterministic pipeline hits
+    78.33% on the same jp-realm-v0.1 corpus). Calibration paragraph
+    hedges the absolute numbers; methodology disclosure lives in
+    `docs/research/`. The earlier "recovery-collection migration"
+    lede moves down to "What this fork has learned."
+
+  - **Auto Dream framed as vindication.** Anthropic shipped Auto
+    Dream in two research-preview surfaces in late April: a
+    consolidator inside Claude Code (manual `/dream` or auto-trigger
+    at 24h + 5 sessions; mutates `~/.claude/projects/<project>/memory/`
+    in place) and a Managed Agents Dreams API (REST, beta header
+    `dreaming-2026-04-21`, models `claude-opus-4-7` and
+    `claude-sonnet-4-6`, up to 100 sessions, non-destructive output
+    store). The Dreams API design ratifies the verbatim-input /
+    derivative-output axis. Replaces the prior "neither has
+    consolidation" framing (which was wrong post-2026-04-21) with
+    an affirmative claim: the verbatim layer doesn't need
+    consolidation; it needs durability.
+
+  - **Substrate section moves from "exploring" to "in flight."**
+    Names the live `mempalace-db` test container on the homelab
+    LAN, the cherry-pick on `feat/pgvector-age-impl`, and the
+    documented Plan-B trigger date (2026-06-08).
+
+  New section: "Convergence with peer systems" triangulates across
+  Familiar (deterministic pipeline), CampaignGenerator (hierarchical
+  AAAK pruning), Kent (APO trained policy), adaptmem (encoder
+  fine-tune). Four agreements: verbatim storage as base layer, no
+  LLM in the index path, wings as scope routing, consumption gap
+  is real. Divergence is where intelligence above retrieval lives.
+
+  Tactical corrections in the same diff: test count `~1500 → ~1850`,
+  sync date `2026-04-27 → 2026-05-10`, fork-ahead count `~16 → ~14`,
+  drawer count `151K → ~160K`, setup commands now lead with
+  `uv sync --extra dev` (matching the project CLAUDE.md), PR table
+  regenerated against `gh pr list` showing 10 open jphein PRs.
+
+  Six new files in `docs/research/` committed alongside the README
+  as the citation surface: adaptmem-orthogonal-layers,
+  compass_artifact_wf-28bac4e8, compass_artifact_wf-ad108fcc,
+  convergent-findings-kostadis-comparison, three-mempalace-consumers,
+  three-patterns-for-agent-memory.
+files:
+- README.md
+- docs/research/adaptmem-orthogonal-layers.md
+- docs/research/compass_artifact_wf-28bac4e8-71d9-4175-837a-d4ad563aec8d_text_markdown.md
+- docs/research/compass_artifact_wf-ad108fcc-3960-4eab-ad5d-234bf365b2f4_text_markdown.md
+- docs/research/convergent-findings-kostadis-comparison.md
+- docs/research/three-mempalace-consumers.md
+- docs/research/three-patterns-for-agent-memory.md

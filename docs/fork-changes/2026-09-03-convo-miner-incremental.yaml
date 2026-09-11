@@ -1,0 +1,18 @@
+seq: 119
+id: convo-miner-incremental
+date: '2026-09-03'
+bucket: Performance
+commit: cf1e997
+area: Performance
+summary: Re-mine a transcript incrementally — embed only new or changed chunks; stored drawers are the watermark (#414)
+body: |
+  Per pass: prefetch id→document for the source file, plan deterministic
+  ids, delete only orphans, metadata-only ``update()`` of
+  ``source_mtime``/``chunk_total`` on byte-identical chunks (before the new
+  upserts, so a mid-pass crash leaves count < chunk_total and the
+  completeness rule re-mines), then embed + upsert only new/changed chunks.
+  No new watermark storage; cross-host safe. Measured on a 16 MB live
+  transcript: first mine 1446 texts / 52.5 s; re-mine after 10% append 77 /
+  3.9 s; touch-only 0 / 1.3 s. Fallbacks: prefetch failure → full rebuild;
+  update failure → re-file in full.
+tests: 15 (13 unit + 2 end-to-end counting texts that reach the embedder)

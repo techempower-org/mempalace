@@ -1,0 +1,47 @@
+seq: 19
+id: drop-checkpoint-write-path
+date: '2026-05-05'
+bucket: Changed
+commit: 69768fc
+area: Reliability
+summary: Drop hook-side checkpoint diary writes — verbatim-only architecture
+body: |
+  The Stop hook used to do two things on each fire: (a) write a
+  1KB checkpoint summary diary entry into the dedicated
+  ``mempalace_session_recovery`` collection AND (b) auto-mine the
+  verbatim transcript into ``mempalace_drawers``.
+
+  (a) is redundant once (b) is searchable. Worse, the recovery
+  collection had no semantic-search MCP surface — only filter-based
+  reads via ``mempalace_session_recovery_read(session_id, agent,
+  since/until, wing)``. So checkpoints in it were structurally
+  invisible to ``mempalace_search``. Net effect from a user's
+  seat: agents (and JP) couldn't find recent session content via
+  search even though everything was on disk.
+
+  Drop (a). Verbatim transcripts in ``mempalace_drawers`` carry
+  every word a checkpoint summary would have surfaced — searching
+  IS the recovery query.
+
+  ``hook_stop`` silent path: removed ``_save_diary_direct`` call,
+  save marker advances unconditionally on each fire, ``systemMessage``
+  shape changes from ``"✦ N memories woven into the palace —
+  themes"`` to ``"✦ Transcript ingest triggered (wing=...)"``.
+  Failure detection moves to daemon-side observability (hook.log
+  + systemd journal).
+
+  ``hook_precompact``: removed the recovery-marker write. Mine +
+  compaction proceed unchanged.
+
+  Also deleted the now-unused ``_save_diary_direct`` (~120 LOC)
+  and its dependencies ``_extract_themes`` + ``_THEME_STOPWORDS``
+  (~30 LOC). No remaining callers.
+
+  Ships the architecture spec at
+  ``docs/superpowers/specs/2026-05-05-verbatim-only-design.md``.
+tests: −4 ratchet + 4 updated (4 hook tests + 1 OSError test mock _ingest_transcript instead of _save_diary_direct, expect new systemMessage shape; 3 new tests for traversal-rejected, wrong-extension-rejected, wing-derivation-correct)
+pr: 6
+files:
+- mempalace/hooks_cli.py
+- tests/test_hooks_cli.py
+- docs/superpowers/specs/2026-05-05-verbatim-only-design.md

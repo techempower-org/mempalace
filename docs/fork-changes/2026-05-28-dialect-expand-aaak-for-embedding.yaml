@@ -1,0 +1,22 @@
+seq: 91
+id: dialect-expand-aaak-for-embedding
+date: '2026-05-28'
+bucket: Changed
+commit: 43547c4
+area: Docs
+summary: README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28)
+body: |
+  The verbatim-first landscape table in README.md cited MemPalace
+  upstream as "~23K stars" — stale since 2026-04. ``gh api
+  /repos/MemPalace/mempalace`` returns 52,993 stars / 6,995 forks
+  on 2026-05-28; refreshing to "~53K stars (upstream, 2026-05-28)"
+  with the explicit reading date so future drift is visible.
+
+  Other systems in the same landscape table also carry star counts
+  (89K claude-mem, 48K Mem0, 22.8K Zep, etc.); they're not refreshed
+  in this PR because each requires its own API call and verification
+  against the system's actual repo. A periodic refresh script would
+  be the principled fix — out of scope here.
+tests: '8 — tests/test_cli_daemon.py (cmd_wakeup: routes-to-daemon-when-strict, forwards-wing-argument, local-path-when-palace-arg-given, daemon-error-exits-nonzero; cmd_mined: routes-to-daemon-when-strict, forwards-wing-and-limit, json-passthrough, daemon-error-exits-nonzero)'
+files:
+- README.md

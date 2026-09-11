@@ -1,0 +1,29 @@
+seq: 42
+id: opencode-mcp-config-cherry-pick-1567
+date: '2026-05-21'
+bucket: Added
+commit: ba16b82
+area: CLI
+summary: .opencode/opencode.json — repo-root MCP config so opencode picks up mempalace automatically
+body: |
+  Cherry-pick of upstream PR #1567 (Dxrk777). Adds
+  `.opencode/opencode.json` so that running `opencode` in the
+  mempalace repo root automatically wires `mempalace` as a local
+  MCP server — useful for contributors who use OpenCode for
+  development on the project itself.
+
+  Two-commit cherry-pick:
+
+  - `013ac63` — initial config with `command: ["mempalace-mcp"]`
+  - `ba16b82` — gemini-code-assist review feedback: switch to
+    `command: ["python", "-m", "mempalace.mcp_server"]` for
+    portability across install methods (pip vs uv vs dev install)
+
+  This is the **dev/contributor surface** — it lives in the repo
+  and only matters when running OpenCode against the repo root.
+  Per-user setups should use `~/.config/opencode/opencode.jsonc`
+  with the daemon-aware wrapper (see `docs/integrations/opencode.md`).
+pr: 1567
+pr_state: CLOSED
+files:
+- .opencode/opencode.json

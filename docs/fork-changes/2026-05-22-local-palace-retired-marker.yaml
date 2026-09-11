@@ -1,0 +1,47 @@
+seq: 49
+id: local-palace-retired-marker
+date: '2026-05-22'
+bucket: Added
+commit: 798cf14
+area: Reliability
+summary: Honor ~/.mempalace/RETIRED marker — refuse default palace, surface retire message
+body: |
+  Recurring confusion source on this fork: any code path that opens
+  mempalace without ``PALACE_DAEMON_URL`` set silently falls
+  through to the default chroma palace at ``~/.mempalace/palace``
+  and reports a smaller, stale drawer count. Today an opencode
+  agent ran the CLI directly and saw 24,920 drawers, then noticed
+  the daemon said 310,031 and got confused trying to reconcile —
+  the local palace was a retired pre-pgvector-cutover artifact
+  with broken HNSW.
+
+  When a user has retired their local palace in favor of a
+  daemon-routed setup, they can drop a text file at
+  ``~/.mempalace/RETIRED`` explaining the situation. Three layers
+  honor it:
+
+  - ``mempalace/mcp_server.py:_check_local_palace_retired`` —
+    ``_get_collection_chroma`` calls this at entry. If the marker
+    exists AND the configured palace path resolves to the
+    default, the open is refused; ``_no_palace`` returns a new
+    error type ``palace.local_retired`` with the marker contents
+    as the message. ``MEMPALACE_ALLOW_RETIRED_PALACE=1`` is the
+    escape hatch for forensic reads of the archived palace.
+  - ``mempalace/palace.py:_open_collection_or_explain`` — the
+    four CLI-facing "No palace found" emit sites route through a
+    new inner ``_emit_palace_missing()`` helper that checks the
+    marker first.
+  - ``mempalace/cli.py:_print_retired_local_palace_or_default`` —
+    four ``cmd_*`` paths that printed
+    ``"No palace found at ... Run: mempalace init <dir>"``
+    directly now route through the helper.
+
+  Tests: ``tests/test_local_palace_retired.py`` (4 cases —
+  default+marker triggers retired text; no-marker falls through
+  to init hint; explicit ``--palace`` ignored; escape-hatch env
+  var bypasses).
+files:
+- mempalace/mcp_server.py
+- mempalace/palace.py
+- mempalace/cli.py
+- tests/test_local_palace_retired.py

@@ -1,0 +1,24 @@
+seq: 47
+id: opencode-repo-mcp-drop-comment-key
+date: '2026-05-22'
+bucket: Fixed
+commit: 637bb01
+area: CLI
+summary: Drop \$comment from .opencode/opencode.json — schema rejects unknown root keys
+body: |
+  Commit ``47018e5`` (PR #108) added a ``\$comment`` field to
+  ``.opencode/opencode.json`` explaining why the repo-level MCP
+  entry defaulted to ``enabled: false``. Opencode's strict
+  schema validator rejected the unknown root key with
+  ``ConfigInvalidError`` and refused to start the TUI:
+
+      Error: 4 of 5 requests failed: Unexpected server error.
+      Affected startup requests: config.providers, provider.list,
+      app.agents, config.get
+
+  JSON parses (``\$comment`` is a popular convention,
+  JSON-Schema recognizes it), but opencode doesn't allow it.
+  Removing the field unblocks startup; explanations move to
+  commit messages + PR descriptions.
+files:
+- .opencode/opencode.json

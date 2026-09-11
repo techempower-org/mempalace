@@ -1,0 +1,19 @@
+seq: 2
+id: palace-graph-none-guard
+date: '2026-04-25'
+bucket: Fixed
+commit: 5fd15db
+area: Reliability
+summary: palace_graph.build_graph skips None metadata
+body: |
+  ``palace_graph.py:95`` was calling ``meta.get("room", "")`` unconditionally;
+  ChromaDB returns ``None`` for legacy/partial-write drawers, taking out
+  every consumer of ``build_graph`` (graph_stats, find_tunnels, traverse,
+  the daemon's ``/stats``). Caught by palace-daemon's ``verify-routes.sh``
+  smoke test. Same family as upstream's #999 None-metadata audit, in a
+  read path the audit didn't reach.
+pr: 1201
+pr_state: MERGED
+files:
+- mempalace/palace_graph.py
+merged_date: 2026-04-26

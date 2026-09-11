@@ -1,0 +1,35 @@
+seq: 71
+id: hierarchy-derivation-order
+date: '2026-05-26'
+bucket: Changed
+commit: 43547c4
+area: Reliability
+summary: Formalize wing/room derivation order; demote entity detector to last-resort hint (#157)
+body: |
+  Document and enforce the derivation order for wing/room assignment
+  as an explicit contract:
+  ``cwd > transcript path > project directory hint > (optional) entity
+  hint > unfiled``. This ratifies README Architectural Principle 2 —
+  "derived hierarchy from unambiguous signals outperforms
+  hand-classified hierarchy."
+
+  Two new functions in ``hooks_cli.py`` make the contract concrete:
+  ``derive_wing(transcript_path, project_dir=None, entity_hint=None)``
+  wraps the existing cwd/transcript-path resolver
+  (``_wing_from_transcript_path``) and adds the project-directory hint
+  and a last-resort entity hint; ``derive_room(content, room_hint=None,
+  entity_hint=None)`` mirrors the contract for the room axis over the
+  canonical 7-room taxonomy.
+
+  The entity detector is demoted from a gate to a *hint, never a gate*:
+  it is the last branch in both functions, reached only when every
+  unambiguous signal above it is absent, and a confident entity match
+  can never override a cwd / transcript-path / project-directory signal.
+  The room result stays FK-safe (always a canonical room). New design
+  doc at ``docs/designs/hierarchy-derivation-order.md``; 11 unit tests
+  pin the priority order on synthetic inputs (no live palace/daemon).
+tests: 11 — tests/test_hooks_cli.py (derive_wing/derive_room priority-order suite)
+files:
+- mempalace/hooks_cli.py
+- tests/test_hooks_cli.py
+- docs/designs/hierarchy-derivation-order.md

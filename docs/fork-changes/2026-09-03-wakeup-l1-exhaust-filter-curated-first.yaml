@@ -1,0 +1,15 @@
+seq: 116
+id: wakeup-l1-exhaust-filter-curated-first
+date: '2026-09-03'
+bucket: Fixed
+commit: a4012dd
+area: Search
+summary: 'wake-up L1 skips bookkeeping drawers (AUTO-SAVE, manifests) and ranks curated memory files first (#421 #423)'
+body: |
+  L1 was ~80% ``AUTO-SAVE`` lines and session manifests on busy wings.
+  ``_is_exhaust_drawer`` skips them; ``_is_curated_source`` boosts
+  ``memory/*.md`` drawers to importance 4.0 so a fresh session opens on the
+  distilled facts. Fleet validation (labels-de): "not one AUTO-SAVE line" —
+  the whole scry chain, token scheme, and three registration failures with
+  their causes, in ~778 tokens.
+tests: 6 (test_layers)

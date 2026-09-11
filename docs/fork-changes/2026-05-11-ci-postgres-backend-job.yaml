@@ -1,0 +1,37 @@
+seq: 27
+id: ci-postgres-backend-job
+date: '2026-05-11'
+bucket: Added
+commit: da0bdbb
+area: Testing
+summary: 'CI: gate postgres-backend tests against a pgvector service container'
+body: |
+  Adds a `test-postgres` job to `.github/workflows/ci.yml` that
+  runs in parallel with the existing `test-linux` / `test-windows`
+  / `test-macos` / `lint` matrix. Service container is the public
+  `pgvector/pgvector:pg16` image with health checks; a pre-test
+  Python step installs the `vector` extension via psycopg2 (no
+  `psql` install on the runner needed).
+
+  Test scope is `tests/test_backends_postgres.py` only — three
+  `pytest.skipif`-gated tests for backend registration, drawer
+  round-trip, and L2 vector distance ordering. The full pytest
+  suite is already exercised by `test-linux` without the postgres
+  extra; running it again with `TEST_POSTGRES_DSN` set would
+  double the suite time on every PR for the marginal coverage of
+  three additional tests. The targeted job gives the regression
+  signal we want — postgres backend works end-to-end against a
+  real database — without that cost.
+
+  AGE is deliberately not in the CI image. The `apache/age` +
+  pgvector combined image we deploy on the homelab `mempalace-db`
+  isn't needed in CI yet — no test in the repo exercises
+  AGE-specific behavior. When knowledge-graph layer tests land,
+  the CI image swap (push our derived image to ghcr, or build
+  inline) is a separate concern.
+
+  Job timing on first run: 52 seconds total including service
+  container startup, pip install of `.[dev,postgres]`, extension
+  create, and the 3 smoke tests.
+files:
+- .github/workflows/ci.yml

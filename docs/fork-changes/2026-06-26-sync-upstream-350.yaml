@@ -1,0 +1,37 @@
+seq: 97
+id: sync-upstream-350
+date: '2026-06-26'
+bucket: Changed
+commit: 8711e1c
+area: Reliability
+summary: 'Sync upstream/develop through v3.5.0 (73e74bf): MCP HTTP transport, source_file filter, checkpoint tool, SessionEnd hook, 185 commits'
+body: |
+  Merged 185 upstream commits (v3.4.1 ``b5c79a1`` + v3.5.0 ``e8f96dd``).
+  Notable upstream additions: the MCP HTTP transport with a
+  DNS-rebind guard (#1806), the ``mempalace_checkpoint`` batch-save
+  tool, ``delete_by_source`` (#1722), the ``source_file`` search
+  filter (#1815), a security-hardening bundle (#1864), the
+  all-layer-0 HNSW quarantine fix (#1716), Cursor / Continue.dev /
+  Gemini-CLI session adapters, the SessionEnd save hook (#1341), and
+  an opt-in local write daemon (#1783 family).
+
+  27 conflicts resolved by composing rather than choosing sides: the
+  fork's tags filter, RRF fusion, ``adaptmem_ft`` encoder, verbatim
+  mode, and PALACE_DAEMON_URL routing now coexist with the upstream
+  additions. ``build_where_filter`` carries both the fork ``tags``
+  (``$contains_all``) and the upstream ``source_file`` clauses;
+  ``tool_search`` / the BM25 mergers thread both. The fork's
+  postgres/RETIRED-marker preflights run alongside upstream's
+  missing-db check; both daemon abstractions (fork HTTP + upstream
+  job-queue) are kept, with an explicit ``mine --daemon`` flag taking
+  precedence over ambient HTTP routing. Embedder ORT thread cap
+  (#1068) threaded through the EF constructors.
+files:
+- mempalace/searcher.py
+- mempalace/mcp_server.py
+- mempalace/hooks_cli.py
+- mempalace/config.py
+- mempalace/cli.py
+- mempalace/embedding.py
+- mempalace/normalize.py
+- tests/conftest.py

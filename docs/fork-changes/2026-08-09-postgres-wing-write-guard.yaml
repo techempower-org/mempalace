@@ -1,0 +1,25 @@
+seq: 104
+id: postgres-wing-write-guard
+date: '2026-08-09'
+bucket: Fixed
+commit: 979da51
+area: Storage
+summary: 'Postgres backend: _coerce_wing write guard — wing-less writes land in ''general'' (not the '''' column default) and separator/case variants normalize; scripts/wing_hygiene.py migrates the historical rows (dry-run default)'
+body: |
+  The drawers table's wing column defaults to ``''::text``, so any
+  writer that omitted the key filed drawers under an unreachable
+  empty-string wing (54 smoke-test drawers leaked on 2026-05-12),
+  and raw-dirname writers forked near-duplicate wings
+  (``kiyo-xhci-fix`` vs ``kiyo_xhci_fix``). ``_coerce_wing`` now
+  guards every postgres write choke point — upsert, update, and
+  ``rename_wing``'s destination (the source stays literal so
+  operators can rename *away* from a malformed wing). The one-off
+  migration for historical rows is ``scripts/wing_hygiene.py``
+  (dry-run by default; ``--commit`` / ``--delete-debris`` are
+  operator calls, tracked in #381). Issue #381.
+tests: 18 pure tests (test_wing_coercion.py) + 2 TEST_POSTGRES_DSN-gated integration tests
+files:
+- mempalace/backends/postgres.py
+- scripts/wing_hygiene.py
+- tests/test_wing_coercion.py
+- tests/test_backends_postgres.py

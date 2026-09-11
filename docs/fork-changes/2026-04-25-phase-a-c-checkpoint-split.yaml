@@ -1,0 +1,24 @@
+seq: 3
+id: phase-a-c-checkpoint-split
+date: '2026-04-25'
+bucket: Added
+commit: e266365
+area: Search
+summary: Phases A–C of the checkpoint collection split
+body: |
+  New ``mempalace_session_recovery`` collection adapter
+  (``_SESSION_RECOVERY_COLLECTION`` + ``get_session_recovery_collection``
+  in ``palace.py``); ``tool_diary_write`` routes ``topic in _CHECKPOINT_TOPICS``
+  to it. New ``mempalace_session_recovery_read`` MCP tool reads recovery
+  collection only with optional filters (session_id, agent, since,
+  until, wing, limit). Promoted from "future work" to "necessary" by
+  the same-day Cat 9 A/B (``kind=all`` 632 tokens/Q vs ``kind=content``
+  3 tokens/Q on the canonical 151K-drawer palace). Design doc at
+  ``docs/superpowers/specs/2026-04-25-checkpoint-collection-split.md``.
+tests: 12 across test_session_recovery.py + TestCheckpointRouting + TestSessionRecoveryRead
+files:
+- mempalace/palace.py
+- mempalace/mcp_server.py
+- tests/test_session_recovery.py
+- tests/test_mcp_server.py
+- website/reference/mcp-tools.md

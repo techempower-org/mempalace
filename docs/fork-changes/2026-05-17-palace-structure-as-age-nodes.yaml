@@ -1,0 +1,41 @@
+seq: 38
+id: palace-structure-as-age-nodes
+date: '2026-05-17'
+bucket: Added
+commit: ff583c0
+area: Search
+summary: Wing/Room/Drawer hierarchy as native AGE nodes; Cypher MATCH walks palace structure
+body: |
+  Phase 3 of the AGE-integration plan. Mirrors `mempalace.palace_graph`'s
+  SQL-aggregation pattern into AGE so Cypher MATCH walks the palace
+  structure natively — no SQL aggregation per query.
+
+  New module `mempalace/palace_graph_age.py`:
+  - `populate_from_postgres(kg, dsn, table_name, skip_drawers,
+    skip_tunnels)` — reads drawer table, builds
+    Wing/Room/Drawer/SHARED_VIA in AGE. Idempotent via MERGE.
+    Three-pass design so `skip_drawers` gives a fast high-level
+    palace map without per-drawer cost on huge palaces.
+  - `walk_wing(kg, wing, depth)` — structured walk primitive
+    returning `[{wing, room, drawer, entity}]` rows.
+  - `list_wings`, `list_rooms_in_wing`, `list_drawers_in_room`,
+    `tunnels_from_wing` — read-side helpers ready for MCP-tool
+    wiring (Phase 6).
+
+  Schema:
+  ```
+  Wing  -[:CONTAINS]->  Room  -[:CONTAINS]->  Drawer  -[:MENTIONS]->  Entity
+  Wing  -[:SHARED_VIA {via_room}]-  Wing      (tunnels)
+  ```
+
+  The MENTIONS edges connect structural location (Phase 3) to the
+  kg_writethrough layer (Phase 2) into one unified graph an agent
+  can navigate. AGE Cypher dialect respected: no edge-type union
+  `[:A|B]` (AGE 1.6.0 errors), so `walk_wing(depth=3)` uses
+  `[:RELATION]` with a property filter instead.
+
+  Smoke-tested on `sme_lme_bench`: 5344 chunks across 2 wings
+  (code/docs) → 237 rooms, 238 CONTAINS edges, 1 SHARED_VIA tunnel
+  via the `cli` room (appears in both wings).
+files:
+- mempalace/palace_graph_age.py

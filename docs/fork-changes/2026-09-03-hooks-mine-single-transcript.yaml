@@ -1,0 +1,15 @@
+seq: 112
+id: hooks-mine-single-transcript
+date: '2026-09-03'
+bucket: Fixed
+commit: 16a5236
+area: Reliability
+summary: Checkpoint ingest mines THIS transcript, not the whole project dir (#414/#426 mechanism)
+body: |
+  In daemon-strict mode ``_ingest_transcript`` posted ``path.parent`` — the
+  whole project transcript directory — so every Stop/PreCompact checkpoint
+  re-mined every session in the project. Measured: one such mine ran 6h06m
+  (2h CPU) holding the palace write lock while three sessions were live.
+  Post the single ``.jsonl`` (convo_miner already supported it; the daemon
+  side accepts it via palace-daemon#241 ``_is_mineable_path``).
+tests: 1 updated (test_ingest_transcript_routes_through_daemon)

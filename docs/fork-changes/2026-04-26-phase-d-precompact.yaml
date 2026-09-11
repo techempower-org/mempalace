@@ -1,0 +1,27 @@
+seq: 9
+id: phase-d-precompact
+date: '2026-04-26'
+bucket: Added
+commit: 42817d7
+area: Reliability
+summary: Phase D migration + PreCompact recovery write
+body: |
+  ``migrate_checkpoints_to_recovery(palace_path, batch_size=1000)`` walks
+  the main collection in pages, filters drawers with topic in
+  ``_CHECKPOINT_TOPICS`` in Python (avoids the chromadb 1.5.x ``$in``/``$nin``
+  filter-planner bug), copies them to the recovery collection
+  (preserving IDs + metadata), then deletes from main. Idempotent —
+  re-running on a fully-reorganized palace returns 0. Add-then-delete
+  order: a crash mid-migration leaves a duplicate, not a loss.
+  Wired into ``mempalace repair --mode reorganize`` for explicit operator
+  runs. PreCompact incorporated — ``hook_precompact`` now writes a
+  session-recovery marker mirroring Stop, so context-compaction events
+  leave a queryable timestamp in the recovery collection rather than
+  nothing. Failures are non-fatal (logged; mining + compaction still
+  proceed).
+tests: 6 in TestMigrateCheckpointsToRecovery + 1 in test_hooks_cli
+files:
+- mempalace/migrate.py
+- mempalace/cli.py
+- mempalace/hooks_cli.py
+- tests/test_migrate.py

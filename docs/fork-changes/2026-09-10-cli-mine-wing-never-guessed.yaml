@@ -1,0 +1,28 @@
+seq: 126
+id: cli-mine-wing-never-guessed
+date: '2026-09-10'
+bucket: Fixed
+commit: 180d8eb
+area: CLI
+summary: Daemon-strict mine refuses to derive a wing from a document path it cannot classify locally
+body: |
+  The daemon-strict branch decided file-vs-directory with ``is_file()`` on
+  the CLIENT filesystem while the daemon mines its own host's copy. A path
+  present there and absent here answered False, fell through to the
+  directory rule, and derived the wing from the FILENAME — measured,
+  ``~/Projects/2g/CLAUDE.md`` lands in a wing called ``claude.md``. Silent,
+  permanent misfiling of exactly the kind targeted re-index exists to
+  prevent. The disagreement is one-sided: for a directory "basename" is
+  right whether or not we can see it, while a file's wing comes from its
+  project root, so only a file misfiles. An unresolvable path carrying a
+  suffix the miner reads as text now exits 2 naming ``--wing``, quoting the
+  junk wing it declined to use; anything else keeps the historic rule.
+  Deliberately not a blanket refusal — the daemon legitimately mines paths
+  the client cannot see (synced, or ``PALACE_DAEMON_PATH_MAP``-remapped),
+  a contract ``test_routes_projects_mode_to_daemon`` has pinned since before
+  single-file mining existed. Residual hole, stated in the docstring rather
+  than papered over: a remote-only file with no suffix still takes the
+  basename rule.
+tests: '3 (test_cli_mine_single_file: refusal, explicit --wing, unseen directory)'
+files:
+- mempalace/cli.py

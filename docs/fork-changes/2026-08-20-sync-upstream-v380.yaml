@@ -1,0 +1,37 @@
+seq: 106
+id: sync-upstream-v380
+date: '2026-08-20'
+bucket: Changed
+commit: b3527b1
+area: Reliability
+summary: 'Sync upstream/develop through v3.8.0 (3e56979f): 166 commits — date-window search (since/before), openai-compat embeddings, RFC 002 adapter dispatch (#2062), mcp_proxy entry point, chunk_total metadata; ancestry repaired so future syncs replay only new commits'
+body: |
+  Third large sync. Ancestry first: #394 landed as a squash merge, so
+  git's merge base stayed pre-v3.7 and this sync initially wanted to
+  replay all 433 already-resolved commits. A tree-identical
+  ``merge -s ours 8516db7f`` records the true synced point; from here
+  on sync PRs land as MERGE COMMITS, never squash.
+
+  Upstream brought: ``since``/``before`` date-window filtering across
+  search/list/CLI (#463 family), the ``openai-compat`` embedding
+  backend (local /v1/embeddings servers), formalized RFC 002
+  source-adapter dispatch with typed exits (#2062 — the fork's
+  adapter lineage coming home; ``cmd_mine --source`` now uses it),
+  ``mempalace-mcp`` console script repointed at ``mcp_proxy``,
+  ``chunk_total`` drawer metadata + interrupted-mine cleanup
+  (#2183/#2122), read-paired ``source_mtime`` (#22), overview-cache
+  invalidation on writes, and Termux/Docker install docs.
+
+  Fork-preserved through 15 conflict files: adaptmem_ft encoder
+  (alongside openai-compat — four embedding options now), novelty
+  tagging threaded into the restructured miners next to
+  ``chunk_total``, daemon-strict CLI routing (now getattr-tolerant of
+  minimal configs), the delegating CLI ``search()`` with upstream's
+  window parse + HNSW fence composed in, room-taxonomy warnings next
+  to upstream's cache invalidation, tags + the ``96f83d7`` union
+  guard. Window correctness extended to every fork-only candidate
+  source upstream couldn't know about: the postgres BM25 arm, the
+  graph expansion in ``_merge_hybrid_candidates``, and the sqlite
+  fallback top-up all honor ``[since, before)``; the pre-fusion trim
+  keeps the full in-window pool so BM25-strong drawers deep in the
+  vector order still surface (upstream review finding, fork flow).

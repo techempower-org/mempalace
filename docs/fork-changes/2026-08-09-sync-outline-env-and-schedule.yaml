@@ -1,0 +1,18 @@
+seq: 103
+id: sync-outline-env-and-schedule
+date: '2026-08-09'
+bucket: Fixed
+commit: 5227da4
+area: CI
+summary: 'sync-outline: empty-secret env vars fall back to documented defaults; unreachable nightly cron retired (0-for-41 by construction) — workflow_dispatch stays'
+body: |
+  Part of #368. With the ``OUTLINE_BASE_URL`` secret absent, CI
+  substitutes an empty string that the ``.get`` default passed
+  through, breaking every URL join; ``or``-fallbacks fix that.
+  The nightly schedule could never succeed from hosted runners —
+  ``outline.jphe.in`` resolves to a Tailscale CGNAT address — so
+  the cron trigger is retired in favor of manual dispatch until
+  the homelab-timer half of #368 lands.
+files:
+- scripts/sync-outline.py
+- .github/workflows/sync-outline.yml
