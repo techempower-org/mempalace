@@ -2,7 +2,7 @@ seq: 78
 id: cli-move-drawer-relocation
 date: '2026-05-26'
 bucket: Added
-commit: d007b6f
+commit: b46c893
 area: CLI
 summary: mempalace move — fast direct-to-daemon single-drawer wing/room relocation (#191)
 body: |

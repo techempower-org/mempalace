@@ -2,10 +2,11 @@
 # check-docs.sh — sanity-check that fork docs are still in sync with reality.
 #
 # What it checks:
-#   1. Test count in README matches `pytest --collect-only -q` reality.
+#   1. Test count is DERIVED from `pytest --collect-only -q` and reported;
+#      no committed literal is asserted (#473).
 #   2. Every fork commit hash referenced in CLAUDE.md / README.md /
 #      FORK_CHANGELOG.md actually resolves via `git cat-file -e`.
-#   3. FORK_CHANGELOG.md is in sync with docs/fork-changes.yaml
+#   3. FORK_CHANGELOG.md is in sync with docs/fork-changes/ (one file per entry)
 #      (re-runs render-docs.py --check internally).
 #   4. Every upstream PR mentioned (#NNNN) has a state matching what the
 #      doc claims (OPEN / MERGED / CLOSED). Uses `gh pr view`; skipped
@@ -47,10 +48,16 @@ fail()  { printf '  \033[31m✗\033[0m %s\n' "$1" >&2; ((failures++)); }
 failures=0
 
 # ── 1. test count ────────────────────────────────────────────────────────
-step "1/7  test count in README"
+# DERIVED, never asserted against a committed literal (#473). A number in
+# README/CLAUDE.md meant every PR that added a test edited the same two lines,
+# so a 10-PR wave conflicted there every time and each merge forced the rest to
+# re-derive it. The count is reported here for whoever is looking; it is not a
+# gate, because there is no longer a literal that can go stale. A literal that
+# nothing can contradict is the only kind worth keeping.
+step "1/7  test count (derived)"
 readme_count=$(grep -oE '[0-9]+ tests pass on `main`' README.md | grep -oE '^[0-9]+' || echo "")
-if [ -z "$readme_count" ]; then
-    warn "README has no '<N> tests pass on \`main\`' phrase — skipping"
+if false; then
+    :
 else
     # Prefer the repo venv's pytest so the check works without an
     # activated environment. In a git worktree (`.claude/worktrees/...`)
@@ -82,10 +89,13 @@ else
         fi
         if [ -z "$actual_count" ]; then
             warn "pytest --collect-only produced no count — skipping"
-        elif [ "$readme_count" != "$actual_count" ]; then
-            fail "README says $readme_count, pytest collects $actual_count"
+        elif [ -n "$readme_count" ]; then
+            # A literal crept back in. Not a hard failure (it may be a
+            # deliberate release note), but say so, because it will go stale
+            # and nothing else will notice.
+            warn "docs carry a hard-coded test count ($readme_count); suite collects $actual_count — prefer no literal (#473)"
         else
-            ok "README $readme_count == pytest $actual_count"
+            ok "suite collects $actual_count tests (no committed literal to drift)"
         fi
     fi
 fi
@@ -122,7 +132,47 @@ if (( unresolved == 0 )) && (( ${#hashes[@]} > 0 )); then
     ok "all ${#hashes[@]} fork hash references resolve"
 fi
 
-# ── 3. FORK_CHANGELOG.md is up-to-date with the canonical YAML ───────────
+# ── 2b. every entry's commit is an ANCESTOR of HEAD (#472) ───────────────
+# Resolving is not enough. A rebase or a squash merge rewrites the commit,
+# the entry keeps the old sha, and `git cat-file -e` still succeeds because
+# the object is merely dangling — it stays alive locally and in GitHub's
+# unreachable-object store until gc. That is exactly how 13 entries came to
+# reference commits unreachable from main while this script reported green.
+# Checked per ENTRY (not by scraping markdown) so the failure names the file
+# a human has to edit.
+step "2b/7 fork-change entry commits are ancestors of HEAD"
+py_entries="$REPO_ROOT/.venv/bin/python"
+[ -x "$py_entries" ] || py_entries="$(command -v python3 2>/dev/null || true)"
+legacy_file="$REPO_ROOT/docs/fork-changes-legacy-shas.txt"
+if [ -n "$py_entries" ] && [ -d "$REPO_ROOT/docs/fork-changes" ]; then
+    non_ancestors=0
+    checked=0
+    skipped=0
+    while IFS=$'\t' read -r entry_id sha; do
+        [ -n "$sha" ] || continue
+        # Documented-unrecoverable entries: see the header of that file.
+        if [ -f "$legacy_file" ] && grep -qE "^[[:space:]]*${entry_id}([[:space:]]|#|$)" "$legacy_file"; then
+            ((skipped++))
+            continue
+        fi
+        ((checked++))
+        if ! git merge-base --is-ancestor "$sha" HEAD 2>/dev/null; then
+            if git cat-file -e "$sha" 2>/dev/null; then
+                fail "entry '$entry_id' commit \`$sha\` exists but is NOT an ancestor of HEAD (stale branch sha? use commit: HEAD and let the merge resolve it)"
+            else
+                fail "entry '$entry_id' commit \`$sha\` does not resolve at all"
+            fi
+            ((non_ancestors++))
+        fi
+    done < <("$py_entries" "$REPO_ROOT/scripts/fork_changes.py" --commit-refs 2>/dev/null)
+    if (( non_ancestors == 0 )); then
+        ok "all $checked entry commits are ancestors of HEAD ($skipped documented-legacy skipped)"
+    fi
+else
+    warn "skipping entry-ancestry check (no python or no docs/fork-changes/)"
+fi
+
+# ── 3. FORK_CHANGELOG.md is up-to-date with the canonical entries ────────
 step "3/7  FORK_CHANGELOG.md regenerates clean"
 render_bin="$REPO_ROOT/scripts/render-docs.py"
 if [ -x "$render_bin" ]; then
@@ -131,7 +181,7 @@ if [ -x "$render_bin" ]; then
     if [ -z "$py" ]; then
         warn "no python interpreter — skipping render check"
     elif "$py" "$render_bin" --check >/dev/null 2>&1; then
-        ok "FORK_CHANGELOG.md matches docs/fork-changes.yaml"
+        ok "FORK_CHANGELOG.md matches docs/fork-changes/"
     else
         fail "FORK_CHANGELOG.md is stale — run scripts/render-docs.py to regenerate"
     fi
@@ -298,7 +348,7 @@ PYEOF
                    ':!README.md' ':!docs/ECOSYSTEM.md' ':!website/public/llms-full.txt' \
                    ':!FORK_CHANGELOG.md' ':!docs/specs/*' 2>/dev/null)
         # FORK_CHANGELOG.md is a historical record rendered from
-        # docs/fork-changes.yaml — entries legitimately state the tool count
+        # docs/fork-changes/ — entries legitimately state the tool count
         # AS OF their date (e.g. "stays at 39 tools" from the v3.5 sync), so
         # it is excluded rather than rewritten every time the surface grows.
         # docs/specs/ are dated design documents with the same property:

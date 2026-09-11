@@ -27,7 +27,7 @@
 
 ## What this is
 
-A verbatim-first local AI memory system. This fork tracks `upstream/develop` through the post-v3.9.0 sync (2026-09-01, commit `e8098348`) and runs in production on a **618K+ drawer Postgres + pgvector + Apache AGE palace** behind [palace-daemon](https://github.com/techempower-org/palace-daemon). It carries fork-ahead commits that compose with — not replace — bensig's release direction; the v3.3.5 release (2026-05-10) includes our co-authored `_get_collection` retry-once via upstream #1377. 7125 tests pass on `main`.
+A verbatim-first local AI memory system. This fork tracks `upstream/develop` through the post-v3.9.0 sync (2026-09-01, commit `e8098348`) and runs in production on a **618K+ drawer Postgres + pgvector + Apache AGE palace** behind [palace-daemon](https://github.com/techempower-org/palace-daemon). It carries fork-ahead commits that compose with — not replace — bensig's release direction; the v3.3.5 release (2026-05-10) includes our co-authored `_get_collection` retry-once via upstream #1377. The full suite passes on `main` (`pytest --collect-only -q` for the current count).
 
 The fork's architectural thinking — the four-layer memory model, the [verbatim-vs-derivative thesis](docs/research/verbatim-vs-derivative-axis.md), design principles, and the two-memory-layer pairing with Auto Dream — lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The new things here are *what we've learned*, not just what we've fixed.
 
@@ -290,6 +290,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| Fork-change entries split one-per-file; entry shas verified by ancestry and resolved after merge | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | README install path documents putting the mempalace-mcp bridge on PATH | — | [`933602e`](https://github.com/techempower-org/mempalace/commit/933602e) |
 | Checkpoint drawers carry the session id, not just the diary entry; session_id is validated | — | [`1a54838`](https://github.com/techempower-org/mempalace/commit/1a54838) |
 | Legacy `hallways` delegates to `hallway list`; both surfaces share one limit rule | — | [`a404d10`](https://github.com/techempower-org/mempalace/commit/a404d10) |
@@ -348,9 +349,9 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 | mempalace why + tunnels — explain a drawer + inventory cross-wing tunnels (slice of #191) | — | [`fdcd0b4`](https://github.com/techempower-org/mempalace/commit/fdcd0b4) |
 | RRF vs convex-blend rerank — A/B measurement on our corpus (#162) | — | [`ea5d567`](https://github.com/techempower-org/mempalace/commit/ea5d567) |
 | KG triples gain SPOC context slot + worker auto-derives valid_from from drawer metadata (#161) | — | [`b87ce05`](https://github.com/techempower-org/mempalace/commit/b87ce05) |
-| mempalace bulk-move — multi-drawer metadata relocation by source wing/room (#191) | — | [`1ca544b`](https://github.com/techempower-org/mempalace/commit/1ca544b) |
-| mempalace move — fast direct-to-daemon single-drawer wing/room relocation (#191) | — | [`d007b6f`](https://github.com/techempower-org/mempalace/commit/d007b6f) |
-| mempalace stats migrates to GET /stats REST + exposes graph/status sections (#191) | — | [`853bb25`](https://github.com/techempower-org/mempalace/commit/853bb25) |
+| mempalace bulk-move — multi-drawer metadata relocation by source wing/room (#191) | — | [`6d7308d`](https://github.com/techempower-org/mempalace/commit/6d7308d) |
+| mempalace move — fast direct-to-daemon single-drawer wing/room relocation (#191) | — | [`b46c893`](https://github.com/techempower-org/mempalace/commit/b46c893) |
+| mempalace stats migrates to GET /stats REST + exposes graph/status sections (#191) | — | [`ab056de`](https://github.com/techempower-org/mempalace/commit/ab056de) |
 | mempalace cypher — read-only Cypher query CLI (#191) | — | [`32a41b1`](https://github.com/techempower-org/mempalace/commit/32a41b1) |
 | mempalace graph — fast direct-to-daemon KG structural snapshot (#191) | — | [`499f42d`](https://github.com/techempower-org/mempalace/commit/499f42d) |
 | mempalace list — fast direct-to-daemon drawer browser (#191) | — | [`257137b`](https://github.com/techempower-org/mempalace/commit/257137b) |

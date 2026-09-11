@@ -2,7 +2,7 @@ seq: 79
 id: cli-bulk-move-relocation
 date: '2026-05-27'
 bucket: Added
-commit: 1ca544b
+commit: 6d7308d
 area: CLI
 summary: mempalace bulk-move — multi-drawer metadata relocation by source wing/room (#191)
 body: |

@@ -2,7 +2,7 @@ seq: 77
 id: cli-stats-rest-migration
 date: '2026-05-26'
 bucket: Changed
-commit: 853bb25
+commit: ab056de
 area: CLI
 summary: mempalace stats migrates to GET /stats REST + exposes graph/status sections (#191)
 body: |

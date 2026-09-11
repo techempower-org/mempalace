@@ -1,0 +1,55 @@
+# Fork-change entries whose squash commit cannot be identified (#472).
+#
+# scripts/check-docs.sh requires every entry's `commit:` to be an ANCESTOR of
+# HEAD -- resolving is not enough, because a dangling branch commit resolves
+# fine (locally, and in GitHub's unreachable-object store) until it is
+# garbage-collected. That is how 13 entries came to point at commits
+# unreachable from main while every check stayed green.
+#
+# The entries below predate any post-merge resolution step. Their change IS on
+# main; the commit carrying it can no longer be named, because the squash
+# subject was rewritten at merge and the branch commit is unreachable.
+#
+# Counts, measured: 27 entries were non-ancestors when this change started (a
+# further 13 were fixed earlier, in #475). scripts/maintain-fork-changes.py
+# resolved 3 of the 27 by exact subject match and REFUSED the other 24 rather
+# than guess, which is its documented contract.
+#
+# They are recorded here instead of being given a plausible sha, because a
+# wrong reference passes every check and misleads a reader, while this file is
+# a visible diff the moment anyone adds a line. Adding an id here is a
+# deliberate, reviewable act -- NOT a place to park a stale sha from work you
+# just did. Fixing one means finding its real commit and deleting its line.
+#
+# A looser token-similarity pass would recover roughly 8 of these (subjects
+# reworded at merge, e.g. "add why + tunnels ..." -> "why + tunnels ..."). It
+# was deliberately not applied: the tool refuses ambiguous matches by design,
+# and hand-applying matches it rejects in the same change would undercut that
+# contract. Worth doing as its own reviewed pass.
+#
+# Format: one entry id per line. Blank lines and # comments ignored.
+
+backend-unreachable-error-mapping    # 0c34464
+backfill-age-from-existing-drawers    # b3f0206
+cli-cypher-readonly    # 32a41b1
+cli-graph-kg-snapshot    # 499f42d
+cli-json-quiet-flags    # 25ed900
+cli-list-drawer-browser    # 257137b
+cli-stats-dashboard    # 6f994fb
+cli-stats-rooms-breakdown    # 1673465
+cli-tags-and-overlap-fast-path    # ea5d567
+cli-why-and-tunnels-fast-path    # fdcd0b4
+kg-age-api-parity    # ff7187d
+kg-triple-extraction-llm    # 59ac0bc
+kg-writethrough-middleware    # 3321d83
+mempalace-walk-palace-mcp-tool    # 8022ecb
+opencode-integration-recipe    # 60dc9e6
+opencode-live-capture-plugin    # 5522623
+opencode-mcp-config-cherry-pick-1567    # ba16b82
+opencode-source-adapter-cherry-pick-1484    # 2ffe652
+palace-structure-as-age-nodes    # ff583c0
+power-resilience-pending-queue    # 0c34464
+rate-memory-feedback-loop    # 583536c
+recency-decay-prune    # 558d327
+sh-shim-strategy-doc    # bf0a4d0
+verbatim-derivative-essay-promotion    # 6a264d9

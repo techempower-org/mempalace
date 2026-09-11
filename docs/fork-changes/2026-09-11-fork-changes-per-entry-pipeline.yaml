@@ -1,0 +1,42 @@
+seq: 138
+id: fork-changes-per-entry-pipeline
+date: '2026-09-11'
+bucket: Changed
+commit: HEAD
+area: Docs
+summary: Fork-change entries split one-per-file; entry shas verified by ancestry and
+  resolved after merge
+body: |
+  Every PR in a wave inserted at the top of `entries:` in one
+  `docs/fork-changes.yaml`, so every PR conflicted with every other one on that
+  file plus the four artefacts rendered from it — measured across a 10-PR wave
+  on 2026-09-10/11 with **zero** source conflicts, each merge forcing the rest
+  through a full docs rebuild.
+
+  Entries now live one per file in `docs/fork-changes/<date>-<id>.yaml`, loaded
+  by `scripts/fork_changes.py` so the renderer, check-docs and
+  maintain-fork-changes cannot drift on ordering or validation. Ordering is
+  `seq` descending; a collision is harmless, because the conflict was never the
+  number but a shared insertion line in a shared file. The README table is
+  unnumbered (one new row used to renumber every row below it), and the
+  committed test-count literal is gone — check-docs derives the count instead
+  of asserting a number that every test-adding PR had to re-edit.
+
+  Two correctness fixes ride along. `check-docs.sh` now requires each entry's
+  commit to be an **ancestor** of HEAD, not merely to resolve: a rebase or
+  squash merge rewrites the commit, the entry keeps the old sha, and
+  `git cat-file -e` still succeeds on the dangling object — which is how 13
+  entries came to reference commits unreachable from main while every check
+  reported green. And `maintain-fork-changes.py` resolves `commit: HEAD` from
+  the entry's `fork_pr` via the REST API instead of scanning nearby prose for
+  any `#NN`; the old heuristic resolved 3 of 12 real cases and got all three
+  wrong, one against an upstream issue number. Both passes now refuse ambiguity
+  rather than guess, because an unresolved entry is visible while a confident
+  wrong sha is not.
+tests: 30 (test_fork_changes_loader x14, test_maintain_fork_changes x16)
+files:
+- docs/fork-changes/
+- scripts/fork_changes.py
+- scripts/render-docs.py
+- scripts/maintain-fork-changes.py
+- scripts/check-docs.sh

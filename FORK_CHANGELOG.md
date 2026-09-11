@@ -18,6 +18,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-09-11]
+
+
+### Changed
+
+
+- **Fork-change entries split one-per-file; entry shas verified by ancestry and resolved after merge** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  Every PR in a wave inserted at the top of `entries:` in one
+  `docs/fork-changes.yaml`, so every PR conflicted with every other one on that
+  file plus the four artefacts rendered from it — measured across a 10-PR wave
+  on 2026-09-10/11 with **zero** source conflicts, each merge forcing the rest
+  through a full docs rebuild.
+
+  Entries now live one per file in `docs/fork-changes/<date>-<id>.yaml`, loaded
+  by `scripts/fork_changes.py` so the renderer, check-docs and
+  maintain-fork-changes cannot drift on ordering or validation. Ordering is
+  `seq` descending; a collision is harmless, because the conflict was never the
+  number but a shared insertion line in a shared file. The README table is
+  unnumbered (one new row used to renumber every row below it), and the
+  committed test-count literal is gone — check-docs derives the count instead
+  of asserting a number that every test-adding PR had to re-edit.
+
+  Two correctness fixes ride along. `check-docs.sh` now requires each entry's
+  commit to be an **ancestor** of HEAD, not merely to resolve: a rebase or
+  squash merge rewrites the commit, the entry keeps the old sha, and
+  `git cat-file -e` still succeeds on the dangling object — which is how 13
+  entries came to reference commits unreachable from main while every check
+  reported green. And `maintain-fork-changes.py` resolves `commit: HEAD` from
+  the entry's `fork_pr` via the REST API instead of scanning nearby prose for
+  any `#NN`; the old heuristic resolved 3 of 12 real cases and got all three
+  wrong, one against an upstream issue number. Both passes now refuse ambiguity
+  rather than guess, because an unresolved entry is visible while a confident
+  wrong sha is not.
+
+  *Tests:* 30 (test_fork_changes_loader x14, test_maintain_fork_changes x16)
+  *Files:* `docs/fork-changes/`, `scripts/fork_changes.py`, `scripts/render-docs.py`, `scripts/maintain-fork-changes.py`, `scripts/check-docs.sh`
+
+
 ## [2026-09-10]
 
 
@@ -1631,7 +1669,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **mempalace bulk-move — multi-drawer metadata relocation by source wing/room (#191)** ([`1ca544b`](https://github.com/techempower-org/mempalace/commit/1ca544b))
+- **mempalace bulk-move — multi-drawer metadata relocation by source wing/room (#191)** ([`6d7308d`](https://github.com/techempower-org/mempalace/commit/6d7308d))
   ``mempalace bulk-move --wing W --room R --to-wing W2 --to-room R2``
   is the multi-drawer complement to ``move``. It selects every drawer
   matching a source wing/room via offset-paginated ``GET /list`` and
@@ -1673,7 +1711,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **mempalace move — fast direct-to-daemon single-drawer wing/room relocation (#191)** ([`d007b6f`](https://github.com/techempower-org/mempalace/commit/d007b6f))
+- **mempalace move — fast direct-to-daemon single-drawer wing/room relocation (#191)** ([`b46c893`](https://github.com/techempower-org/mempalace/commit/b46c893))
   ``mempalace move <drawer_id> --wing W --room R`` relocates a
   single drawer to a different wing/room. It is the single-drawer
   complement to the existing bulk ``rename-wing``, and the next
@@ -1995,7 +2033,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **mempalace stats migrates to GET /stats REST + exposes graph/status sections (#191)** ([`853bb25`](https://github.com/techempower-org/mempalace/commit/853bb25))
+- **mempalace stats migrates to GET /stats REST + exposes graph/status sections (#191)** ([`ab056de`](https://github.com/techempower-org/mempalace/commit/ab056de))
   ``mempalace stats`` migrates from a 3-4-call MCP-tool fan-out
   (``mempalace_status`` + ``mempalace_kg_stats`` +
   ``mempalace_graph_stats`` + optional ``mempalace_list_tags``)
