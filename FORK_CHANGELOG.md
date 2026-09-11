@@ -24,6 +24,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **Auto-query recognizes a session-resumption ask ("where were we", "catch me up") in both the shell pre-filter and the signal set** ([`c6872494`](https://github.com/techempower-org/mempalace/commit/c6872494))
+  Measured on ``main`` 2026-09-10, turn 5, wing ``memorypalace`` with
+  recent drawers: every way a person asks to be picked back up scored
+  **zero** and fired nothing — "where were we", "what were we doing",
+  "pick up where we left off", "what's the team status", "catch me up",
+  "what was I doing". ``_check_resumption`` was purely positional (turn 1
+  + known wing + recent drawers), so the case that matters most — someone
+  asking mid-session, typically right after a compaction — carried no
+  signal on any turn. The fix has to move in two layers: **13 of 17**
+  resumption prompts were dropped by the hook's shell pre-filter before
+  Python ran, so the Python-side signal alone would never have fired in
+  production; the pre-filter is documented as a superset of the signal set
+  and is one again, pinned by a test that greps each prompt through the
+  patterns read straight out of the hook. An explicit resumption ask
+  routes to a wing-scoped ``mempalace_search``, not to
+  ``mempalace_diary_read`` — the diary is the palace's own AUTO-SAVE
+  bookkeeping, which the quality gate already classifies as exhaust (#429,
+  #436), and returning it to someone asking "where were we" is how agents
+  learned to ignore the palace. The phrase is subtracted from the query
+  first, so "where were we on the pgvector cutover" searches the cutover
+  (measured live: 5 hits above the 0.50 floor, best 0.642, the cutover
+  runbook at rank 2, against nothing at all on ``main``). One surviving
+  word is a topic, not noise — the names people resume on are usually
+  single tokens, a wing (``2g``), an issue (``#449``), a component
+  (``pgvector``) — so only an empty remainder falls back to the wing's
+  decision-shaped content instead of searching the question. Positional turn-1 resumption
+  still reads the diary. The decision log records the matched phrase so a
+  fired resumption says which half it came from.
+
+  *Tests:* 54 (test_auto_query_resumption)
+  *Files:* `mempalace/auto_query/signals.py`, `mempalace/auto_query/router.py`, `mempalace/auto_query/__init__.py`, `mempalace/auto_query/runner.py`, `hooks/palace-auto-query.sh`
+
+
 - **Every search hit carries source_kind (+ staleness when decidable) and the CLI renders the caveat** ([`5632dc2`](https://github.com/techempower-org/mempalace/commit/5632dc2))
   A palace search returns the *indexed copy* of whatever was mined, and
   transcripts are the only thing mined continuously (the Stop / PreCompact

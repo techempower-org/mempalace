@@ -46,7 +46,7 @@ Files included, in order:
 
 ## What this is
 
-A verbatim-first local AI memory system. This fork tracks `upstream/develop` through the post-v3.9.0 sync (2026-09-01, commit `e8098348`) and runs in production on a **618K+ drawer Postgres + pgvector + Apache AGE palace** behind [palace-daemon](https://github.com/techempower-org/palace-daemon). It carries fork-ahead commits that compose with — not replace — bensig's release direction; the v3.3.5 release (2026-05-10) includes our co-authored `_get_collection` retry-once via upstream #1377. 6938 tests pass on `main`.
+A verbatim-first local AI memory system. This fork tracks `upstream/develop` through the post-v3.9.0 sync (2026-09-01, commit `e8098348`) and runs in production on a **618K+ drawer Postgres + pgvector + Apache AGE palace** behind [palace-daemon](https://github.com/techempower-org/palace-daemon). It carries fork-ahead commits that compose with — not replace — bensig's release direction; the v3.3.5 release (2026-05-10) includes our co-authored `_get_collection` retry-once via upstream #1377. 6992 tests pass on `main`.
 
 The fork's architectural thinking — the four-layer memory model, the [verbatim-vs-derivative thesis](docs/research/verbatim-vs-derivative-axis.md), design principles, and the two-memory-layer pairing with Auto Dream — lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The new things here are *what we've learned*, not just what we've fixed.
 
@@ -277,129 +277,130 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | Post-compaction recovery: clear the auto-query dedupe and re-inject wake-up content, not a pointer | — | [`22858070`](https://github.com/techempower-org/mempalace/commit/22858070) |
-| 2 | Every search hit carries source_kind (+ staleness when decidable) and the CLI renders the caveat | — | [`5632dc2`](https://github.com/techempower-org/mempalace/commit/5632dc2) |
-| 3 | mempalace mine <file> --mode projects — targeted re-index of one curated document | — | [`787af46`](https://github.com/techempower-org/mempalace/commit/787af46) |
-| 4 | Daemon-strict mine refuses to derive a wing from a document path it cannot classify locally | — | [`a30293b`](https://github.com/techempower-org/mempalace/commit/a30293b) |
-| 5 | Postgres write path scrubs lone surrogates, nested metadata and ids, not just top-level NULs | — | [`66ca19f`](https://github.com/techempower-org/mempalace/commit/66ca19f) |
-| 6 | Wing-scoped vector search no longer returns 0 rows: enable pgvector hnsw.iterative_scan per connection | — | [`2ea774d`](https://github.com/techempower-org/mempalace/commit/2ea774d) |
-| 7 | Curated memory-file hits clear a lower confidence floor; harness prompt-echo drawers filtered as exhaust | — | [`31b74d9`](https://github.com/techempower-org/mempalace/commit/31b74d9) |
-| 8 | mempalace doctor — one-screen health check of the memory workflow (bridge, daemon, wing, hooks, replay) | — | [`04dde83`](https://github.com/techempower-org/mempalace/commit/04dde83) |
-| 9 | Only the MCP-server entrypoints parse argv at import; other importers get defaults (#409) | — | [`e3e0579`](https://github.com/techempower-org/mempalace/commit/e3e0579) |
-| 10 | AGE knowledge-graph connection survives a bad query (rollback) and a dead socket (reconnect once) (#405) | — | [`2135df7`](https://github.com/techempower-org/mempalace/commit/2135df7) |
-| 11 | Re-mine a transcript incrementally — embed only new or changed chunks; stored drawers are the watermark (#414) | — | [`cf1e997`](https://github.com/techempower-org/mempalace/commit/cf1e997) |
-| 12 | Legacy hallways verb deprecated in favour of hallway list; now honours --json (#407) | — | [`1509c32`](https://github.com/techempower-org/mempalace/commit/1509c32) |
-| 13 | Replay drops legacy whole-project convos requests instead of re-mining them forever (#426) | — | [`b5b774f`](https://github.com/techempower-org/mempalace/commit/b5b774f) |
-| 14 | wake-up L1 skips bookkeeping drawers (AUTO-SAVE, manifests) and ranks curated memory files first (#421 #423) | — | [`a4012dd`](https://github.com/techempower-org/mempalace/commit/a4012dd) |
-| 15 | tool_checkpoint forwards session_id to the diary write; declared in both tool schemas (#408) | — | [`e5e31f0`](https://github.com/techempower-org/mempalace/commit/e5e31f0) |
-| 16 | Hooks ask the daemon to run checkpoint mines in the background (202 + serial drain) — no more 30s timeouts, journaled replays, and double mines | — | [`79b192b`](https://github.com/techempower-org/mempalace/commit/79b192b) |
-| 17 | Thin-vector warning no longer tells pgvector users to rebuild an HNSW index | — | [`43d3a28`](https://github.com/techempower-org/mempalace/commit/43d3a28) |
-| 18 | Checkpoint ingest mines THIS transcript, not the whole project dir (#414/#426 mechanism) | — | [`16a5236`](https://github.com/techempower-org/mempalace/commit/16a5236) |
-| 19 | Auto-query signal quality: user's-words depth query + wing inventory, peer-block stripping, identifier signals via BM25 fast route, exhaust filter, 0.50 floor, per-session dedupe, curated-first, visible receipts (#419 #420 #422 #424) | — | [`0d92cef`](https://github.com/techempower-org/mempalace/commit/0d92cef) |
-| 20 | Sync upstream/develop through v3.9.0 (e8098348): 101 commits — durable config writes, strategy-aware candidate pools, BM25-under-threshold admission, search hub-forward, embeddinggemma batch override, cli_compatible search | — | [`09713d9`](https://github.com/techempower-org/mempalace/commit/09713d9) |
-| 21 | CLI wave 3/3: `mempalace diary`, `kg`, `walk` and `rate` first-class verbs (#354, #357, #359, #361) | — | [`ff9ee22`](https://github.com/techempower-org/mempalace/commit/ff9ee22) |
-| 22 | CLI wave 2/3: `mempalace wings`, `taxonomy`, `aaak spec`, `hallway`, `checkpoint --dry-run` (#356, #358, #360, #362) | — | [`2848e96`](https://github.com/techempower-org/mempalace/commit/2848e96) |
-| 23 | CLI wave 1/3: `mempalace drawer get\|add\|delete\|update` and `duplicate check` (#355, #363) | — | [`836d1a1`](https://github.com/techempower-org/mempalace/commit/836d1a1) |
-| 24 | Sync upstream/develop through v3.8.0 (3e56979f): 166 commits — date-window search (since/before), openai-compat embeddings, RFC 002 adapter dispatch (#2062), mcp_proxy entry point, chunk_total metadata; ancestry repaired so future syncs replay only new commits | — | [`b3527b1`](https://github.com/techempower-org/mempalace/commit/b3527b1) |
-| 25 | Sync upstream/develop through v3.7.0 (8516db7f): 433 commits — hub forward, temp-collection repair promote, round-trippable drawer IDs, kg_supersede, HNSW CLI fence, 62 conflict files resolved | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
-| 26 | Postgres backend: _coerce_wing write guard — wing-less writes land in 'general' (not the '' column default) and separator/case variants normalize; scripts/wing_hygiene.py migrates the historical rows (dry-run default) | — | [`979da51`](https://github.com/techempower-org/mempalace/commit/979da51) |
-| 27 | sync-outline: empty-secret env vars fall back to documented defaults; unreachable nightly cron retired (0-for-41 by construction) — workflow_dispatch stays | — | [`5227da4`](https://github.com/techempower-org/mempalace/commit/5227da4) |
-| 28 | Searcher: restore mempalace_search on postgres — guard capability-path conversion in union merge (UnboundLocalError since the 2026-07-02 sync) | — | [`96f83d7`](https://github.com/techempower-org/mempalace/commit/96f83d7) |
-| 29 | Auto-query: TTL cache for the deterministic depth-refresh injection — repeat fires 0ms vs ~850ms daemon round-trip | — | [`be903e6`](https://github.com/techempower-org/mempalace/commit/be903e6) |
-| 30 | Sync upstream/develop through da5a48c (post-v3.5.0): remote MCP server w/ TLS + read-only, graph auto-population, Qdrant facets, list_drawers date filters, 213 commits | — | [`b46f18d`](https://github.com/techempower-org/mempalace/commit/b46f18d) |
-| 31 | Auto-query firing fixes: frozen turn counter, dead wing scoring, lowercase entities, turn-1 cadence | — | [`fad3e27`](https://github.com/techempower-org/mempalace/commit/fad3e27) |
-| 32 | Auto-query: periodic depth signal, unknown-entity 0->1 bump, broader temporal patterns | — | [`864d7a4`](https://github.com/techempower-org/mempalace/commit/864d7a4) |
-| 33 | Sync upstream/develop through v3.5.0 (73e74bf): MCP HTTP transport, source_file filter, checkpoint tool, SessionEnd hook, 185 commits | — | [`8711e1c`](https://github.com/techempower-org/mempalace/commit/8711e1c) |
-| 34 | Restore concurrent file mining via parallel-prepare/serial-write (regression from a dropped sync hunk); opt-in --workers | — | [`42a107b`](https://github.com/techempower-org/mempalace/commit/42a107b) |
-| 35 | Sync upstream/develop through v3.4.0 (2ec4bae): RFC-001 backend stack, diary checkpoints restored, 113 commits | — | [`373fdf2`](https://github.com/techempower-org/mempalace/commit/373fdf2) |
-| 36 | auto_wake: opt-in wake-on-demand for a sleeping palace-daemon host (wake command + /health poll + single retry) | — | [`8e0d896`](https://github.com/techempower-org/mempalace/commit/8e0d896) |
-| 37 | AGE graph-walk: auto edge-endpoint indexes in backfill + bind anonymous RELATION targets (mempalace#335) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
-| 38 | pluggable adaptmem_ft encoder backend selectable via MEMPALACE_EMBEDDING_MODEL (closes #308) | — | [`5fba6d8`](https://github.com/techempower-org/mempalace/commit/5fba6d8) |
-| 39 | README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
-| 40 | README.md + docs/ECOSYSTEM.md — soften 'engram-2 17% E2E QA' framing per the 2026-05-24 research doc's unsubstantiated finding (#319) | — | [`ddf00b4`](https://github.com/techempower-org/mempalace/commit/ddf00b4) |
-| 41 | kg_llm_extractor rewrites AGE dollar-quote tag in triples so drawers indexing palace source code don't fail at add_triple (#313) | — | [`3fb9428`](https://github.com/techempower-org/mempalace/commit/3fb9428) |
-| 42 | scripts/maintain-fork-changes.py + ship-prep step 1: resolve commit:HEAD placeholders and de-dup yaml entries (#316) | — | [`9060e09`](https://github.com/techempower-org/mempalace/commit/9060e09) |
-| 43 | scripts/ship-prep.sh — one command bumps README test count and runs all three doc renderers (#312) | — | [`4677db8`](https://github.com/techempower-org/mempalace/commit/4677db8) |
-| 44 | mempalace_search MCP input schema accepts fusion_mode (convex\|rrf) and forwards to search_memories (#302) | — | [`f753ec4`](https://github.com/techempower-org/mempalace/commit/f753ec4) |
-| 45 | scripts/check-docs.sh finds pytest via main checkout when run from a worktree, fails hard instead of silently skipping test-count check (#311) | — | [`1d19a8b`](https://github.com/techempower-org/mempalace/commit/1d19a8b) |
-| 46 | kg_triple_worker retries add_triple within-worker on transient psycopg errors instead of abandoning to lease-reclaim (#298) | — | [`36c0b02`](https://github.com/techempower-org/mempalace/commit/36c0b02) |
-| 47 | mempalace_kg_stats returns structured backend-unavailable envelope on transient psycopg failures (#299) | — | [`8fd0b01`](https://github.com/techempower-org/mempalace/commit/8fd0b01) |
-| 48 | mempalace why + tunnels — explain a drawer + inventory cross-wing tunnels (slice of #191) | — | [`fdcd0b4`](https://github.com/techempower-org/mempalace/commit/fdcd0b4) |
-| 49 | RRF vs convex-blend rerank — A/B measurement on our corpus (#162) | — | [`ea5d567`](https://github.com/techempower-org/mempalace/commit/ea5d567) |
-| 50 | KG triples gain SPOC context slot + worker auto-derives valid_from from drawer metadata (#161) | — | [`b87ce05`](https://github.com/techempower-org/mempalace/commit/b87ce05) |
-| 51 | mempalace bulk-move — multi-drawer metadata relocation by source wing/room (#191) | — | [`1ca544b`](https://github.com/techempower-org/mempalace/commit/1ca544b) |
-| 52 | mempalace move — fast direct-to-daemon single-drawer wing/room relocation (#191) | — | [`d007b6f`](https://github.com/techempower-org/mempalace/commit/d007b6f) |
-| 53 | mempalace stats migrates to GET /stats REST + exposes graph/status sections (#191) | — | [`853bb25`](https://github.com/techempower-org/mempalace/commit/853bb25) |
-| 54 | mempalace cypher — read-only Cypher query CLI (#191) | — | [`32a41b1`](https://github.com/techempower-org/mempalace/commit/32a41b1) |
-| 55 | mempalace graph — fast direct-to-daemon KG structural snapshot (#191) | — | [`499f42d`](https://github.com/techempower-org/mempalace/commit/499f42d) |
-| 56 | mempalace list — fast direct-to-daemon drawer browser (#191) | — | [`257137b`](https://github.com/techempower-org/mempalace/commit/257137b) |
-| 57 | Recency decay weighting in search + mempalace prune --stale-days CLI (#158) | — | [`558d327`](https://github.com/techempower-org/mempalace/commit/558d327) |
-| 58 | mempalace_rate_memory MCP tool + bounded rating signal in search ranking (#159) | — | [`583536c`](https://github.com/techempower-org/mempalace/commit/583536c) |
-| 59 | Formalize wing/room derivation order; demote entity detector to last-resort hint (#157) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
-| 60 | RRF fusion mode + convex-vs-RRF A/B harness (#162) | [#247](https://github.com/MemPalace/mempalace/pull/247) | [`6c9d10c`](https://github.com/techempower-org/mempalace/commit/6c9d10c) |
-| 61 | mempalace stats: add ROOMS breakdown (drawer count by room) to the dashboard | — | [`1673465`](https://github.com/techempower-org/mempalace/commit/1673465) |
-| 62 | Calibrated confidence field on search results + Brier-score eval column | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
-| 63 | Evaluation doc: curated-authority vs auto-mined separation (#202) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
-| 64 | Apply AGE statement_timeout in same transaction as cypher() (PR #228 follow-up) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
-| 65 | LLM-based KG triple extraction: queue table, async worker, llama.cpp on familiar | — | [`59ac0bc`](https://github.com/techempower-org/mempalace/commit/59ac0bc) |
-| 66 | Promote verbatim-vs-derivative essay from research/ to README (#170) | — | [`6a264d9`](https://github.com/techempower-org/mempalace/commit/6a264d9) |
-| 67 | mempalace stats — palace analytics dashboard (#191) | — | [`6f994fb`](https://github.com/techempower-org/mempalace/commit/6f994fb) |
-| 68 | CLI wiring: mempalace mine --source <adapter> (#57) | — | [`5ed9fa7`](https://github.com/techempower-org/mempalace/commit/5ed9fa7) |
-| 69 | Warp terminal source adapter (#62) | — | [`2e85585`](https://github.com/techempower-org/mempalace/commit/2e85585) |
-| 70 | OpenCode adapter smoke test against real DB (#56) | — | [`a9ed72b`](https://github.com/techempower-org/mempalace/commit/a9ed72b) |
-| 71 | Codex, Gemini, and Aider source adapters (#61, #59) | — | [`0c23165`](https://github.com/techempower-org/mempalace/commit/0c23165) |
-| 72 | Filesystem + conversation source adapters (#63) | — | [`9a1facf`](https://github.com/techempower-org/mempalace/commit/9a1facf) |
-| 73 | Widen auto-query signal patterns for natural recall phrases | — | [`33e780e`](https://github.com/techempower-org/mempalace/commit/33e780e) |
-| 74 | Native rename_wing backend operation + CLI command (#154) | — | [`d045f83`](https://github.com/techempower-org/mempalace/commit/d045f83) |
-| 75 | Standalone essay: the verbatim-vs-derivative axis (#47) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
-| 76 | Research doc: uncertainty-aware retrieval analysis (#84) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
-| 77 | Design doc: scope/collection filter on mempalace_search (#76) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
-| 78 | Agent-shaped CLI surface — --json / --quiet for non-MCP integration | — | [`25ed900`](https://github.com/techempower-org/mempalace/commit/25ed900) |
-| 79 | Design eval: multi-palace separation — curated vs auto-mined (#45) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
-| 80 | Document .sh shim delegation to palace-daemon (counter-position to upstream #1069) | — | [`bf0a4d0`](https://github.com/techempower-org/mempalace/commit/bf0a4d0) |
-| 81 | Honor ~/.mempalace/RETIRED marker — refuse default palace, surface retire message | — | [`798cf14`](https://github.com/techempower-org/mempalace/commit/798cf14) |
-| 82 | Empty repo .opencode/opencode.json mcp block — disabled flag wasn't being respected | — | [`7133eee`](https://github.com/techempower-org/mempalace/commit/7133eee) |
-| 83 | Drop \$comment from .opencode/opencode.json — schema rejects unknown root keys | — | [`637bb01`](https://github.com/techempower-org/mempalace/commit/637bb01) |
-| 84 | Disable repo-level MCP entry by default + venv-python fallback | — | [`47018e5`](https://github.com/techempower-org/mempalace/commit/47018e5) |
-| 85 | Stub resources/list + prompts/list so MCP clients stop ERROR-logging on connect | — | [`6ca0670`](https://github.com/techempower-org/mempalace/commit/6ca0670) |
-| 86 | Bundled OpenCode live-capture plugin that bypasses option-K v1.2.1 bugs (filed upstream as #4, #5) | — | [`5522623`](https://github.com/techempower-org/mempalace/commit/5522623) |
-| 87 | Documented OpenCode integration recipe (read-side MCP + push plugin + retrospective adapter) | — | [`60dc9e6`](https://github.com/techempower-org/mempalace/commit/60dc9e6) |
-| 88 | .opencode/opencode.json — repo-root MCP config so opencode picks up mempalace automatically | [#1567](https://github.com/MemPalace/mempalace/pull/1567) (CLOSED) | [`ba16b82`](https://github.com/techempower-org/mempalace/commit/ba16b82) |
-| 89 | OpenCodeSourceAdapter (RFC 002) — retrospective ingest of OpenCode SQLite sessions | [#1484](https://github.com/MemPalace/mempalace/pull/1484) (OPEN) | [`2ffe652`](https://github.com/techempower-org/mempalace/commit/2ffe652) |
-| 90 | mempalace_walk_palace MCP tool — agent walks the palace via AGE Cypher | — | [`8022ecb`](https://github.com/techempower-org/mempalace/commit/8022ecb) |
-| 91 | Backfill AGE graph from existing drawer table — restartable, checkpointed | — | [`b3f0206`](https://github.com/techempower-org/mempalace/commit/b3f0206) |
-| 92 | Wing/Room/Drawer hierarchy as native AGE nodes; Cypher MATCH walks palace structure | — | [`ff583c0`](https://github.com/techempower-org/mempalace/commit/ff583c0) |
-| 93 | Write-through middleware on PostgresCollection — entities populate AGE on every drawer write | — | [`3321d83`](https://github.com/techempower-org/mempalace/commit/3321d83) |
-| 94 | KnowledgeGraphAGE API parity with SQLite KG: add_entity, invalidate, query_entity, query_relationship, timeline, seed_from_entity_facts | — | [`ff7187d`](https://github.com/techempower-org/mempalace/commit/ff7187d) |
-| 95 | Pending-writes journal + replay so daemon outages stop being silent | — | [`0c34464`](https://github.com/techempower-org/mempalace/commit/0c34464) |
-| 96 | MCP server distinguishes 'backend unreachable' from 'no palace found' | — | [`0c34464`](https://github.com/techempower-org/mempalace/commit/0c34464) |
-| 97 | Defense-in-depth metadata sanitizer at the chromadb-client chokepoint | — | [`f499814`](https://github.com/techempower-org/mempalace/commit/f499814) |
-| 98 | Route Stop/PreCompact hooks through palace-daemon/clients/hook.py | — | [`42ded2e`](https://github.com/techempower-org/mempalace/commit/42ded2e) |
-| 99 | KnowledgeGraphAGE skeleton — Apache AGE graph bootstrap over psycopg2 | — | [`a3ee623`](https://github.com/techempower-org/mempalace/commit/a3ee623) |
-| 100 | README pivots to the four-layer model + Auto Dream as vindication of the verbatim-vs-derivative axis | — | [`55b36ca`](https://github.com/techempower-org/mempalace/commit/55b36ca) |
-| 101 | CI: gate postgres-backend tests against a pgvector service container | — | [`da0bdbb`](https://github.com/techempower-org/mempalace/commit/da0bdbb) |
-| 102 | PostgreSQL backend via #665 cherry-pick + fork-side adaptations + smoke tests | [#665](https://github.com/MemPalace/mempalace/pull/665) (OPEN) | [`5e90c72`](https://github.com/techempower-org/mempalace/commit/5e90c72) |
-| 103 | daemon-route `mempalace status` / `search` / `mine` when PALACE_DAEMON_URL is set | — | [`22ef562`](https://github.com/techempower-org/mempalace/commit/22ef562) |
-| 104 | daemon-route `mcp_server.py` via the `handle_request` JSON-RPC chokepoint | — | [`41359ba`](https://github.com/techempower-org/mempalace/commit/41359ba) |
-| 105 | Preserve dashed project names in transcript-derived wings | [#10](https://github.com/MemPalace/mempalace/pull/10) | [`d76134d`](https://github.com/techempower-org/mempalace/commit/d76134d) |
-| 106 | Drop wing_ prefix from transcript-derived wings to converge with operator mines | [#9](https://github.com/MemPalace/mempalace/pull/9) | [`86d4700`](https://github.com/techempower-org/mempalace/commit/86d4700) |
-| 107 | Retire mempalace_session_recovery collection + read tool | [#8](https://github.com/MemPalace/mempalace/pull/8) | [`0b945e1`](https://github.com/techempower-org/mempalace/commit/0b945e1) |
-| 108 | mempalace mined + purge --source-file (mining management surface) | [#7](https://github.com/MemPalace/mempalace/pull/7) | [`2e6ced9`](https://github.com/techempower-org/mempalace/commit/2e6ced9) |
-| 109 | Drop hook-side checkpoint diary writes — verbatim-only architecture | [#6](https://github.com/MemPalace/mempalace/pull/6) | [`69768fc`](https://github.com/techempower-org/mempalace/commit/69768fc) |
-| 110 | Restore transcript ingest via daemon /mine when PALACE_DAEMON_URL is set | [#2](https://github.com/MemPalace/mempalace/pull/2) | [`09d2ca6`](https://github.com/techempower-org/mempalace/commit/09d2ca6) |
-| 111 | `hook_verbatim_mode` config flag preserves system tags + full tool I/O during transcript ingest | — | [`ef98961`](https://github.com/techempower-org/mempalace/commit/ef98961) |
-| 112 | Retire the `kind=` filter — structural split made it inert | — | [`7ba28dc`](https://github.com/techempower-org/mempalace/commit/7ba28dc) |
-| 113 | Hoist CLOSET_RANK_BOOSTS to module level + record VecRecall ablation finding | — | [`3cb03f3`](https://github.com/techempower-org/mempalace/commit/3cb03f3) |
-| 114 | Strip embedded API key from .claude-plugin/ manifests; rely on env inheritance | — | [`9f91e18`](https://github.com/techempower-org/mempalace/commit/9f91e18) |
-| 115 | Cherry-pick #1094 — coerce None metadatas at chromadb boundary | [#1094](https://github.com/MemPalace/mempalace/pull/1094) (OPEN) | [`43d728d`](https://github.com/techempower-org/mempalace/commit/43d728d) |
-| 116 | Cherry-pick #1087 rewrite — collection.delete(where=) instead of nuke-and-rebuild | [#1087](https://github.com/MemPalace/mempalace/pull/1087) (OPEN) | [`366a9ad`](https://github.com/techempower-org/mempalace/commit/366a9ad) |
-| 117 | Canonical YAML manifest + renderer for fork-ahead docs | — | [`5a01aec`](https://github.com/techempower-org/mempalace/commit/5a01aec) |
-| 118 | Phase D migration + PreCompact recovery write | — | [`42817d7`](https://github.com/techempower-org/mempalace/commit/42817d7) |
-| 119 | Surface drawer_id in search/diary/recovery payloads | — | [`9a8bb77`](https://github.com/techempower-org/mempalace/commit/9a8bb77) |
-| 120 | Cherry-pick #1085 — batch ChromaDB inserts in miner (10–30× faster) | [#1085](https://github.com/MemPalace/mempalace/pull/1085) (CLOSED) | [`6be6fff`](https://github.com/techempower-org/mempalace/commit/6be6fff) |
-| 121 | scripts/deploy.sh — one-command Syncthing-aware redeploy | — | [`8252025`](https://github.com/techempower-org/mempalace/commit/8252025) |
-| 122 | Phases A–C of the checkpoint collection split | — | [`e266365`](https://github.com/techempower-org/mempalace/commit/e266365) |
-| 123 | kind= filter on search_memories excludes Stop-hook checkpoints (transitional) | — | [`f9f5cc4`](https://github.com/techempower-org/mempalace/commit/f9f5cc4) |
+| 1 | Auto-query recognizes a session-resumption ask ("where were we", "catch me up") in both the shell pre-filter and the signal set | — | [`c6872494`](https://github.com/techempower-org/mempalace/commit/c6872494) |
+| 2 | Post-compaction recovery: clear the auto-query dedupe and re-inject wake-up content, not a pointer | — | [`22858070`](https://github.com/techempower-org/mempalace/commit/22858070) |
+| 3 | Every search hit carries source_kind (+ staleness when decidable) and the CLI renders the caveat | — | [`5632dc2`](https://github.com/techempower-org/mempalace/commit/5632dc2) |
+| 4 | mempalace mine <file> --mode projects — targeted re-index of one curated document | — | [`787af46`](https://github.com/techempower-org/mempalace/commit/787af46) |
+| 5 | Daemon-strict mine refuses to derive a wing from a document path it cannot classify locally | — | [`a30293b`](https://github.com/techempower-org/mempalace/commit/a30293b) |
+| 6 | Postgres write path scrubs lone surrogates, nested metadata and ids, not just top-level NULs | — | [`66ca19f`](https://github.com/techempower-org/mempalace/commit/66ca19f) |
+| 7 | Wing-scoped vector search no longer returns 0 rows: enable pgvector hnsw.iterative_scan per connection | — | [`2ea774d`](https://github.com/techempower-org/mempalace/commit/2ea774d) |
+| 8 | Curated memory-file hits clear a lower confidence floor; harness prompt-echo drawers filtered as exhaust | — | [`31b74d9`](https://github.com/techempower-org/mempalace/commit/31b74d9) |
+| 9 | mempalace doctor — one-screen health check of the memory workflow (bridge, daemon, wing, hooks, replay) | — | [`04dde83`](https://github.com/techempower-org/mempalace/commit/04dde83) |
+| 10 | Only the MCP-server entrypoints parse argv at import; other importers get defaults (#409) | — | [`e3e0579`](https://github.com/techempower-org/mempalace/commit/e3e0579) |
+| 11 | AGE knowledge-graph connection survives a bad query (rollback) and a dead socket (reconnect once) (#405) | — | [`2135df7`](https://github.com/techempower-org/mempalace/commit/2135df7) |
+| 12 | Re-mine a transcript incrementally — embed only new or changed chunks; stored drawers are the watermark (#414) | — | [`cf1e997`](https://github.com/techempower-org/mempalace/commit/cf1e997) |
+| 13 | Legacy hallways verb deprecated in favour of hallway list; now honours --json (#407) | — | [`1509c32`](https://github.com/techempower-org/mempalace/commit/1509c32) |
+| 14 | Replay drops legacy whole-project convos requests instead of re-mining them forever (#426) | — | [`b5b774f`](https://github.com/techempower-org/mempalace/commit/b5b774f) |
+| 15 | wake-up L1 skips bookkeeping drawers (AUTO-SAVE, manifests) and ranks curated memory files first (#421 #423) | — | [`a4012dd`](https://github.com/techempower-org/mempalace/commit/a4012dd) |
+| 16 | tool_checkpoint forwards session_id to the diary write; declared in both tool schemas (#408) | — | [`e5e31f0`](https://github.com/techempower-org/mempalace/commit/e5e31f0) |
+| 17 | Hooks ask the daemon to run checkpoint mines in the background (202 + serial drain) — no more 30s timeouts, journaled replays, and double mines | — | [`79b192b`](https://github.com/techempower-org/mempalace/commit/79b192b) |
+| 18 | Thin-vector warning no longer tells pgvector users to rebuild an HNSW index | — | [`43d3a28`](https://github.com/techempower-org/mempalace/commit/43d3a28) |
+| 19 | Checkpoint ingest mines THIS transcript, not the whole project dir (#414/#426 mechanism) | — | [`16a5236`](https://github.com/techempower-org/mempalace/commit/16a5236) |
+| 20 | Auto-query signal quality: user's-words depth query + wing inventory, peer-block stripping, identifier signals via BM25 fast route, exhaust filter, 0.50 floor, per-session dedupe, curated-first, visible receipts (#419 #420 #422 #424) | — | [`0d92cef`](https://github.com/techempower-org/mempalace/commit/0d92cef) |
+| 21 | Sync upstream/develop through v3.9.0 (e8098348): 101 commits — durable config writes, strategy-aware candidate pools, BM25-under-threshold admission, search hub-forward, embeddinggemma batch override, cli_compatible search | — | [`09713d9`](https://github.com/techempower-org/mempalace/commit/09713d9) |
+| 22 | CLI wave 3/3: `mempalace diary`, `kg`, `walk` and `rate` first-class verbs (#354, #357, #359, #361) | — | [`ff9ee22`](https://github.com/techempower-org/mempalace/commit/ff9ee22) |
+| 23 | CLI wave 2/3: `mempalace wings`, `taxonomy`, `aaak spec`, `hallway`, `checkpoint --dry-run` (#356, #358, #360, #362) | — | [`2848e96`](https://github.com/techempower-org/mempalace/commit/2848e96) |
+| 24 | CLI wave 1/3: `mempalace drawer get\|add\|delete\|update` and `duplicate check` (#355, #363) | — | [`836d1a1`](https://github.com/techempower-org/mempalace/commit/836d1a1) |
+| 25 | Sync upstream/develop through v3.8.0 (3e56979f): 166 commits — date-window search (since/before), openai-compat embeddings, RFC 002 adapter dispatch (#2062), mcp_proxy entry point, chunk_total metadata; ancestry repaired so future syncs replay only new commits | — | [`b3527b1`](https://github.com/techempower-org/mempalace/commit/b3527b1) |
+| 26 | Sync upstream/develop through v3.7.0 (8516db7f): 433 commits — hub forward, temp-collection repair promote, round-trippable drawer IDs, kg_supersede, HNSW CLI fence, 62 conflict files resolved | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
+| 27 | Postgres backend: _coerce_wing write guard — wing-less writes land in 'general' (not the '' column default) and separator/case variants normalize; scripts/wing_hygiene.py migrates the historical rows (dry-run default) | — | [`979da51`](https://github.com/techempower-org/mempalace/commit/979da51) |
+| 28 | sync-outline: empty-secret env vars fall back to documented defaults; unreachable nightly cron retired (0-for-41 by construction) — workflow_dispatch stays | — | [`5227da4`](https://github.com/techempower-org/mempalace/commit/5227da4) |
+| 29 | Searcher: restore mempalace_search on postgres — guard capability-path conversion in union merge (UnboundLocalError since the 2026-07-02 sync) | — | [`96f83d7`](https://github.com/techempower-org/mempalace/commit/96f83d7) |
+| 30 | Auto-query: TTL cache for the deterministic depth-refresh injection — repeat fires 0ms vs ~850ms daemon round-trip | — | [`be903e6`](https://github.com/techempower-org/mempalace/commit/be903e6) |
+| 31 | Sync upstream/develop through da5a48c (post-v3.5.0): remote MCP server w/ TLS + read-only, graph auto-population, Qdrant facets, list_drawers date filters, 213 commits | — | [`b46f18d`](https://github.com/techempower-org/mempalace/commit/b46f18d) |
+| 32 | Auto-query firing fixes: frozen turn counter, dead wing scoring, lowercase entities, turn-1 cadence | — | [`fad3e27`](https://github.com/techempower-org/mempalace/commit/fad3e27) |
+| 33 | Auto-query: periodic depth signal, unknown-entity 0->1 bump, broader temporal patterns | — | [`864d7a4`](https://github.com/techempower-org/mempalace/commit/864d7a4) |
+| 34 | Sync upstream/develop through v3.5.0 (73e74bf): MCP HTTP transport, source_file filter, checkpoint tool, SessionEnd hook, 185 commits | — | [`8711e1c`](https://github.com/techempower-org/mempalace/commit/8711e1c) |
+| 35 | Restore concurrent file mining via parallel-prepare/serial-write (regression from a dropped sync hunk); opt-in --workers | — | [`42a107b`](https://github.com/techempower-org/mempalace/commit/42a107b) |
+| 36 | Sync upstream/develop through v3.4.0 (2ec4bae): RFC-001 backend stack, diary checkpoints restored, 113 commits | — | [`373fdf2`](https://github.com/techempower-org/mempalace/commit/373fdf2) |
+| 37 | auto_wake: opt-in wake-on-demand for a sleeping palace-daemon host (wake command + /health poll + single retry) | — | [`8e0d896`](https://github.com/techempower-org/mempalace/commit/8e0d896) |
+| 38 | AGE graph-walk: auto edge-endpoint indexes in backfill + bind anonymous RELATION targets (mempalace#335) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
+| 39 | pluggable adaptmem_ft encoder backend selectable via MEMPALACE_EMBEDDING_MODEL (closes #308) | — | [`5fba6d8`](https://github.com/techempower-org/mempalace/commit/5fba6d8) |
+| 40 | README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
+| 41 | README.md + docs/ECOSYSTEM.md — soften 'engram-2 17% E2E QA' framing per the 2026-05-24 research doc's unsubstantiated finding (#319) | — | [`ddf00b4`](https://github.com/techempower-org/mempalace/commit/ddf00b4) |
+| 42 | kg_llm_extractor rewrites AGE dollar-quote tag in triples so drawers indexing palace source code don't fail at add_triple (#313) | — | [`3fb9428`](https://github.com/techempower-org/mempalace/commit/3fb9428) |
+| 43 | scripts/maintain-fork-changes.py + ship-prep step 1: resolve commit:HEAD placeholders and de-dup yaml entries (#316) | — | [`9060e09`](https://github.com/techempower-org/mempalace/commit/9060e09) |
+| 44 | scripts/ship-prep.sh — one command bumps README test count and runs all three doc renderers (#312) | — | [`4677db8`](https://github.com/techempower-org/mempalace/commit/4677db8) |
+| 45 | mempalace_search MCP input schema accepts fusion_mode (convex\|rrf) and forwards to search_memories (#302) | — | [`f753ec4`](https://github.com/techempower-org/mempalace/commit/f753ec4) |
+| 46 | scripts/check-docs.sh finds pytest via main checkout when run from a worktree, fails hard instead of silently skipping test-count check (#311) | — | [`1d19a8b`](https://github.com/techempower-org/mempalace/commit/1d19a8b) |
+| 47 | kg_triple_worker retries add_triple within-worker on transient psycopg errors instead of abandoning to lease-reclaim (#298) | — | [`36c0b02`](https://github.com/techempower-org/mempalace/commit/36c0b02) |
+| 48 | mempalace_kg_stats returns structured backend-unavailable envelope on transient psycopg failures (#299) | — | [`8fd0b01`](https://github.com/techempower-org/mempalace/commit/8fd0b01) |
+| 49 | mempalace why + tunnels — explain a drawer + inventory cross-wing tunnels (slice of #191) | — | [`fdcd0b4`](https://github.com/techempower-org/mempalace/commit/fdcd0b4) |
+| 50 | RRF vs convex-blend rerank — A/B measurement on our corpus (#162) | — | [`ea5d567`](https://github.com/techempower-org/mempalace/commit/ea5d567) |
+| 51 | KG triples gain SPOC context slot + worker auto-derives valid_from from drawer metadata (#161) | — | [`b87ce05`](https://github.com/techempower-org/mempalace/commit/b87ce05) |
+| 52 | mempalace bulk-move — multi-drawer metadata relocation by source wing/room (#191) | — | [`1ca544b`](https://github.com/techempower-org/mempalace/commit/1ca544b) |
+| 53 | mempalace move — fast direct-to-daemon single-drawer wing/room relocation (#191) | — | [`d007b6f`](https://github.com/techempower-org/mempalace/commit/d007b6f) |
+| 54 | mempalace stats migrates to GET /stats REST + exposes graph/status sections (#191) | — | [`853bb25`](https://github.com/techempower-org/mempalace/commit/853bb25) |
+| 55 | mempalace cypher — read-only Cypher query CLI (#191) | — | [`32a41b1`](https://github.com/techempower-org/mempalace/commit/32a41b1) |
+| 56 | mempalace graph — fast direct-to-daemon KG structural snapshot (#191) | — | [`499f42d`](https://github.com/techempower-org/mempalace/commit/499f42d) |
+| 57 | mempalace list — fast direct-to-daemon drawer browser (#191) | — | [`257137b`](https://github.com/techempower-org/mempalace/commit/257137b) |
+| 58 | Recency decay weighting in search + mempalace prune --stale-days CLI (#158) | — | [`558d327`](https://github.com/techempower-org/mempalace/commit/558d327) |
+| 59 | mempalace_rate_memory MCP tool + bounded rating signal in search ranking (#159) | — | [`583536c`](https://github.com/techempower-org/mempalace/commit/583536c) |
+| 60 | Formalize wing/room derivation order; demote entity detector to last-resort hint (#157) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
+| 61 | RRF fusion mode + convex-vs-RRF A/B harness (#162) | [#247](https://github.com/MemPalace/mempalace/pull/247) | [`6c9d10c`](https://github.com/techempower-org/mempalace/commit/6c9d10c) |
+| 62 | mempalace stats: add ROOMS breakdown (drawer count by room) to the dashboard | — | [`1673465`](https://github.com/techempower-org/mempalace/commit/1673465) |
+| 63 | Calibrated confidence field on search results + Brier-score eval column | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
+| 64 | Evaluation doc: curated-authority vs auto-mined separation (#202) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
+| 65 | Apply AGE statement_timeout in same transaction as cypher() (PR #228 follow-up) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
+| 66 | LLM-based KG triple extraction: queue table, async worker, llama.cpp on familiar | — | [`59ac0bc`](https://github.com/techempower-org/mempalace/commit/59ac0bc) |
+| 67 | Promote verbatim-vs-derivative essay from research/ to README (#170) | — | [`6a264d9`](https://github.com/techempower-org/mempalace/commit/6a264d9) |
+| 68 | mempalace stats — palace analytics dashboard (#191) | — | [`6f994fb`](https://github.com/techempower-org/mempalace/commit/6f994fb) |
+| 69 | CLI wiring: mempalace mine --source <adapter> (#57) | — | [`5ed9fa7`](https://github.com/techempower-org/mempalace/commit/5ed9fa7) |
+| 70 | Warp terminal source adapter (#62) | — | [`2e85585`](https://github.com/techempower-org/mempalace/commit/2e85585) |
+| 71 | OpenCode adapter smoke test against real DB (#56) | — | [`a9ed72b`](https://github.com/techempower-org/mempalace/commit/a9ed72b) |
+| 72 | Codex, Gemini, and Aider source adapters (#61, #59) | — | [`0c23165`](https://github.com/techempower-org/mempalace/commit/0c23165) |
+| 73 | Filesystem + conversation source adapters (#63) | — | [`9a1facf`](https://github.com/techempower-org/mempalace/commit/9a1facf) |
+| 74 | Widen auto-query signal patterns for natural recall phrases | — | [`33e780e`](https://github.com/techempower-org/mempalace/commit/33e780e) |
+| 75 | Native rename_wing backend operation + CLI command (#154) | — | [`d045f83`](https://github.com/techempower-org/mempalace/commit/d045f83) |
+| 76 | Standalone essay: the verbatim-vs-derivative axis (#47) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
+| 77 | Research doc: uncertainty-aware retrieval analysis (#84) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
+| 78 | Design doc: scope/collection filter on mempalace_search (#76) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
+| 79 | Agent-shaped CLI surface — --json / --quiet for non-MCP integration | — | [`25ed900`](https://github.com/techempower-org/mempalace/commit/25ed900) |
+| 80 | Design eval: multi-palace separation — curated vs auto-mined (#45) | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
+| 81 | Document .sh shim delegation to palace-daemon (counter-position to upstream #1069) | — | [`bf0a4d0`](https://github.com/techempower-org/mempalace/commit/bf0a4d0) |
+| 82 | Honor ~/.mempalace/RETIRED marker — refuse default palace, surface retire message | — | [`798cf14`](https://github.com/techempower-org/mempalace/commit/798cf14) |
+| 83 | Empty repo .opencode/opencode.json mcp block — disabled flag wasn't being respected | — | [`7133eee`](https://github.com/techempower-org/mempalace/commit/7133eee) |
+| 84 | Drop \$comment from .opencode/opencode.json — schema rejects unknown root keys | — | [`637bb01`](https://github.com/techempower-org/mempalace/commit/637bb01) |
+| 85 | Disable repo-level MCP entry by default + venv-python fallback | — | [`47018e5`](https://github.com/techempower-org/mempalace/commit/47018e5) |
+| 86 | Stub resources/list + prompts/list so MCP clients stop ERROR-logging on connect | — | [`6ca0670`](https://github.com/techempower-org/mempalace/commit/6ca0670) |
+| 87 | Bundled OpenCode live-capture plugin that bypasses option-K v1.2.1 bugs (filed upstream as #4, #5) | — | [`5522623`](https://github.com/techempower-org/mempalace/commit/5522623) |
+| 88 | Documented OpenCode integration recipe (read-side MCP + push plugin + retrospective adapter) | — | [`60dc9e6`](https://github.com/techempower-org/mempalace/commit/60dc9e6) |
+| 89 | .opencode/opencode.json — repo-root MCP config so opencode picks up mempalace automatically | [#1567](https://github.com/MemPalace/mempalace/pull/1567) (CLOSED) | [`ba16b82`](https://github.com/techempower-org/mempalace/commit/ba16b82) |
+| 90 | OpenCodeSourceAdapter (RFC 002) — retrospective ingest of OpenCode SQLite sessions | [#1484](https://github.com/MemPalace/mempalace/pull/1484) (OPEN) | [`2ffe652`](https://github.com/techempower-org/mempalace/commit/2ffe652) |
+| 91 | mempalace_walk_palace MCP tool — agent walks the palace via AGE Cypher | — | [`8022ecb`](https://github.com/techempower-org/mempalace/commit/8022ecb) |
+| 92 | Backfill AGE graph from existing drawer table — restartable, checkpointed | — | [`b3f0206`](https://github.com/techempower-org/mempalace/commit/b3f0206) |
+| 93 | Wing/Room/Drawer hierarchy as native AGE nodes; Cypher MATCH walks palace structure | — | [`ff583c0`](https://github.com/techempower-org/mempalace/commit/ff583c0) |
+| 94 | Write-through middleware on PostgresCollection — entities populate AGE on every drawer write | — | [`3321d83`](https://github.com/techempower-org/mempalace/commit/3321d83) |
+| 95 | KnowledgeGraphAGE API parity with SQLite KG: add_entity, invalidate, query_entity, query_relationship, timeline, seed_from_entity_facts | — | [`ff7187d`](https://github.com/techempower-org/mempalace/commit/ff7187d) |
+| 96 | Pending-writes journal + replay so daemon outages stop being silent | — | [`0c34464`](https://github.com/techempower-org/mempalace/commit/0c34464) |
+| 97 | MCP server distinguishes 'backend unreachable' from 'no palace found' | — | [`0c34464`](https://github.com/techempower-org/mempalace/commit/0c34464) |
+| 98 | Defense-in-depth metadata sanitizer at the chromadb-client chokepoint | — | [`f499814`](https://github.com/techempower-org/mempalace/commit/f499814) |
+| 99 | Route Stop/PreCompact hooks through palace-daemon/clients/hook.py | — | [`42ded2e`](https://github.com/techempower-org/mempalace/commit/42ded2e) |
+| 100 | KnowledgeGraphAGE skeleton — Apache AGE graph bootstrap over psycopg2 | — | [`a3ee623`](https://github.com/techempower-org/mempalace/commit/a3ee623) |
+| 101 | README pivots to the four-layer model + Auto Dream as vindication of the verbatim-vs-derivative axis | — | [`55b36ca`](https://github.com/techempower-org/mempalace/commit/55b36ca) |
+| 102 | CI: gate postgres-backend tests against a pgvector service container | — | [`da0bdbb`](https://github.com/techempower-org/mempalace/commit/da0bdbb) |
+| 103 | PostgreSQL backend via #665 cherry-pick + fork-side adaptations + smoke tests | [#665](https://github.com/MemPalace/mempalace/pull/665) (OPEN) | [`5e90c72`](https://github.com/techempower-org/mempalace/commit/5e90c72) |
+| 104 | daemon-route `mempalace status` / `search` / `mine` when PALACE_DAEMON_URL is set | — | [`22ef562`](https://github.com/techempower-org/mempalace/commit/22ef562) |
+| 105 | daemon-route `mcp_server.py` via the `handle_request` JSON-RPC chokepoint | — | [`41359ba`](https://github.com/techempower-org/mempalace/commit/41359ba) |
+| 106 | Preserve dashed project names in transcript-derived wings | [#10](https://github.com/MemPalace/mempalace/pull/10) | [`d76134d`](https://github.com/techempower-org/mempalace/commit/d76134d) |
+| 107 | Drop wing_ prefix from transcript-derived wings to converge with operator mines | [#9](https://github.com/MemPalace/mempalace/pull/9) | [`86d4700`](https://github.com/techempower-org/mempalace/commit/86d4700) |
+| 108 | Retire mempalace_session_recovery collection + read tool | [#8](https://github.com/MemPalace/mempalace/pull/8) | [`0b945e1`](https://github.com/techempower-org/mempalace/commit/0b945e1) |
+| 109 | mempalace mined + purge --source-file (mining management surface) | [#7](https://github.com/MemPalace/mempalace/pull/7) | [`2e6ced9`](https://github.com/techempower-org/mempalace/commit/2e6ced9) |
+| 110 | Drop hook-side checkpoint diary writes — verbatim-only architecture | [#6](https://github.com/MemPalace/mempalace/pull/6) | [`69768fc`](https://github.com/techempower-org/mempalace/commit/69768fc) |
+| 111 | Restore transcript ingest via daemon /mine when PALACE_DAEMON_URL is set | [#2](https://github.com/MemPalace/mempalace/pull/2) | [`09d2ca6`](https://github.com/techempower-org/mempalace/commit/09d2ca6) |
+| 112 | `hook_verbatim_mode` config flag preserves system tags + full tool I/O during transcript ingest | — | [`ef98961`](https://github.com/techempower-org/mempalace/commit/ef98961) |
+| 113 | Retire the `kind=` filter — structural split made it inert | — | [`7ba28dc`](https://github.com/techempower-org/mempalace/commit/7ba28dc) |
+| 114 | Hoist CLOSET_RANK_BOOSTS to module level + record VecRecall ablation finding | — | [`3cb03f3`](https://github.com/techempower-org/mempalace/commit/3cb03f3) |
+| 115 | Strip embedded API key from .claude-plugin/ manifests; rely on env inheritance | — | [`9f91e18`](https://github.com/techempower-org/mempalace/commit/9f91e18) |
+| 116 | Cherry-pick #1094 — coerce None metadatas at chromadb boundary | [#1094](https://github.com/MemPalace/mempalace/pull/1094) (OPEN) | [`43d728d`](https://github.com/techempower-org/mempalace/commit/43d728d) |
+| 117 | Cherry-pick #1087 rewrite — collection.delete(where=) instead of nuke-and-rebuild | [#1087](https://github.com/MemPalace/mempalace/pull/1087) (OPEN) | [`366a9ad`](https://github.com/techempower-org/mempalace/commit/366a9ad) |
+| 118 | Canonical YAML manifest + renderer for fork-ahead docs | — | [`5a01aec`](https://github.com/techempower-org/mempalace/commit/5a01aec) |
+| 119 | Phase D migration + PreCompact recovery write | — | [`42817d7`](https://github.com/techempower-org/mempalace/commit/42817d7) |
+| 120 | Surface drawer_id in search/diary/recovery payloads | — | [`9a8bb77`](https://github.com/techempower-org/mempalace/commit/9a8bb77) |
+| 121 | Cherry-pick #1085 — batch ChromaDB inserts in miner (10–30× faster) | [#1085](https://github.com/MemPalace/mempalace/pull/1085) (CLOSED) | [`6be6fff`](https://github.com/techempower-org/mempalace/commit/6be6fff) |
+| 122 | scripts/deploy.sh — one-command Syncthing-aware redeploy | — | [`8252025`](https://github.com/techempower-org/mempalace/commit/8252025) |
+| 123 | Phases A–C of the checkpoint collection split | — | [`e266365`](https://github.com/techempower-org/mempalace/commit/e266365) |
+| 124 | kind= filter on search_memories excludes Stop-hook checkpoints (transitional) | — | [`f9f5cc4`](https://github.com/techempower-org/mempalace/commit/f9f5cc4) |
 <!-- END FORK-QUEUE -->
 
 ### Recently merged into upstream
@@ -674,7 +675,7 @@ TechEmpower's production fork of [MemPalace/mempalace](https://github.com/MemPal
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/ -q              # 6938 tests (benchmarks deselected)
+python -m pytest tests/ -q              # 6992 tests (benchmarks deselected)
 mempalace status                         # check palace state
 mempalace search "query"                 # test search
 python -m mempalace.mcp_server           # run MCP server standalone

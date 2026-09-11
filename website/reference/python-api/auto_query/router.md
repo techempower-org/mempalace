@@ -9,6 +9,7 @@ calls, no side effects.  The router is stateless; rate limiting and
 deduplication are the caller's responsibility.
 
 Priority order (from spec section 2):
+  0.5 Resumption ask  -> mempalace_search      (the user asked to resume)
   1. Task resumption  -> mempalace_diary_read  (highest precision)
   2. Explicit hint     -> mempalace_search      (user is asking directly)
   3. Entity + temporal -> mempalace_kg_query    (entity-scoped history)

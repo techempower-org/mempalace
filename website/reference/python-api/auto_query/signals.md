@@ -27,3 +27,15 @@ Extract auto-query signals from a user message.
 
 Pure function — no I/O, no MCP calls. All external state
 (wings, entities, drawer existence) is passed in by the caller.
+
+### `resumption_phrase`
+
+```python
+def resumption_phrase(text)
+```
+
+The session-resumption phrase in ``text``, or "" if there is none.
+
+Public because the router needs to subtract the phrase from the search
+query: "where were we on the pgvector cutover" should search the cutover,
+not the question.
