@@ -448,3 +448,98 @@ def test_reads_on_a_missing_table_warn_and_return_empty(monkeypatch, caplog):
     assert sum("migrate_hallways" in r.getMessage() for r in caplog.records) == 1, (
         "name the missing table once, not on every read"
     )
+
+
+class _RowStoreConn(_FakeConn):
+    """A fake that models transaction VISIBILITY, not just the API calls.
+
+    Asserting ``rollback()`` was called proves the code asked for a rollback.
+    It does not prove the wing's previous rows survived, which is the
+    property that actually matters and the one the JSON path's
+    temp-file + ``os.replace`` gave for free. This fake keeps committed rows
+    separate from pending ones so the test can assert the data.
+    """
+
+    def __init__(self, initial_rows, fail_on=None):
+        super().__init__()
+        self.committed = list(initial_rows)  # (id, wing)
+        self.pending = list(initial_rows)
+        self.fail_on = fail_on
+        self.rollbacks = 0
+        self.autocommit = True
+
+    def cursor(self):
+        return _RowStoreCursor(self)
+
+    def commit(self):
+        self.commits += 1
+        self.committed = list(self.pending)
+
+    def rollback(self):
+        self.rollbacks += 1
+        self.pending = list(self.committed)
+
+
+class _RowStoreCursor:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def execute(self, sql, params=None):
+        self.conn.executed.append((" ".join(str(sql).split()), params))
+        if self.conn.fail_on is not None and len(self.conn.executed) >= self.conn.fail_on:
+            raise RuntimeError("connection died mid-batch")
+        text = " ".join(str(sql).split())
+        if text.startswith("DELETE"):
+            self.conn.pending = [r for r in self.conn.pending if r[1] != params[0]]
+        elif text.startswith("INSERT"):
+            self.conn.pending.append((params[0], params[1]))
+        if self.conn.autocommit:
+            self.conn.committed = list(self.conn.pending)
+
+    def fetchall(self):
+        return []
+
+    def fetchone(self):
+        return None
+
+
+def test_a_failing_insert_leaves_the_wings_previous_rows_intact(monkeypatch):
+    """The property that matters: a crash mid-swap must not empty the wing.
+
+    DELETE + N INSERTs as N+1 autocommit statements would leave 'kiyo' with
+    old_b dropped and only new_1 written. One transaction means the wing is
+    observed either entirely before or entirely after — never mid-swap.
+    """
+    initial = [("old_a", "kiyo"), ("old_b", "kiyo"), ("keep", "other")]
+    # statements: DELETE, INSERT new_1, INSERT new_2 -> die on the second insert
+    conn = _RowStoreConn(initial, fail_on=3)
+    store = hs.PostgresHallwayStore(dsn="postgresql://fake/db")
+    monkeypatch.setattr(store, "_connect", lambda: conn)
+
+    with pytest.raises(RuntimeError):
+        store.replace_wing(
+            "kiyo",
+            [
+                dict(FULL_RECORD, id="new_1", wing="kiyo"),
+                dict(FULL_RECORD, id="new_2", wing="kiyo"),
+            ],
+        )
+
+    assert sorted(conn.committed) == sorted(initial), (
+        "the wing's previous rows must survive a failed swap"
+    )
+    assert ("new_1", "kiyo") not in conn.committed, "no partial write may be visible"
+
+
+def test_a_successful_swap_replaces_the_wing_and_spares_the_others(monkeypatch):
+    """Control for the test above — the happy path must actually swap."""
+    initial = [("old_a", "kiyo"), ("keep", "other")]
+    conn = _RowStoreConn(initial)
+    store = hs.PostgresHallwayStore(dsn="postgresql://fake/db")
+    monkeypatch.setattr(store, "_connect", lambda: conn)
+
+    store.replace_wing("kiyo", [dict(FULL_RECORD, id="new_1", wing="kiyo")])
+
+    assert ("keep", "other") in conn.committed, "other wings must be untouched"
+    assert ("new_1", "kiyo") in conn.committed
+    assert ("old_a", "kiyo") not in conn.committed
