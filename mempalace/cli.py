@@ -4709,9 +4709,14 @@ def cmd_prune(args):
     """
     from datetime import datetime, timezone
 
-    from .backends.base import PalaceRef
-    from .backends.chroma import ChromaBackend
+    from .backends import detect_backend_for_path
     from .migrate import contains_palace_database
+    from .palace import (
+        BackendMismatchError,
+        backend_stores_data_locally,
+        get_collection,
+        resolve_backend_name,
+    )
     from .recency import age_days
 
     want_json = getattr(args, "json", False)
@@ -4727,12 +4732,47 @@ def cmd_prune(args):
         os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     )
 
-    if not os.path.isdir(palace_path) or not contains_palace_database(palace_path):
-        if want_json:
-            print(json.dumps({"error": "no palace database", "palace": palace_path}))
-        else:
-            _print_retired_local_palace_or_default(palace_path)
-        return
+    # Resolve the backend before any local-directory test (#459): a
+    # service-backed palace has no database file in its directory by design,
+    # and prune's copy of the precheck refused every Postgres palace with
+    # exit 0 — the same defect #418 removed from purge and sync.
+    try:
+        backend_name = resolve_backend_name(palace_path, explicit=_backend_arg(args))
+    except BackendMismatchError as exc:
+        msg = f"backend mismatch at {palace_path}: {exc}"
+        print(json.dumps({"error": msg, "palace": palace_path}) if want_json else f"\n  {msg}")
+        sys.exit(2)
+    except KeyError as exc:
+        msg = f"unknown backend for {palace_path}: {exc.args[0] if exc.args else exc}"
+        print(json.dumps({"error": msg, "palace": palace_path}) if want_json else f"\n  {msg}")
+        sys.exit(2)
+
+    stores_locally = backend_stores_data_locally(backend_name)
+    if stores_locally:
+        # ``contains_palace_database`` is chroma-specific; the artifact probe
+        # covers the other local backends, which prune used to reject for not
+        # being chroma.
+        has_db = os.path.isdir(palace_path) and (
+            contains_palace_database(palace_path)
+            or detect_backend_for_path(palace_path) is not None
+        )
+        if not has_db:
+            if want_json:
+                print(
+                    json.dumps(
+                        {
+                            "error": "no palace database",
+                            "palace": palace_path,
+                            "backend": backend_name,
+                        }
+                    )
+                )
+            else:
+                _print_retired_local_palace_or_default(palace_path)
+            return
+        target = f"{palace_path} ({backend_name})"
+    else:
+        target = f"{backend_name} backend (palace {palace_path})"
 
     # Optional wing/room scope — without it, prune spans the whole palace.
     clauses = []
@@ -4744,15 +4784,20 @@ def cmd_prune(args):
     if clauses:
         where = clauses[0] if len(clauses) == 1 else {"$and": clauses}
 
-    backend = ChromaBackend()
     try:
-        col = backend.get_collection(
-            palace=PalaceRef(id=palace_path, local_path=palace_path),
+        col = get_collection(
+            palace_path,
             collection_name="mempalace_drawers",
+            create=False,
+            backend=backend_name,
         )
     except Exception as e:
-        print(json.dumps({"error": str(e)}) if want_json else f"\n  Error reading palace: {e}")
-        return
+        print(
+            json.dumps({"error": str(e), "palace": palace_path, "backend": backend_name})
+            if want_json
+            else f"\n  Error reading palace: {e}"
+        )
+        sys.exit(1)
 
     # Pull ids + metadata for the scope; age is decided in Python.
     try:
@@ -4760,8 +4805,12 @@ def cmd_prune(args):
             col.get(where=where, include=["metadatas"]) if where else col.get(include=["metadatas"])
         )
     except Exception as e:
-        print(json.dumps({"error": str(e)}) if want_json else f"\n  Error querying drawers: {e}")
-        return
+        print(
+            json.dumps({"error": str(e), "palace": palace_path, "backend": backend_name})
+            if want_json
+            else f"\n  Error querying drawers: {e}"
+        )
+        sys.exit(1)
 
     if isinstance(got, dict):
         all_ids = got.get("ids") or []
@@ -4794,6 +4843,8 @@ def cmd_prune(args):
                 {
                     "stale_days": stale_days,
                     "scope": scope,
+                    "palace": palace_path,
+                    "backend": backend_name,
                     "scanned": len(all_ids),
                     "stale": len(stale_ids),
                     "undated_skipped": undated,
@@ -4804,6 +4855,7 @@ def cmd_prune(args):
         )
     else:
         print(f"\n  Scanned {len(all_ids):,} drawers in {scope}")
+        print(f"  Target: {target}")
         print(f"  {len(stale_ids):,} older than {stale_days} days; {undated:,} undated (kept)")
 
     if not stale_ids:
@@ -4822,8 +4874,12 @@ def cmd_prune(args):
     try:
         col.delete(ids=stale_ids)
     except Exception as e:
-        print(json.dumps({"error": str(e)}) if want_json else f"\n  Delete failed: {e}\n")
-        return
+        print(
+            json.dumps({"error": str(e), "palace": palace_path, "backend": backend_name})
+            if want_json
+            else f"\n  Delete failed: {e}\n"
+        )
+        sys.exit(1)
 
     remaining = col.count()
     if want_json:
@@ -4832,13 +4888,15 @@ def cmd_prune(args):
                 {
                     "stale_days": stale_days,
                     "scope": scope,
+                    "palace": palace_path,
+                    "backend": backend_name,
                     "deleted": len(stale_ids),
                     "remaining": remaining,
                 }
             )
         )
     else:
-        print(f"\n  Pruned {len(stale_ids):,} drawers. Remaining: {remaining:,}\n")
+        print(f"\n  Pruned {len(stale_ids):,} drawers from {target}. Remaining: {remaining:,}\n")
 
 
 def cmd_rename_wing(args):

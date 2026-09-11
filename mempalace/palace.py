@@ -663,9 +663,11 @@ def _open_collection_or_explain(
         emit(f"\n  No palace found at {palace_path}")
         emit("  Run: mempalace init <dir> then mempalace mine <dir>")
 
-    if not os.path.isdir(palace_path):
-        _emit_palace_missing()
-        return None
+    # Resolve the backend BEFORE the directory states (#459). A
+    # service-backed palace has no local database by design, so States A and
+    # B are not questions about whether it exists — and asking them anyway
+    # refused every Postgres palace through this helper: `status --json`,
+    # `compress`, miner status and searcher's local fallback all inherited it.
     try:
         backend_name = resolve_backend_name(palace_path)
     except BackendMismatchError as e:
@@ -680,14 +682,22 @@ def _open_collection_or_explain(
         emit(f"\n  Unknown backend selected for {palace_path}: {e.args[0] if e.args else e}")
         emit("  Set --backend or MEMPALACE_BACKEND to a registered backend.")
         return None
-    detected = detect_backend_for_path(palace_path)
-    if detected is None:
-        emit(
-            f"\n  Palace dir at {palace_path} exists but has no "
-            f"{_backend_artifact_label(backend_name)} yet."
-        )
-        emit("  Run: mempalace mine <dir>")
-        return None
+    if backend_stores_data_locally(backend_name):
+        # State A and State B are local-storage questions. Keep State B in
+        # particular: its whole purpose is that some local backends create
+        # their DB file on first open, so probing one here would mutate the
+        # filesystem during what is meant to be a read-only inspection.
+        # Neither hazard exists for a store whose data lives in a service.
+        if not os.path.isdir(palace_path):
+            _emit_palace_missing()
+            return None
+        if detect_backend_for_path(palace_path) is None:
+            emit(
+                f"\n  Palace dir at {palace_path} exists but has no "
+                f"{_backend_artifact_label(backend_name)} yet."
+            )
+            emit("  Run: mempalace mine <dir>")
+            return None
     try:
         return open_collection(
             palace_path,
