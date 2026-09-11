@@ -1,0 +1,46 @@
+seq: 139
+id: init-test-cwd-relative-syspath
+date: '2026-09-11'
+bucket: Fixed
+commit: HEAD
+fork_pr: 482
+area: Testing
+summary: test_init's sys.path assertion resolves entries against cwd, so it stops failing
+  in every linked worktree
+body: |
+  `test_init_filters_sys_path_from_leaked_pythonpath` failed all five sentinel
+  params in any linked worktree, so every lane in the 2026-09-10 drain wave ran
+  the suite with it deselected and paid a false red before working that out.
+
+  The behaviour under test was correct throughout; the assertion was not. It
+  iterated `for p in sys.path if p`, excluding the empty string — and the empty
+  string is the cwd marker `python -c` puts on the path, which is what actually
+  resolves the child's import. Measured in both trees with PYTHONPATH set to
+  the sentinel, as the test sets it: the child imports the tree it was launched
+  from either way (`EMPTY_IN_PATH: True` in both), but `PARENT_ON_SYS_PATH` was
+  True in the main tree and False from a worktree. The absolute-entry match
+  succeeded in the main tree for an incidental reason — the shared venv's
+  editable install adds exactly that directory to `sys.path` — so the green was
+  measuring "is this the editable target?", not "did the filter over-strip?".
+  From a worktree the editable entry points at the main tree instead, the
+  absolute match fails, and the test reports an over-strip that never happened.
+
+  Entries are now normalised with `os.path.abspath(p or os.curdir)` before
+  comparison, which is faithful to the assertion's stated purpose — the package
+  must stay importable, so its parent must survive on `sys.path` — because the
+  cwd entry is how it stayed importable. It keeps its teeth: the assertion can
+  only fail if the filter removed both the cwd marker and any absolute entry
+  providing the package, which is exactly an over-strip, and a child that
+  cannot import at all still trips the `returncode == 0` assertion first.
+
+  `MEMPALACE_IMPORTED_FROM` is printed for diagnosis and deliberately not
+  asserted on: which tree the child resolves depends on its cwd, and pinning
+  that would re-introduce the coupling being removed.
+
+  Verified both directions, since a fix that only passes where it already
+  passed would be worthless: 8/8 from a linked worktree and 8/8 with cwd set to
+  the main tree, against 5 failed / 3 passed for the old test from a worktree.
+  The full suite now runs green from a worktree with no manual deselect.
+tests: 0 new (repairs 5 existing params; the suite from a worktree goes 5 failed -> 0)
+files:
+- tests/test_init.py

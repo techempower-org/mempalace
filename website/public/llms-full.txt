@@ -309,6 +309,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| test_init's sys.path assertion resolves entries against cwd, so it stops failing in every linked worktree | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | Fork-change entries split one-per-file; entry shas verified by ancestry and resolved after merge | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | README install path documents putting the mempalace-mcp bridge on PATH | — | [`933602e`](https://github.com/techempower-org/mempalace/commit/933602e) |
 | Checkpoint drawers carry the session id, not just the diary entry; session_id is validated | — | [`1a54838`](https://github.com/techempower-org/mempalace/commit/1a54838) |
