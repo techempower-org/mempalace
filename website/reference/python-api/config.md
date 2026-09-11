@@ -327,6 +327,19 @@ Max auto-query invocations per minute (rate limit).
 
 Env ``AUTO_QUERY_MAX_PER_MINUTE`` > config ``auto_query.max_per_minute`` > 6.
 
+#### `compact_recovery_max_chars`
+
+```python
+def compact_recovery_max_chars(self) -> int
+```
+
+Ceiling on the palace text re-injected after a context compaction.
+
+Env ``COMPACT_RECOVERY_MAX_CHARS`` > config
+``compact_recovery.max_chars`` > 4000 (~1000 tokens). Wake-up L1 is
+capped at ~800 tokens by construction; this is the backstop so a
+recovery can never become the next context problem (#449).
+
 #### `wing_aliases`
 
 ```python

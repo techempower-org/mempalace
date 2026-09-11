@@ -18,6 +18,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.cli`](./cli) — MemPalace — Give your AI a memory. No API key required.
 - [`mempalace.closet_llm`](./closet_llm) — closet_llm.py — Generate closets via a user-configured LLM for richer indexing.
 - [`mempalace.collision_scan`](./collision_scan) — Pre-mining defense against drawer_id collisions.
+- [`mempalace.compact_recovery`](./compact_recovery) — Re-inject what a compaction took away (techempower-org/mempalace#449).
 - [`mempalace.config`](./config) — MemPalace configuration system.
 - [`mempalace.convo_miner`](./convo_miner) — convo_miner.py — Mine conversations into the palace.
 - [`mempalace.convo_scanner`](./convo_scanner) — convo_scanner.py — Parse Claude Code conversation directories into ProjectInfo.
@@ -105,6 +106,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.auto_query.decisions`](./auto_query/decisions) — Decision logger for the auto-query system.
 - [`mempalace.auto_query.depth_cache`](./auto_query/depth_cache) — TTL cache for the periodic depth-refresh injection.
 - [`mempalace.auto_query.formatter`](./auto_query/formatter) — Result formatter for the auto-query integration.
+- [`mempalace.auto_query.injected`](./auto_query/injected) — Per-session record of drawers auto-query has already injected.
 - [`mempalace.auto_query.router`](./auto_query/router) — Tool router for auto-query integration.
 - [`mempalace.auto_query.runner`](./auto_query/runner) — Auto-query runner — chains signal extraction, routing, and formatting.
 - [`mempalace.auto_query.signals`](./auto_query/signals) — Signal extraction for auto-query context classifier.

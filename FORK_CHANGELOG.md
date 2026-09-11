@@ -101,6 +101,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **Post-compaction recovery: clear the auto-query dedupe and re-inject wake-up content, not a pointer** ([`22858070`](https://github.com/techempower-org/mempalace/commit/22858070))
+  A context compaction keeps the session id and throws the context away,
+  which broke both halves of the palace's post-compaction behaviour. The
+  per-session auto-query dedupe (#429) records the drawers already shown so
+  they are not repeated; after a compaction those drawers are gone from the
+  agent and still marked shown, so the dedupe suppressed exactly the
+  material that had just been lost — and suppressed more of it the longer
+  the session ran (measured on katana 2026-09-10: one live session's
+  ``~/.mempalace/auto_query/injected/<session>.json`` held 119 ids). The
+  hooks then offered a pointer, "run ``mempalace wake-up``", and fleet
+  evidence from 2026-09-03 is that agents do not act on invitations; hooks
+  that inject without asking do. ``mempalace.compact_recovery`` now runs on
+  ``SessionStart(source=compact)``: it clears the session's dedupe file
+  first and unconditionally — the half that needs no network — then fetches
+  the wing's wake-up story and returns it as ``additionalContext``, content
+  first and the pointer last. It reads Claude Code's SessionStart JSON on
+  stdin, prints the hook payload on stdout and always exits 0, so a
+  recovery aid can never fail a session; with the daemon down the dedupe is
+  still cleared and the visible line says so, and a clear that could not
+  remove the file reports 0 rather than the count it wanted. Measured end
+  to end against familiar: 125 ms total, 46 ms of it the daemon, ~900
+  tokens injected. The dedupe file moved to ``auto_query.injected`` so the
+  SessionStart path can clear it without importing the classifier, and
+  ``runner`` gained two public seams so the recovery reuses one daemon
+  transport and one hook-safe key lookup. Capped by
+  ``compact_recovery.max_chars`` (``COMPACT_RECOVERY_MAX_CHARS``, default
+  4000 chars ~= 1000 tokens). The daemon timeout is sized for the
+  *sleeping* host rather than the happy path: familiar is Slumber-Ward
+  sleepable and a sleeping host blackholes the SYN instead of refusing it,
+  so ``connect()`` blocks for the whole ceiling — measured 4,074 ms, 81% of
+  the hook's own 5 s timeout and 8x the 500 ms startup-injection budget,
+  for a call that answers from cache in 33-48 ms. 1.5 s keeps a sleeping
+  host under 2 s of hook time with ~30x headroom over the observed round
+  trip. ``hooks/palace-session-start.sh`` is now in the repo as the
+  canonical copy; its compact branch is one delegated call.
+
+  *Tests:* 22 (test_compact_recovery x18, test_session_start_hook_compact x4)
+  *Files:* `mempalace/compact_recovery.py`, `mempalace/auto_query/injected.py`, `mempalace/auto_query/runner.py`, `mempalace/config.py`, `hooks/palace-session-start.sh`
+
+
 - **Daemon-strict mine refuses to derive a wing from a document path it cannot classify locally** ([`a30293b`](https://github.com/techempower-org/mempalace/commit/a30293b))
   The daemon-strict branch decided file-vs-directory with ``is_file()`` on
   the CLIENT filesystem while the daemon mines its own host's copy. A path

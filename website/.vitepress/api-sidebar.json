@@ -40,6 +40,10 @@
         "link": "/reference/python-api/collision_scan"
       },
       {
+        "text": "mempalace.compact_recovery",
+        "link": "/reference/python-api/compact_recovery"
+      },
+      {
         "text": "mempalace.config",
         "link": "/reference/python-api/config"
       },
@@ -380,6 +384,10 @@
       {
         "text": "mempalace.auto_query.formatter",
         "link": "/reference/python-api/auto_query/formatter"
+      },
+      {
+        "text": "mempalace.auto_query.injected",
+        "link": "/reference/python-api/auto_query/injected"
       },
       {
         "text": "mempalace.auto_query.router",
