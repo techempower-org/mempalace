@@ -89,9 +89,35 @@ value is an ancestor of `main`, so it would pass the ancestry check
 forever and look right. The merge step records the final sha; the lane
 does not.
 
+### The resolution sweep is the lead's last step of every wave
+
+Resolving is **not** each lane's job and not a checker's. At the end of a
+merge wave the lead runs
+
+    scripts/maintain-fork-changes.py        # resolve every landed commit: HEAD
+    scripts/render-docs.py && scripts/render-llms-full.py && scripts/render-api-docs.py
+
+as one dedicated pull request. Doing it per-lane does not work: more
+`HEAD` entries land while the sweep is open, so it would never be
+complete — and a lane rebasing to pick up someone else's resolution is
+the shared-file churn this whole layout removed.
+
+Until that sweep runs, an entry on main legitimately reads
+`commit: HEAD`. It renders as plain text, never as a link — see below.
+
 `scripts/check-docs.sh` step 2b then requires every entry's commit to be
 an **ancestor** of `HEAD` — not merely to resolve, which a dangling
-object does.
+object does. On a **push to main** it additionally rejects the literal
+`HEAD` (`--strict-resolved`, or `STRICT_RESOLVED=1`), because that is
+where entries must already be resolved; on a pull request `HEAD` is
+correct and tolerated. The strict check is loud, never auto-fixing: it
+tells you to run the sweep.
+
+⚠️ An unresolved entry is rendered as plain text, not a link.
+`https://github.com/techempower-org/mempalace/commit/HEAD` is a **valid**
+URL that resolves to whatever is at main's tip, so a link would point at
+an unrelated commit while looking exactly like a real reference. Eight
+such links were live on main before this was fixed.
 
 A handful of pre-#472 entries cannot be resolved at all: their change is
 on `main`, but the squash subject was rewritten at merge so the commit

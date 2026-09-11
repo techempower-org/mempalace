@@ -140,7 +140,20 @@ fi
 # reference commits unreachable from main while this script reported green.
 # Checked per ENTRY (not by scraping markdown) so the failure names the file
 # a human has to edit.
-step "2b/7 fork-change entry commits are ancestors of HEAD"
+# STRICT_RESOLVED=1 additionally rejects the literal `commit: HEAD`. Wired to
+# the push-to-main job, because an unresolved entry is only a defect once the
+# squash commit exists; on a PR branch HEAD is the correct value. Loud, never
+# auto-fixing: resolving is the sweep's job, not a checker's.
+strict_resolved=0
+case "${STRICT_RESOLVED:-0}" in 1|true|yes|on) strict_resolved=1 ;; esac
+for arg in "$@"; do
+    [ "$arg" = "--strict-resolved" ] && strict_resolved=1
+done
+if (( strict_resolved )); then
+    step "2b/7 fork-change entry commits are ancestors of HEAD (STRICT: no placeholders)"
+else
+    step "2b/7 fork-change entry commits are ancestors of HEAD"
+fi
 py_entries="$REPO_ROOT/.venv/bin/python"
 [ -x "$py_entries" ] || py_entries="$(command -v python3 2>/dev/null || true)"
 legacy_file="$REPO_ROOT/docs/fork-changes-legacy-shas.txt"
@@ -150,6 +163,16 @@ if [ -n "$py_entries" ] && [ -d "$REPO_ROOT/docs/fork-changes" ]; then
     skipped=0
     while IFS=$'\t' read -r entry_id sha; do
         [ -n "$sha" ] || continue
+        # An unresolved placeholder. Only a defect where entries MUST be
+        # resolved — a push to main — so it is strict-mode only; a PR branch
+        # legitimately carries HEAD until the squash commit exists.
+        if [ "$sha" = "HEAD" ]; then
+            if (( strict_resolved )); then
+                fail "entry '$entry_id' still has \`commit: HEAD\` on main — run scripts/maintain-fork-changes.py (the resolution sweep)"
+                ((non_ancestors++))
+            fi
+            continue
+        fi
         # Documented-unrecoverable entries: see the header of that file.
         # Matched on the PAIR (id AND sha). Matching the id alone would
         # exempt the entry forever, so its commit could later be edited to
@@ -169,7 +192,10 @@ if [ -n "$py_entries" ] && [ -d "$REPO_ROOT/docs/fork-changes" ]; then
             fi
             ((non_ancestors++))
         fi
-    done < <("$py_entries" "$REPO_ROOT/scripts/fork_changes.py" --commit-refs 2>/dev/null)
+    done < <(
+        "$py_entries" "$REPO_ROOT/scripts/fork_changes.py" --commit-refs \
+            $( (( strict_resolved )) && printf '%s' --include-head ) 2>/dev/null
+    )
     if (( non_ancestors == 0 )); then
         ok "all $checked entry commits are ancestors of HEAD ($skipped documented-legacy skipped)"
     fi

@@ -252,17 +252,28 @@ def write_entry(entry: dict, dirpath: Path | str = ENTRIES_DIR) -> Path:
     return path
 
 
-def iter_commit_refs(entries: Iterable[dict]) -> list[tuple[str, str]]:
-    """``(entry_id, sha)`` for entries carrying a concrete commit sha.
+def iter_commit_refs(entries: Iterable[dict], include_head: bool = False) -> list[tuple[str, str]]:
+    """``(entry_id, sha)`` for entries carrying a commit value.
 
-    ``HEAD`` placeholders are skipped: they are the documented
-    pre-merge value, not a defect.
+    ``HEAD`` placeholders are skipped by default: on a PR branch they are
+    the documented pre-merge value, not a defect.
+
+    ``include_head`` emits them too, for the strict check that runs where
+    entries MUST already be resolved (a push to main). That the exclusion
+    lives *here* is the important part: a "missing sha" cannot be caught
+    by hardening the ancestry predicate alone, because an excluded entry
+    never reaches it. ``git merge-base --is-ancestor HEAD HEAD`` also
+    exits 0, so both the enumeration and the predicate have to know
+    about the literal.
     """
     out = []
     for e in entries:
         sha = str(e.get("commit", "") or "").strip()
-        if sha and sha != "HEAD":
-            out.append((str(e.get("id")), sha))
+        if not sha:
+            continue
+        if sha == "HEAD" and not include_head:
+            continue
+        out.append((str(e.get("id")), sha))
     return out
 
 
@@ -274,6 +285,11 @@ if __name__ == "__main__":  # small CLI so shell callers need no inline python
     ap.add_argument("--next-seq", action="store_true", help="print one above the max seq")
     ap.add_argument("--count", action="store_true", help="print the number of entries")
     ap.add_argument("--commit-refs", action="store_true", help="print 'id<TAB>sha' per line")
+    ap.add_argument(
+        "--include-head",
+        action="store_true",
+        help="with --commit-refs, also emit entries whose commit is the literal HEAD",
+    )
     ap.add_argument("--json", action="store_true", help="dump all entries as JSON")
     ap.add_argument("--dir", default=str(ENTRIES_DIR))
     args = ap.parse_args()
@@ -283,7 +299,7 @@ if __name__ == "__main__":  # small CLI so shell callers need no inline python
     elif args.count:
         print(len(load_entries(args.dir)))
     elif args.commit_refs:
-        for entry_id, sha in iter_commit_refs(load_entries(args.dir)):
+        for entry_id, sha in iter_commit_refs(load_entries(args.dir), args.include_head):
             print(f"{entry_id}\t{sha}")
     elif args.json:
         print(json.dumps(load_entries(args.dir), indent=2, default=str))

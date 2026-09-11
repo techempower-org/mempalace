@@ -77,7 +77,17 @@ def load_manifest(path: Path = ENTRIES_DIR) -> dict:
 
 
 def commit_link(sha: str) -> str:
-    """Render a 7-char SHA as a markdown link to the fork commit."""
+    """Render a 7-char SHA as a markdown link to the fork commit.
+
+    An unresolved ``HEAD`` placeholder is rendered as plain text, NOT a
+    link: ``.../commit/HEAD`` is a valid GitHub URL that resolves to
+    whatever is at main's tip, so it silently points at an unrelated
+    commit and looks authoritative while doing it. A reader cannot tell
+    it apart from a real reference. Better to say "pending" than to
+    publish a link that is wrong in a way nobody can see (#476).
+    """
+    if str(sha).strip() == "HEAD":
+        return "`HEAD` — pending resolution"
     return f"[`{sha}`](https://github.com/techempower-org/mempalace/commit/{sha})"
 
 

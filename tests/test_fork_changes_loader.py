@@ -190,3 +190,38 @@ class TestMeta:
         m = fork_changes.load_manifest(entries)
 
         assert m["entries"] and m.get("merged_upstream", {}) == {}
+
+
+class TestIncludeHead:
+    """#476: the strict check has to be able to SEE `commit: HEAD`.
+
+    The exclusion lives in the enumeration, which is why hardening the
+    ancestry predicate alone could not catch a missing sha — an excluded
+    entry never reaches it. (`git merge-base --is-ancestor HEAD HEAD`
+    also exits 0, so both halves had to learn about the literal.)
+    """
+
+    def test_head_is_excluded_by_default(self, tmp_path):
+        _write(tmp_path, _entry("pending", 2, commit="HEAD"))
+        _write(tmp_path, _entry("done", 1, commit="abc1234"))
+
+        refs = fork_changes.iter_commit_refs(fork_changes.load_entries(tmp_path))
+
+        assert refs == [("done", "abc1234")]
+
+    def test_include_head_emits_it(self, tmp_path):
+        _write(tmp_path, _entry("pending", 2, commit="HEAD"))
+        _write(tmp_path, _entry("done", 1, commit="abc1234"))
+
+        refs = fork_changes.iter_commit_refs(fork_changes.load_entries(tmp_path), include_head=True)
+
+        assert ("pending", "HEAD") in refs
+        assert ("done", "abc1234") in refs
+
+    def test_an_empty_commit_is_never_emitted(self, tmp_path):
+        _write(tmp_path, _entry("blank", 1, commit=""))
+
+        assert (
+            fork_changes.iter_commit_refs(fork_changes.load_entries(tmp_path), include_head=True)
+            == []
+        )

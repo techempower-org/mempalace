@@ -63,6 +63,11 @@ jobs:
       # scripts/render-docs.py to render the changelog for step 3).
       - run: pip install -e ".[dev]"
 
+      # STRICT_RESOLVED rejects a `commit: HEAD` placeholder, and is set ONLY
+      # on a push to main: that is where entries must already be resolved.
+      # A pull request legitimately carries HEAD, because the squash commit it
+      # will point at does not exist yet. Loud (red on main), never
+      # auto-fixing — resolving is the sweep's job, not a checker's.
       - name: Run check-docs.sh
         env:
           # gh CLI is preinstalled on ubuntu-latest runners. Step 4
@@ -70,4 +75,9 @@ jobs:
           # query MemPalace/mempalace PR states; the default GITHUB_TOKEN
           # works for public repo reads.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Rejects a `commit: HEAD` placeholder. Set ONLY on a push to main,
+          # where entries must already be resolved; a pull request
+          # legitimately carries HEAD because the squash commit it will point
+          # at does not exist yet.
+          STRICT_RESOLVED: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '1' || '0' }}
         run: bash scripts/check-docs.sh

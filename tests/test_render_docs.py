@@ -291,3 +291,21 @@ def test_cli_target_all_accepts_literal():
         f"unexpected exit code from --target all: {result.returncode}\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
+
+
+def test_unresolved_head_is_not_rendered_as_a_link(render_docs):
+    """#476: `.../commit/HEAD` is a VALID GitHub URL that resolves to
+    whatever is at main's tip.
+
+    So an unresolved placeholder rendered as a link silently points at an
+    unrelated commit while looking exactly like a real reference — a
+    reader cannot tell them apart. Eight such links were live on main.
+    Plain text is honest; a wrong link is not.
+    """
+    assert render_docs.commit_link("HEAD") == "`HEAD` — pending resolution"
+    assert "commit/HEAD" not in render_docs.commit_link("HEAD")
+
+
+def test_a_real_sha_is_still_linked(render_docs):
+    out = render_docs.commit_link("abc1234")
+    assert out == "[`abc1234`](https://github.com/techempower-org/mempalace/commit/abc1234)"
