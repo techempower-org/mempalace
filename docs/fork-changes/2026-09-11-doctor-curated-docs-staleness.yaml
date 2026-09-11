@@ -1,0 +1,62 @@
+seq: 146
+id: doctor-curated-docs-staleness
+date: '2026-09-11'
+bucket: Added
+commit: HEAD
+fork_pr: 490
+area: CLI
+summary: '`doctor --curated` reports curated docs newer than what the palace indexed'
+body: |
+  The palace keeps serving a pre-edit copy of `CLAUDE.md` or `docs/*.md`
+  until it is re-mined, and nothing says so. `doctor --curated` now reports,
+  per file, whether the copy on disk has moved on since the palace read it.
+
+  Opt-in, because the budget is real: the five existing checks run in ~405ms
+  all together and the cheapest reliable source of recorded mtimes is one
+  `mempalace_mined` call. Default `doctor` is untouched, measured at
+  365-372ms on this branch.
+
+  Staleness is decided by `provenance.source_stale` and nowhere else — it
+  already owns the comparison, the 60-second grace window and the honest
+  `None` cases, and a second notion here would drift from the one search
+  uses. Recorded mtimes come from either the daemon's `max_source_mtime`
+  (palace-daemon#266, one request) or `palace.prefetch_mined_set` locally;
+  both already speak the same `{source_file: mtime|None}` shape.
+
+  Four outcomes, and only the first is a failure: stale; never indexed
+  (reliable, because the source list is an *enumeration* — "absent from a
+  search's top N" would not be); undecidable; fresh. Unknown is never clean:
+  a daemon predating the field, a source with no recorded mtime, a file this
+  host cannot stat and a recorded time in the future all report undecidable.
+  Of six sampled curated-doc sources in production, two have no recorded
+  mtime, so reading `None` as fresh would silently clear a third of them.
+  This deliberately disagrees with `prefetch_mined_set`, whose docstring
+  says to treat `None` as stale — right for the miner, where re-mining is
+  cheap, and wrong here, where it would fabricate "you edited this" out of
+  missing bookkeeping.
+
+  The cap discloses what it skipped. Returning only the capped list made the
+  truncated tail unrepresentable — it could never populate stale / never
+  indexed / undecidable — so the check printed a clean "N up to date" and
+  exited 0 having examined a fraction of the files. Measured: 2g holds 795
+  curated docs of which 745 went unexamined (6.3% coverage able to report
+  clean), realmwatch 148/98, memorypalace 72/22. `_curated_doc_paths` now
+  returns the pre-cap total, a truncated run can only ever be a warn, and
+  the unexamined count is stated on EVERY outcome, because a failure that
+  hides how much it did not look at is still under-reported. `CLAUDE.md`
+  survives the cap by construction rather than by sorting before `docs/`.
+
+  Two further defects surfaced by probing the real binary rather than only
+  the unit tests. `add()` coerced `ok` with `bool()`, so every warn was
+  stored as `False`: warns rendered as a failure glyph (the map's "warn"
+  entry was unreachable) and flipped the exit code, both against intent
+  already in the code, where `ok_all` tests `is not False` so a `None`
+  passes. It went unnoticed because all five checks are green on a healthy
+  host, so no warn had ever been rendered; a warn now exits 0. And run from
+  a linked worktree every curated doc reads "never indexed" — true, since
+  the palace recorded the main checkout's paths, and useless as a signal —
+  so the check now says which situation it is in, because an alarming line
+  that means nothing is how a check earns a deselect.
+tests: '25 (test_doctor_curated_docs.py: enumeration x5, cap disclosure x3, tri-state x3, daemon tier x7, worktree note x2, gate x2, local tier x2, provenance delegation x1)'
+files:
+- mempalace/cli.py

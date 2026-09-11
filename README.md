@@ -290,6 +290,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| `doctor --curated` reports curated docs newer than what the palace indexed | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | Curated hits order above the transcripts that quote them; diary hits say they have no source | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | Wake-up L1 stops leading with harness prompt-echo, diff fragments and tool-call receipts | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | mempalace tunnels --rebuild --wing W — refresh the derived graph on purpose | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
