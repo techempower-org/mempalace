@@ -168,7 +168,7 @@ def resolve_head_by_file_add(
     branch: str = "HEAD",
     adding_commit: Callable[[str, str], str | None] = git_file_add_commit,
     fetch: Callable[[int], str | None] | None = None,
-) -> tuple[list[tuple[dict, str]], list[tuple[dict, str]]]:
+) -> tuple[list[tuple[dict, str]], list[tuple[dict, str]], list[tuple[dict, str]]]:
     """Resolve ``commit: HEAD`` from the commit that added the entry file.
 
     ⚠️ ONLY ever applied to an entry whose ``commit`` is exactly
@@ -185,9 +185,22 @@ def resolve_head_by_file_add(
     CROSS-CHECK: if the two disagree the entry is reported rather than
     resolved, because two independent mechanisms disagreeing is exactly
     the case where guessing is least defensible.
+
+    A WRONG ``fork_pr`` therefore cannot produce a wrong sha. It either
+    points at another merged PR, whose different answer triggers the
+    refusal above, or it is unverifiable (nonexistent or unmerged), in
+    which case file-add stands alone and already has the right answer.
+    The second case is still wrong *documentation*, so it is surfaced as
+    a note rather than ignored -- a guessed number is how an entry
+    acquires a confidently wrong field.
+
+    Returns ``(changes, unresolved, notes)``. ``notes`` are advisory and
+    deliberately NOT folded into ``unresolved``: an advisory must not make
+    ``--check`` fail, or the next person silences the advisory.
     """
     changes: list[tuple[dict, str]] = []
     unresolved: list[tuple[dict, str]] = []
+    notes: list[tuple[dict, str]] = []
     for entry in entries:
         if str(entry.get("commit", "")).strip() != "HEAD":
             continue  # HARD BOUNDARY — see the docstring.
@@ -214,8 +227,16 @@ def resolve_head_by_file_add(
                     )
                 )
                 continue
+            if via_api is None:
+                # A `fork_pr` that cannot be verified is usually a number
+                # GUESSED before `gh pr create` returned. It cannot corrupt
+                # the result -- file-add already has the answer -- but it is
+                # wrong documentation, so say so instead of ignoring it.
+                notes.append(
+                    (entry, f"resolved from file-add; fork_pr #{pr} is unverifiable — check it")
+                )
         changes.append((entry, sha))
-    return changes, unresolved
+    return changes, unresolved, notes
 
 
 def resolve_head_entries(
@@ -358,9 +379,11 @@ def main(argv: list[str] | None = None) -> int:
         # offline, and needs nothing from the author — a lane cannot know its
         # PR number when it writes the entry, which is the same chicken-and-egg
         # as the sha itself. `fork_pr` is a cross-check here, not the key.
-        c, u = resolve_head_by_file_add(entries, args.branch, fetch=gh_merge_commit_sha)
+        c, u, notes = resolve_head_by_file_add(entries, args.branch, fetch=gh_merge_commit_sha)
         changes += c
         unresolved += u
+        for entry, why in notes:
+            print(f"  ~ {entry['id']}: {why}", file=sys.stderr)
         # FALLBACK: anything file-add could not answer, try fork_pr via the API.
         # Looked up on the module at call time (not bound as a default) so a
         # test can substitute it and never touch the network.

@@ -67,6 +67,19 @@ resolver compares it against the file-add answer and refuses to resolve
 if the two disagree, since two independent mechanisms disagreeing is the
 worst case in which to guess.
 
+⚠️ **Fill `fork_pr` in AFTER `gh pr create` returns the number. Never
+guess it.** GitHub's next number is not predictable: a lane wrote
+`fork_pr: 483` before opening and the PR came back **490**. Leaving it
+absent is the safe default now that file-add is primary — an absent
+field costs nothing, while a guessed one is a confidently wrong value,
+which is the #472 failure in a new coat.
+
+A wrong number cannot corrupt the sha: it either points at another
+merged PR, whose different answer makes the resolver refuse, or it is
+unverifiable, in which case file-add stands alone and is already right —
+and the resolver prints an advisory so the bad number gets noticed
+rather than sitting there looking authoritative.
+
 ⚠️ The resolver only ever does this for an entry whose `commit` is
 literally `HEAD`. Every entry file that predates the one-file-per-entry
 split was created by the split's own commit, so asking "what added this

@@ -267,7 +267,7 @@ class TestResolveHeadByFileAdd:
         e = _entry(commit="HEAD")
         e["_path"] = str(tmp_path / "x.yaml")
 
-        changes, unresolved = mfc.resolve_head_by_file_add(
+        changes, unresolved, _notes = mfc.resolve_head_by_file_add(
             [e], "HEAD", adding_commit=lambda path, branch: "cafe123"
         )
 
@@ -287,7 +287,7 @@ class TestResolveHeadByFileAdd:
         e = _entry(commit="9060e09")
         e["_path"] = str(tmp_path / "old.yaml")
 
-        changes, unresolved = mfc.resolve_head_by_file_add(
+        changes, unresolved, _notes = mfc.resolve_head_by_file_add(
             [e],
             "HEAD",
             adding_commit=lambda path, branch: pytest.fail(
@@ -301,7 +301,7 @@ class TestResolveHeadByFileAdd:
         e = _entry(commit="HEAD", fork_pr=480)
         e["_path"] = str(tmp_path / "x.yaml")
 
-        changes, unresolved = mfc.resolve_head_by_file_add(
+        changes, unresolved, _notes = mfc.resolve_head_by_file_add(
             [e],
             "HEAD",
             adding_commit=lambda path, branch: "aaaaaaa",
@@ -315,7 +315,7 @@ class TestResolveHeadByFileAdd:
         e = _entry(commit="HEAD", fork_pr=480)
         e["_path"] = str(tmp_path / "x.yaml")
 
-        changes, unresolved = mfc.resolve_head_by_file_add(
+        changes, unresolved, _notes = mfc.resolve_head_by_file_add(
             [e],
             "HEAD",
             adding_commit=lambda path, branch: "aaaaaaa",
@@ -329,9 +329,33 @@ class TestResolveHeadByFileAdd:
         e = _entry(commit="HEAD")
         e["_path"] = str(tmp_path / "x.yaml")
 
-        changes, unresolved = mfc.resolve_head_by_file_add(
+        changes, unresolved, _notes = mfc.resolve_head_by_file_add(
             [e], "HEAD", adding_commit=lambda path, branch: None
         )
 
         assert changes == []
         assert "could not find the commit" in unresolved[0][1]
+
+    def test_an_unverifiable_fork_pr_is_a_NOTE_not_a_refusal(self, tmp_path):
+        """A guessed number cannot corrupt the result, but it is still
+        wrong documentation — so it is surfaced, not ignored.
+
+        lucid wrote `fork_pr: 483` before `gh pr create` returned and the
+        PR came back 490; 483 does not exist (404), so the API answer is
+        None, file-add stands alone and is already right. Advisory rather
+        than blocking, because an advisory that fails --check is an
+        advisory someone deletes.
+        """
+        e = _entry(commit="HEAD", fork_pr=483)
+        e["_path"] = str(tmp_path / "x.yaml")
+
+        changes, unresolved, notes = mfc.resolve_head_by_file_add(
+            [e],
+            "HEAD",
+            adding_commit=lambda path, branch: "e4d52a3",
+            fetch=lambda pr: None,
+        )
+
+        assert changes == [(e, "e4d52a3")], "file-add still resolves correctly"
+        assert unresolved == [], "a guessed number must not block resolution"
+        assert "unverifiable" in notes[0][1]
