@@ -5142,6 +5142,172 @@ def cmd_migrate_wings(args):
     )
 
 
+# Curated docs the `doctor --curated` check inspects, and the ceiling on how
+# many. The cap is a budget guard, not a taste call: the check's cost is one
+# daemon request regardless, but the enumeration stats every file, and a
+# repo with a thousand docs should not turn a health check into a disk walk.
+_CURATED_DOCS_MAX = 50
+
+
+def _curated_doc_paths(project_root: str) -> list:
+    """Absolute paths of the project's curated docs, sorted and capped.
+
+    ``CLAUDE.md`` plus ``docs/**/*.md`` — the hand-written layer whose stale
+    copy in the palace is invisible, as distinct from transcripts, which are
+    append-only and re-mined continuously.
+
+    Sorted for determinism (two runs must agree, or the cap would silently
+    inspect a different subset each time) and capped at
+    :data:`_CURATED_DOCS_MAX`.
+    """
+    root = os.path.abspath(os.path.expanduser(project_root))
+    if not os.path.isdir(root):
+        return []
+    found = []
+    claude = os.path.join(root, "CLAUDE.md")
+    if os.path.isfile(claude):
+        found.append(claude)
+    docs_root = os.path.join(root, "docs")
+    if os.path.isdir(docs_root):
+        for dirpath, dirnames, filenames in os.walk(docs_root):
+            dirnames.sort()
+            for name in sorted(filenames):
+                if name.endswith(".md"):
+                    found.append(os.path.join(dirpath, name))
+    return sorted(found)[:_CURATED_DOCS_MAX]
+
+
+def _in_linked_worktree(path: str) -> bool:
+    """True when ``path`` is inside a linked git worktree, not a main checkout.
+
+    A linked worktree's ``.git`` is a FILE holding ``gitdir: …``; a main
+    checkout's is a directory. Cheap and exact, and worth knowing here: the
+    palace recorded the MAIN checkout's absolute paths, so every curated doc
+    enumerated from a worktree is legitimately "never indexed" — true, and
+    useless as a health signal. An alarming line that means nothing is how a
+    check gets ignored (mempalace#454 was a false red that every lane learned
+    to deselect), so the check says which situation it is in.
+    """
+    marker = os.path.join(os.path.abspath(os.path.expanduser(path)), ".git")
+    return os.path.isfile(marker)
+
+
+def _curated_indexed_mtimes(wing: str, palace_path: str) -> tuple:
+    """``({source_file: mtime|None}, note)`` — what the palace recorded.
+
+    Returns the same shape from either source, because both already speak it:
+    the daemon's ``mempalace_mined`` (one request, ``max_source_mtime`` per
+    source — palace-daemon#266) and ``palace.prefetch_mined_set`` (one bulk
+    query, written precisely to avoid a per-file cost).
+
+    ``note`` is non-empty when the map cannot be trusted as complete, and the
+    caller must then report *undecidable* rather than clean. A doctor that
+    turns its own inability to look into a clean bill of health is the
+    failure mode this whole check exists to remove.
+    """
+    if _daemon_url():
+        try:
+            data = _call_daemon_tool("mempalace_mined", {"wing": wing})
+        except DaemonError as exc:
+            return {}, f"daemon unreachable ({exc})"
+        recorded = {}
+        missing_field = False
+        for slot in (data.get("sources_by_wing") or {}).values():
+            for source in slot.get("sources") or []:
+                path = source.get("source_file")
+                if not path:
+                    continue
+                if "max_source_mtime" not in source:
+                    missing_field = True
+                recorded[path] = source.get("max_source_mtime")
+        if missing_field:
+            return recorded, "daemon predates max_source_mtime (palace-daemon#266)"
+        return recorded, ""
+    try:
+        from .palace import get_collection, prefetch_mined_set
+
+        col = get_collection(palace_path, collection_name="mempalace_drawers", create=False)
+        return dict(prefetch_mined_set(col)), ""
+    except Exception as exc:  # noqa: BLE001 — a doctor never raises
+        return {}, f"palace not readable here ({exc})"
+
+
+def _curated_docs_check(wing: str, palace_path: str) -> tuple:
+    """``(ok, detail, level)`` for the curated-docs staleness check (#451 E).
+
+    Staleness is decided by :func:`mempalace.provenance.source_stale` and
+    nowhere else — it already owns the comparison, the 60-second grace window
+    ("a file touched within a minute of its own mine is the mine, not an
+    edit") and the honest ``None`` cases. A second notion here would drift.
+
+    Four outcomes per file, and only the first is a ✗:
+
+    * **stale** — on disk, newer than what the palace read.
+    * **never indexed** — absent from the source list. Reliable, because that
+      list is an enumeration; "absent from a search's top N" would not be.
+    * **undecidable** — no recorded mtime, an older daemon, a file this host
+      cannot stat, or a recorded time in the future. Reported, never cleaned.
+    * **fresh**.
+
+    Note the deliberate disagreement with ``prefetch_mined_set``, whose
+    docstring says to treat a ``None`` mtime as *stale*. That is right for
+    the miner, where re-mining is cheap and safe. Here it would fabricate
+    "you edited this" out of missing bookkeeping, so it reads undecidable.
+    """
+    from datetime import datetime
+
+    from . import provenance
+
+    paths = _curated_doc_paths(os.getcwd())
+    if not paths:
+        return None, "no CLAUDE.md or docs/*.md in this project", "warn"
+
+    recorded, note = _curated_indexed_mtimes(wing, palace_path)
+    stale, never, unknown = [], [], []
+    for path in paths:
+        if path not in recorded:
+            never.append(path)
+            continue
+        mtime = recorded.get(path)
+        if mtime is None:
+            unknown.append(path)
+            continue
+        hit = {
+            "source_file": path,
+            "indexed_at": datetime.fromtimestamp(float(mtime)).isoformat(),
+        }
+        verdict = provenance.source_stale(hit)
+        if verdict is True:
+            stale.append(path)
+        elif verdict is None:
+            unknown.append(path)
+
+    parts = []
+    if stale:
+        parts.append(
+            "{} file(s) modified after indexing — run `mempalace mine {}`".format(
+                len(stale), stale[0]
+            )
+        )
+    if never:
+        parts.append("{} never indexed".format(len(never)))
+    if unknown:
+        parts.append("{} cannot be checked".format(len(unknown)))
+    if note:
+        parts.append(note)
+    if never and _in_linked_worktree(os.getcwd()):
+        parts.append(
+            "run from a linked worktree, whose paths the palace never saw — "
+            "check from the main checkout"
+        )
+    if not parts:
+        return True, "{} curated file(s) up to date".format(len(paths)), "ok"
+    detail = "; ".join(parts)
+    if stale:
+        return False, detail, "error"
+    return None, detail, "warn"
+
+
 def cmd_doctor(args):
     """One-screen health check of the memory workflow (#425).
 
@@ -5158,7 +5324,22 @@ def cmd_doctor(args):
     checks: list[dict] = []
 
     def add(name, ok, detail, level="ok"):
-        checks.append({"check": name, "ok": bool(ok), "detail": detail, "level": level})
+        # ``ok`` is TRI-state and must stay that way: True / None ("cannot
+        # tell") / False. ``bool(ok)`` collapsed None to False, which made
+        # every warn render as ✗ (the glyph map's "warn" entry was
+        # unreachable) and flip the exit code — against the intent visible
+        # two lines down, where ``ok_all`` tests ``is not False`` precisely so
+        # a None passes, and against the closing message, which points at the
+        # ✗ lines only. It went unnoticed because all five checks are ✓ on a
+        # healthy host, so no warn had ever been rendered.
+        checks.append(
+            {
+                "check": name,
+                "ok": ok if ok is None else bool(ok),
+                "detail": detail,
+                "level": level,
+            }
+        )
 
     # 1. MCP bridge resolvable on PATH.
     bridge = shutil.which("mempalace-mcp")
@@ -5246,6 +5427,18 @@ def cmd_doctor(args):
             "{} request(s) queued — run `mempalace replay`".format(pending),
             "warn",
         )
+
+    # 6. Curated docs newer than what the palace indexed (#451 item E).
+    # Opt-in: the cheapest reliable source of recorded mtimes is one
+    # `mempalace_mined` call at ~730ms, and the five checks above run in
+    # ~405ms all together, so this would nearly triple an unasked-for
+    # health check.
+    if getattr(args, "curated", False):
+        c_ok, c_detail, c_level = _curated_docs_check(
+            wing,
+            os.path.expanduser(getattr(args, "palace", None) or MempalaceConfig().palace_path),
+        )
+        add("curated_docs", c_ok, c_detail, c_level)
 
     ok_all = all(c["ok"] is not False for c in checks)
     if want_json:
@@ -11042,6 +11235,14 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         "doctor", help="Health-check the memory workflow (bridge, daemon, wing, hooks, replay)"
     )
     p_doctor.add_argument("--wing", default=None, help="Wing to check (default: cwd basename)")
+    p_doctor.add_argument(
+        "--curated",
+        action="store_true",
+        help=(
+            "Also check whether this project's CLAUDE.md / docs/*.md are newer "
+            "than what the palace indexed (one extra daemon request)"
+        ),
+    )
     p_update = sub.add_parser("update", help="Opt-in release checks and upgrade planning")
     update_sub = p_update.add_subparsers(dest="update_action")
     p_update_configure = update_sub.add_parser("configure", help="Configure periodic checks")
