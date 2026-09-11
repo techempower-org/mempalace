@@ -24,6 +24,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **README install path documents putting the mempalace-mcp bridge on PATH** ([`59bb3b3`](https://github.com/techempower-org/mempalace/commit/59bb3b3))
+  The install path never said to make the ``mempalace-mcp`` console script
+  resolvable; the wrapper was documented only in
+  ``docs/integrations/opencode.md`` and ``docs/RELEASING.md``, neither of
+  which a new install reads. That omission *was* the incident: every plugin
+  manifest declares the MCP server as the bare command ``mempalace-mcp``, a
+  GUI-launched editor does not inherit the shell PATH that has the project
+  venv active, and the result was ``Executable not found in $PATH:
+  mempalace-mcp`` across the fleet — quiet for days, because the search tool
+  is rarely called directly and nothing surfaces the failure until someone
+  asks the palace a question and gets nothing back.
+
+  The new section documents both shapes: a symlink to
+  ``.venv/bin/mempalace-mcp`` for a plain install, and one to
+  palace-daemon's ``mempalace-mcp-wrapper.sh`` for a daemon-fronted install
+  (it sources the daemon URL and API key from
+  ``~/.config/palace-daemon/env`` and ``exec``s the bridge, keeping the key
+  out of both the shell rc and the editor's config file). It points at
+  ``mempalace doctor``, whose first check is
+  ``shutil.which("mempalace-mcp")`` at error level.
+
+  *Files:* `README.md`, `website/public/llms-full.txt`
+
+
 - **Checkpoint drawers carry the session id, not just the diary entry; session_id is validated** ([`e9860b3`](https://github.com/techempower-org/mempalace/commit/e9860b3))
   The earlier pass forwarded a checkpoint's ``session_id`` to
   ``tool_diary_write`` and declared it in the ``mempalace_checkpoint`` and
