@@ -359,3 +359,92 @@ class TestResolveHeadByFileAdd:
         assert changes == [(e, "e4d52a3")], "file-add still resolves correctly"
         assert unresolved == [], "a guessed number must not block resolution"
         assert "unverifiable" in notes[0][1]
+
+
+class TestFileAddAgainstRealGit:
+    """The #480 case, end to end against a real repository.
+
+    #480's own entry has `commit: HEAD` and **no** `fork_pr`, because the
+    entry was written before the PR existed and a guessed number would
+    have been worse than none. That is precisely the case file-add
+    resolution exists for, and the tests above stub `adding_commit`, so
+    they prove the wiring but not the git invocation. These drive real
+    `git log`.
+    """
+
+    @staticmethod
+    def _repo(tmp_path, monkeypatch):
+        import subprocess as sp
+
+        sp.run(["git", "init", "-q", str(tmp_path)], check=True)
+        for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+            sp.run(["git", "-C", str(tmp_path), "config", k, v], check=True)
+        monkeypatch.chdir(tmp_path)
+        return tmp_path
+
+    def _commit(self, tmp_path, path, body, msg):
+        import subprocess as sp
+
+        full = tmp_path / path
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(body)
+        sp.run(["git", "-C", str(tmp_path), "add", path], check=True)
+        sp.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", msg], check=True)
+        return sp.run(
+            ["git", "-C", str(tmp_path), "rev-parse", "--short=7", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    def test_no_fork_pr_resolves_to_the_commit_that_added_the_file(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path, monkeypatch)
+        self._commit(repo, "README.md", "unrelated\n", "chore: unrelated first commit")
+        rel = "docs/fork-changes/2026-09-11-fork-changes-per-entry-pipeline.yaml"
+        adding = self._commit(
+            repo, rel, "id: x\ncommit: HEAD\n", "refactor(docs): the change (#480)"
+        )
+        self._commit(repo, "other.txt", "later\n", "chore: a later commit")
+
+        e = _entry(commit="HEAD")
+        e.pop("fork_pr", None)
+        e["_path"] = rel
+        assert "fork_pr" not in e, "this is the no-fork_pr case"
+
+        changes, unresolved, notes = mfc.resolve_head_by_file_add([e], "HEAD")
+
+        assert unresolved == [], unresolved
+        assert notes == [], "no fork_pr means nothing to cross-check or warn about"
+        assert changes == [(e, adding)], "must be the ADDING commit, not the tip"
+
+    def test_a_later_edit_does_not_move_the_answer(self, tmp_path, monkeypatch):
+        """`--diff-filter=A` means the ADD, so editing an entry later
+        (a typo fix, a reworded body) must not re-point its sha."""
+        repo = self._repo(tmp_path, monkeypatch)
+        rel = "docs/fork-changes/e.yaml"
+        adding = self._commit(repo, rel, "id: e\ncommit: HEAD\n", "feat: add entry (#1)")
+        self._commit(repo, rel, "id: e\ncommit: HEAD\nsummary: fixed typo\n", "docs: typo (#2)")
+
+        assert mfc.git_file_add_commit(rel) == adding
+
+    def test_a_renamed_entry_file_still_resolves_to_its_original_add(self, tmp_path, monkeypatch):
+        """Entry filenames embed the date, so correcting a date renames
+        the file. `--follow` keeps the original add as the answer."""
+        import subprocess as sp
+
+        repo = self._repo(tmp_path, monkeypatch)
+        old_rel = "docs/fork-changes/2026-09-10-e.yaml"
+        adding = self._commit(repo, old_rel, "id: e\ncommit: HEAD\n" + "x" * 200, "feat: add (#1)")
+        new_rel = "docs/fork-changes/2026-09-11-e.yaml"
+        sp.run(["git", "-C", str(repo), "mv", old_rel, new_rel], check=True)
+        sp.run(
+            ["git", "-C", str(repo), "commit", "-q", "-m", "docs: fix the date (#2)"], check=True
+        )
+
+        assert mfc.git_file_add_commit(new_rel) == adding
+
+    def test_an_untracked_path_is_reported_not_guessed(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path, monkeypatch)
+        self._commit(repo, "README.md", "x\n", "chore: init")
+
+        assert mfc.git_file_add_commit("docs/fork-changes/never-committed.yaml") is None
