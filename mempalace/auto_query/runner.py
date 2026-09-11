@@ -35,6 +35,7 @@ from mempalace.auto_query.injected import remember_injected
 from mempalace.auto_query.router import DEPTH_KEEP, THRESHOLDS, pick_tool
 from mempalace.auto_query.signals import extract_signals
 from mempalace.config import MempalaceConfig
+from mempalace.exhaust import is_exhaust
 from mempalace.provenance import source_kind
 
 
@@ -338,33 +339,19 @@ def run_auto_query(
     )
 
 
-# Rooms and shapes that are the palace's own bookkeeping, not knowledge.
-# They dominated auto-query results fleet-wide ("my own exhaust").
-_EXHAUST_ROOMS = frozenset({"sessions", "diary", "checkpoint"})
-_EXHAUST_PREFIXES = (
-    "AUTO-SAVE:",
-    "Session manifest",
-    "> This session is being continued",
-    # Prompt-echo drawers — the harness's own instruction text mirrored back
-    # ("Investigate per the method in your instructions", "Read the RFC …"),
-    # not knowledge (fleet finding, gnome-speaks-46, 2026-09-03).
-    "Investigate per the method",
-    "Get started. Read",
-    "You are working ",
-    "You are triaging ",
-)
-
-
 def _is_exhaust(item):
     # type: (dict) -> bool
-    room = str(item.get("room", "") or "")
-    if room in _EXHAUST_ROOMS:
-        return True
-    drawer_id = str(item.get("drawer_id") or item.get("id") or "")
-    if drawer_id.startswith("diary_"):
-        return True
-    text = str(item.get("text", "") or "").lstrip()
-    return text.startswith(_EXHAUST_PREFIXES)
+    """The palace's own bookkeeping, echo, or a patch fragment — not knowledge.
+
+    The vocabulary lives in :mod:`mempalace.exhaust`, shared with wake-up L1.
+    Two copies drifted: this one grew the prompt-echo prefixes (#445) and L1's
+    did not, and neither ever learned about diff fragments (#461).
+    """
+    return is_exhaust(
+        item.get("text", ""),
+        room=item.get("room", ""),
+        drawer_id=item.get("drawer_id") or item.get("id") or "",
+    )
 
 
 def _item_id(item):

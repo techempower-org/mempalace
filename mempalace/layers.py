@@ -31,6 +31,7 @@ from .searcher import (
     _metric_for_collection,
     build_where_filter,
 )
+from .exhaust import is_exhaust
 
 
 # ---------------------------------------------------------------------------
@@ -38,27 +39,20 @@ from .searcher import (
 # ---------------------------------------------------------------------------
 
 
-_EXHAUST_ROOMS = frozenset({"diary", "sessions", "checkpoint"})
-_EXHAUST_PREFIXES = (
-    "AUTO-SAVE:",
-    "Session manifest",
-    "> This session is being continued",
-    "Investigate per the method",
-    "Get started. Read",
-    "You are working ",
-    "You are triaging ",
-)
-
-
 def _is_exhaust_drawer(doc, meta):
     # type: (str, dict) -> bool
-    """True for the palace's own bookkeeping: diary checkpoints, session manifests."""
-    if str(meta.get("room", "") or "") in _EXHAUST_ROOMS:
-        return True
-    drawer_id = str(meta.get("drawer_id", "") or meta.get("id", "") or "")
-    if drawer_id.startswith("diary_"):
-        return True
-    return (doc or "").lstrip().startswith(_EXHAUST_PREFIXES)
+    """True for the palace's own bookkeeping, echo, or a patch fragment.
+
+    Delegates to :mod:`mempalace.exhaust` so L1 and the auto-query quality gate
+    cannot disagree about what counts as exhaust — they used to keep separate
+    copies of the room set and the prefix list, and only one of them ever
+    learned about diff fragments (#461).
+    """
+    return is_exhaust(
+        doc,
+        room=meta.get("room", ""),
+        drawer_id=meta.get("drawer_id", "") or meta.get("id", ""),
+    )
 
 
 def _is_curated_source(meta):
