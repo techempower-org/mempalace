@@ -94,13 +94,20 @@ does not.
 Resolving is **not** each lane's job and not a checker's. At the end of a
 merge wave the lead runs
 
-    scripts/maintain-fork-changes.py        # resolve every landed commit: HEAD
+    scripts/maintain-fork-changes.py --branch=origin/main   # resolve landed HEADs
     scripts/render-docs.py && scripts/render-llms-full.py && scripts/render-api-docs.py
 
 as one dedicated pull request. Doing it per-lane does not work: more
 `HEAD` entries land while the sweep is open, so it would never be
 complete — and a lane rebasing to pick up someone else's resolution is
 the shared-file churn this whole layout removed.
+
+⚠️ Resolve against **`origin/main`**, never a feature branch. Asked about
+a branch, "what added this file" truthfully answers *the branch commit* —
+which the squash orphans moments later, recreating the exact #472 failure
+through a new door. Against `origin/main` an unmerged entry simply finds
+no add and stays `HEAD`, which is why the sweep runs after the merges,
+not during them.
 
 Until that sweep runs, an entry on main legitimately reads
 `commit: HEAD`. It renders as plain text, never as a link — see below.

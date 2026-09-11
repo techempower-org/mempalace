@@ -448,3 +448,35 @@ class TestFileAddAgainstRealGit:
         self._commit(repo, "README.md", "x\n", "chore: init")
 
         assert mfc.git_file_add_commit("docs/fork-changes/never-committed.yaml") is None
+
+    def test_an_unmerged_entry_is_NOT_resolved_to_its_branch_commit(self, tmp_path, monkeypatch):
+        """The property that stops #472 from recurring through this door.
+
+        Run against `origin/main` (the sweep's default), an entry whose
+        file has not merged yet finds NO add — so it stays `HEAD` instead
+        of being written with the branch commit, which the squash would
+        orphan moments later. That is exactly the failure this whole
+        mechanism replaced, and file-add could otherwise reintroduce it:
+        asked about `HEAD` on a feature branch it happily returns the
+        branch commit.
+        """
+        import subprocess as sp
+
+        repo = self._repo(tmp_path, monkeypatch)
+        self._commit(repo, "README.md", "x\n", "chore: init")
+        sp.run(["git", "-C", str(repo), "branch", "-M", "main"], check=True)
+        sp.run(["git", "-C", str(repo), "checkout", "-q", "-b", "feature"], check=True)
+        rel = "docs/fork-changes/unmerged.yaml"
+        branch_sha = self._commit(repo, rel, "id: u\ncommit: HEAD\n", "feat: not merged yet (#9)")
+
+        # Asked about the branch, file-add finds the branch commit...
+        assert mfc.git_file_add_commit(rel, "feature") == branch_sha
+        # ...but asked about main — which is what the sweep uses — it finds nothing.
+        assert mfc.git_file_add_commit(rel, "main") is None
+
+        e = _entry(commit="HEAD")
+        e["_path"] = rel
+        changes, unresolved, _notes = mfc.resolve_head_by_file_add([e], "main")
+
+        assert changes == [], "an unmerged entry must not be resolved"
+        assert "could not find the commit" in unresolved[0][1]

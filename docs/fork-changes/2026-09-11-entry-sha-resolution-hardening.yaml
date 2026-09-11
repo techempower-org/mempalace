@@ -44,6 +44,7 @@ body: |
   exactly like real references. They now render as plain text.
 tests: 30 (TestResolveHeadByFileAdd x6, TestFileAddAgainstRealGit x4, TestIncludeHead x3, plus
   loader/renderer/resolver coverage)
+fork_pr: 492
 files:
 - scripts/maintain-fork-changes.py
 - scripts/fork_changes.py
