@@ -8203,21 +8203,59 @@ def _filter_diary_entries(entries: list, topic=None, since=None) -> list:
     return rows
 
 
-def _print_diary_entries(agent: str, entries: list, total=None) -> None:
-    """Newest-first entry list — header line per entry, then its content."""
+def _print_diary_entries(agent, entries: list, total=None, wing=None) -> None:
+    """Newest-first entry list — header line per entry, then its content.
+
+    ``agent`` may be ``None`` (#501): the identity-less read lists the diary
+    room itself, so the writer goes on each row. Without that the listing
+    cannot tell the reader which ``--agent`` to ask for next, which is the
+    whole reason the entries were unreachable. The agent-scoped rendering is
+    byte-for-byte unchanged — a name on every row would just be noise there.
+    """
     if not entries:
-        print(f"\n  No diary entries for '{agent}'.\n")
+        if agent:
+            print(f"\n  No diary entries for '{agent}'.\n")
+        else:
+            scope = f" in wing '{wing}'" if wing else ""
+            print(f"\n  No diary entries{scope}.\n")
+            print("    'mempalace diary agents' lists the agents that have entries.\n")
         return
     suffix = f" of {total}" if total is not None else ""
+    label = agent or (f"{wing} — all agents" if wing else "all agents")
     print(
-        f"\n  DIARY — {agent}  ({len(entries)} entr{'y' if len(entries) == 1 else 'ies'}{suffix})"
+        f"\n  DIARY — {label}  ({len(entries)} entr{'y' if len(entries) == 1 else 'ies'}{suffix})"
     )
     for entry in entries:
         stamp = entry.get("timestamp") or entry.get("date") or "?"
         topic = entry.get("topic") or "general"
-        print(f"\n  [{stamp}]  {topic}  ({entry.get('drawer_id') or '?'})")
+        who = "" if agent else f"  {entry.get('agent') or '?'}"
+        print(f"\n  [{stamp}]{who}  {topic}  ({entry.get('drawer_id') or '?'})")
         for line in str(entry.get("content") or "").splitlines():
             print(f"    {line}")
+    print()
+
+
+def _print_diary_agents(data: dict) -> None:
+    """``diary agents`` — who has written, how much, how recently (#501).
+
+    A ``truncated`` scan makes every count a LOWER BOUND; saying "1713"
+    when the scan stopped at the cap would be a report that disagrees with
+    what was measured, so the caveat is printed rather than implied.
+    """
+    agents = data.get("agents") or []
+    wing = data.get("wing")
+    if not agents:
+        scope = f" in wing '{wing}'" if wing else ""
+        print(f"\n  No diary entries{scope} — no agent has written one.\n")
+        return
+    scope = f" — wing {wing}" if wing else ""
+    print(f"\n  DIARY AGENTS{scope}  ({len(agents)})")
+    width = max(len(str(row.get("agent") or "?")) for row in agents)
+    for row in agents:
+        name = str(row.get("agent") or "?")
+        print(f"    {name:<{width}}  {row.get('entries') or 0:>7}  {row.get('latest') or ''}")
+    if data.get("truncated"):
+        print(f"\n    counts are a lower bound — the scan stopped at {data.get('scanned')} drawers")
     print()
 
 
@@ -8225,23 +8263,47 @@ def cmd_diary(args):
     """``mempalace diary write|read`` — the agent diary at the CLI (#354).
 
     ``write`` wraps ``mempalace_diary_write``; ``read`` wraps
-    ``mempalace_diary_read``. Both require an agent name (``--agent`` or
-    ``MEMPALACE_AGENT_NAME``) because the diary is per-agent in the tool
-    contract. ``read``'s ``--topic`` / ``--since`` filters are applied
-    client-side — the tool has no such parameters.
+    ``mempalace_diary_read``; ``agents`` wraps ``mempalace_diary_agents``.
+    ``read``'s ``--topic`` / ``--since`` filters are applied client-side —
+    the tool has no such parameters.
+
+    Only ``write`` needs an agent name (#501). A read does not: the hook
+    writes ``agent_name=<harness>`` (``claude-code`` / ``codex`` /
+    ``gemini-cli``) and never consults ``identity.txt`` or
+    ``MEMPALACE_AGENT_NAME``, so requiring one on read meant entries
+    plainly visible in ``list --wing W`` answered "No diary entries" to
+    every name a reader could guess. ``agents`` exists to discover the
+    names that do work.
     """
     fmt = _resolve_tool_format(args)
     want_json = fmt == "json"
     action = getattr(args, "diary_action", None)
 
     agent = _resolve_agent_name(args)
-    if not agent:
-        _fail_client(
-            "diary requires an agent name — pass --agent NAME or set MEMPALACE_AGENT_NAME",
-            want_json,
-        )
+
+    if action == "agents":
+        payload = {}
+        if getattr(args, "wing", None):
+            payload["wing"] = args.wing
+        try:
+            data = _call_tool_routed(args, "mempalace_diary_agents", "tool_diary_agents", payload)
+        except DaemonError as e:
+            _fail_daemon(e, want_json)
+        if _tool_failed(data):
+            _fail_tool(data, want_json)
+        if want_json:
+            _emit_json(data)
+            return
+        _print_diary_agents(data or {})
+        return
 
     if action == "write":
+        if not agent:
+            _fail_client(
+                "diary write requires an agent name — pass --agent NAME or set "
+                "MEMPALACE_AGENT_NAME",
+                want_json,
+            )
         payload = {"agent_name": agent, "entry": _read_diary_entry(args, want_json)}
         if getattr(args, "topic", None):
             payload["topic"] = args.topic
@@ -8270,14 +8332,50 @@ def cmd_diary(args):
     # ``--topic X --limit 5`` could return nothing while matching entries
     # sit just outside the requested window.
     fetch_n = _DIARY_MAX_LIMIT if (topic or since) else limit
-    payload = {"agent_name": agent, "last_n": fetch_n}
+    payload = {"last_n": fetch_n}
+    # Omitted, not blank: a blank agent_name is what the pre-#501 tool
+    # rejects with "agent_name must be a non-empty string".
+    if agent:
+        payload["agent_name"] = agent
     if getattr(args, "wing", None):
         payload["wing"] = args.wing
     try:
         data = _call_tool_routed(args, "mempalace_diary_read", "tool_diary_read", payload)
     except DaemonError as e:
+        # MEASURED against the production daemon 2026-09-17: a daemon whose
+        # mempalace predates #501 rejects an omitted agent_name at SCHEMA
+        # validation, before dispatch — `-32602: Missing required parameter
+        # 'agent_name' for tool mempalace_diary_read`, which arrives here as
+        # a DaemonError, not as a tool-error envelope. An earlier draft
+        # guarded only the envelope below and would never have fired; the
+        # real-CLI probe is what caught that.
+        if not agent and "agent_name" in str(e):
+            _fail_daemon(
+                DaemonError(
+                    "daemon error: this daemon's mempalace predates the "
+                    "identity-less diary read (#501), so it still requires an "
+                    "agent. Pass --agent NAME, or update the daemon. "
+                    f"Daemon said: {e}"
+                ),
+                want_json,
+            )
         _fail_daemon(e, want_json)
     if _tool_failed(data):
+        # The same situation reported as a tool envelope instead of a
+        # JSON-RPC error — reachable when a caller sends agent_name="" rather
+        # than omitting it. Kept deliberately: it is the shape the tool
+        # itself produces, and it costs one branch.
+        if not agent and "agent_name" in str((data or {}).get("error") or ""):
+            # The reader passed no --agent, so echoing the tool's complaint
+            # about agent_name sends them after a flag they never used.
+            # Name the real cause: the daemon is older than this feature.
+            data = dict(data or {})
+            data["error"] = (
+                "this daemon's mempalace is older than the identity-less diary read "
+                "(#501) — pass --agent NAME, or run 'mempalace diary agents' to see "
+                "which names exist, or update the daemon"
+            )
+            data["reason"] = "daemon_predates_identityless_diary_read"
         _fail_tool(data, want_json)
 
     data = data or {}
@@ -8292,7 +8390,12 @@ def cmd_diary(args):
             out["since_filter"] = since
         _emit_json(out)
         return
-    _print_diary_entries(data.get("agent") or agent, entries, total=data.get("total"))
+    _print_diary_entries(
+        data.get("agent") or agent,
+        entries,
+        total=data.get("total"),
+        wing=data.get("wing") or getattr(args, "wing", None),
+    )
 
 
 # ── mempalace kg (#357) ───────────────────────────────────────────────
@@ -12286,7 +12389,11 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
     p_diary_read.add_argument(
         "--agent",
         default=None,
-        help="Agent name whose diary to read (default: $MEMPALACE_AGENT_NAME)",
+        help=(
+            "Agent whose diary to read (default: $MEMPALACE_AGENT_NAME). "
+            "Optional — omit it to read every agent's entries; "
+            "'mempalace diary agents' lists the names present."
+        ),
     )
     p_diary_read.add_argument(
         "--limit",
@@ -12297,7 +12404,7 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
     p_diary_read.add_argument(
         "--wing",
         default=None,
-        help="Read from one wing only (default: every wing this agent wrote to)",
+        help="Read from one wing only (default: every wing in scope)",
     )
     p_diary_read.add_argument(
         "--topic",
@@ -12316,6 +12423,27 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         help="Output format (default table; --json is shorthand for --format json)",
     )
     p_diary_read.add_argument(
+        "--json", "-j", dest="json", action="store_true", default=False, help=argparse.SUPPRESS
+    )
+    # agents — which names actually have entries (#501). The hook keys diary
+    # drawers on the harness name, so this is the only reliable way to learn
+    # what to pass to --agent.
+    p_diary_agents = diary_sub.add_parser(
+        "agents",
+        help="List the agents that have diary entries, with counts",
+    )
+    p_diary_agents.add_argument(
+        "--wing",
+        default=None,
+        help="Limit to one wing (default: every wing)",
+    )
+    p_diary_agents.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help="Output format (default table; --json is shorthand for --format json)",
+    )
+    p_diary_agents.add_argument(
         "--json", "-j", dest="json", action="store_true", default=False, help=argparse.SUPPRESS
     )
 

@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Detailed parameter schemas for all 49 MCP tools.
+Detailed parameter schemas for all 50 MCP tools.
 
 ## Palace — Read Tools
 
@@ -522,12 +522,44 @@ Write to your personal agent diary.
 
 Read recent diary entries.
 
+`agent_name` is optional. Omit it to read the diary room itself — every
+agent's entries, newest first, each row tagged with the agent that wrote
+it. This matters because the auto-save hook keys its entries on the
+*harness* name (`claude-code` / `codex` / `gemini-cli`) and never consults
+`identity.txt` or `MEMPALACE_AGENT_NAME`, so a reader usually cannot guess
+the name to ask for. Use `mempalace_diary_agents` to list the names that
+exist.
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `agent_name` | string | **Yes** | Your name |
-| `last_n` | integer | No | Number of recent entries (default: 10) |
+| `agent_name` | string | No | Whose diary to read. Omit for every agent's entries |
+| `last_n` | integer | No | Number of recent entries (default: 10, max 100) |
+| `wing` | string | No | Read one wing only. Omit for every wing in scope |
 
-**Returns:** `{ agent, entries: [{ date, timestamp, topic, content }], total, showing }`
+**Returns:** `{ agent, wing, entries: [{ drawer_id, date, timestamp, topic, agent, wing, content }], total, showing, truncated }`
+
+`agent` is `null` when no agent filter was applied. `truncated` is `true`
+when the scan hit its drawer cap, in which case `total` is a lower bound.
+
+---
+
+### `mempalace_diary_agents`
+
+List which agents have diary entries, with a count and newest timestamp
+each — the companion to an `agent_name`-less `mempalace_diary_read`. The
+read path keys on drawers, but picking an `agent_name` still requires
+knowing which ones exist.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `wing` | string | No | Limit to one wing. Omit to scan every wing |
+
+**Returns:** `{ wing, agents: [{ agent, entries, latest }], scanned, truncated }`
+
+Rows are sorted by entry count descending. When `truncated` is `true` the
+scan stopped at its cap and every count is a **lower bound** — the cap
+exists because the palace daemon runs near a 2 GB cgroup ceiling, so an
+unbounded metadata sweep is a memory hazard rather than merely slow.
 
 ---
 

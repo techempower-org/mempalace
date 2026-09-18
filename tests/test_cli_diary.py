@@ -101,6 +101,62 @@ def _daemon(payload):
     )
 
 
+def _agents_args(**overrides):
+    defaults = {
+        "json": False,
+        "quiet": False,
+        "format": None,
+        "palace": None,
+        "diary_action": "agents",
+        "wing": None,
+    }
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+# The production shape (#501): hook entries keyed on the harness name the
+# reader cannot guess, alongside a named agent.
+_MIXED_ENTRIES = [
+    {
+        "drawer_id": "h2",
+        "date": "2026-09-17",
+        "timestamp": "2026-09-17T19:34:27",
+        "topic": "hook",
+        "agent": "claude-code",
+        "wing": "2g",
+        "content": "AUTO-SAVE:0972a270|1713.msgs",
+    },
+    {
+        "drawer_id": "t1",
+        "date": "2026-09-17",
+        "timestamp": "2026-09-17T11:02:00",
+        "topic": "planning",
+        "agent": "team-lead",
+        "wing": "2g",
+        "content": "wave 3 landing order",
+    },
+]
+
+_READ_NO_AGENT_OK = {
+    "agent": None,
+    "wing": "2g",
+    "entries": _MIXED_ENTRIES,
+    "total": 2,
+    "showing": 2,
+    "truncated": False,
+}
+
+_AGENTS_OK = {
+    "wing": "2g",
+    "agents": [
+        {"agent": "claude-code", "entries": 1713, "latest": "2026-09-17T19:34:27"},
+        {"agent": "team-lead", "entries": 4, "latest": "2026-09-17T11:02:00"},
+    ],
+    "scanned": 1717,
+    "truncated": False,
+}
+
+
 class TestDiaryWrite:
     def test_daemon_payload_carries_every_flag(self):
         from mempalace import cli
@@ -424,3 +480,317 @@ class TestDiaryRead:
 
         assert daemon_call.call_count == 0
         assert local.call_count == 1
+
+
+class TestDiaryReadWithoutIdentity:
+    """#501(a): ``diary read --wing W`` must work with no identity at all.
+
+    Measured 2026-09-17 against the production daemon: entries written by
+    the Stop hook are keyed ``agent=claude-code`` (hook.py's ``--harness``
+    flag), so ``--agent team-lead`` and ``--agent 2g-c6`` both answered
+    "No diary entries" while ``list --wing 2g`` showed the rows.
+    """
+
+    def test_no_agent_no_env_does_not_refuse(self, capsys):
+        from mempalace import cli
+
+        strict, call, fake = _daemon(_READ_NO_AGENT_OK)
+        with strict, call, patch.dict("os.environ", {}, clear=True):
+            cli.cmd_diary(_read_args(agent=None, wing="2g"))
+
+        out = capsys.readouterr().out
+        assert "requires an agent name" not in out
+        assert "AUTO-SAVE:0972a270|1713.msgs" in out
+
+    def test_no_agent_omits_agent_name_from_the_payload(self):
+        """It must not send a blank agent_name — the deployed tool answers
+        'agent_name must be a non-empty string' to that, which reports a
+        problem the caller did not create."""
+        from mempalace import cli
+
+        strict, call, fake = _daemon(_READ_NO_AGENT_OK)
+        with strict, call, patch.dict("os.environ", {}, clear=True):
+            cli.cmd_diary(_read_args(agent=None, wing="2g"))
+
+        _tool, payload = fake.call_args[0]
+        assert "agent_name" not in payload
+        assert payload["wing"] == "2g"
+
+    def test_listing_shows_which_agent_wrote_each_entry(self, capsys):
+        """Without this the reader still cannot learn the name to ask for."""
+        from mempalace import cli
+
+        strict, call, _ = _daemon(_READ_NO_AGENT_OK)
+        with strict, call, patch.dict("os.environ", {}, clear=True):
+            cli.cmd_diary(_read_args(agent=None, wing="2g"))
+
+        out = capsys.readouterr().out
+        assert "claude-code" in out
+        assert "team-lead" in out
+
+    def test_no_agent_and_no_wing_is_allowed(self):
+        from mempalace import cli
+
+        strict, call, fake = _daemon(_READ_NO_AGENT_OK)
+        with strict, call, patch.dict("os.environ", {}, clear=True):
+            cli.cmd_diary(_read_args(agent=None, wing=None))
+
+        _tool, payload = fake.call_args[0]
+        assert "agent_name" not in payload
+        assert "wing" not in payload
+
+    def test_limit_is_honoured_without_an_agent(self):
+        from mempalace import cli
+
+        strict, call, fake = _daemon(_READ_NO_AGENT_OK)
+        with strict, call, patch.dict("os.environ", {}, clear=True):
+            cli.cmd_diary(_read_args(agent=None, wing="2g", limit=2))
+
+        assert fake.call_args[0][1]["last_n"] == 2
+
+    def test_since_filter_is_honoured_without_an_agent(self, capsys):
+        from mempalace import cli
+
+        strict, call, _ = _daemon(_READ_NO_AGENT_OK)
+        with strict, call, patch.dict("os.environ", {}, clear=True):
+            cli.cmd_diary(_read_args(agent=None, wing="2g", since="2026-09-17T12:00:00"))
+
+        out = capsys.readouterr().out
+        assert "AUTO-SAVE" in out
+        assert "wave 3 landing order" not in out
+
+    def test_write_still_requires_an_agent(self, capsys):
+        """The gate moved to write-only; it must not have been deleted."""
+        from mempalace import cli
+
+        with patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_write_args(agent=None))
+
+        assert exc.value.code == 2
+        assert "requires an agent name" in capsys.readouterr().err
+
+    def test_explicit_agent_still_scopes_the_read(self):
+        from mempalace import cli
+
+        strict, call, fake = _daemon(_READ_OK)
+        with strict, call:
+            cli.cmd_diary(_read_args(agent="morpheus"))
+
+        assert fake.call_args[0][1]["agent_name"] == "morpheus"
+
+    def test_old_daemon_schema_rejection_is_explained(self, capsys):
+        """The path the real daemon actually takes, measured 2026-09-17.
+
+        A pre-#501 daemon rejects an OMITTED agent_name at schema
+        validation, before dispatch, so it arrives as a DaemonError and not
+        as a tool envelope:
+
+            -32602: Missing required parameter 'agent_name'
+                    for tool mempalace_diary_read
+
+        Exit stays 1 (the diary family's daemon-failure code); only the
+        wording changes, because the bare daemon message sends the reader
+        after a flag they never passed.
+        """
+        from mempalace import cli
+
+        fake = MagicMock(
+            side_effect=cli.DaemonError(
+                "daemon error -32602: Missing required parameter 'agent_name' "
+                "for tool mempalace_diary_read"
+            )
+        )
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=True),
+            patch("mempalace.cli._call_daemon_tool", fake),
+            patch.dict("os.environ", {}, clear=True),
+        ):
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_read_args(agent=None, wing="2g"))
+
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert "predates" in err
+        assert "--agent" in err
+
+    def test_old_daemon_schema_rejection_with_an_agent_is_passed_through(self, capsys):
+        """Only rewrite the message when WE omitted the agent — otherwise a
+        genuine agent_name complaint must reach the reader intact."""
+        from mempalace import cli
+
+        fake = MagicMock(side_effect=cli.DaemonError("daemon error -32602: bad agent_name"))
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=True),
+            patch("mempalace.cli._call_daemon_tool", fake),
+        ):
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_read_args(agent="morpheus"))
+
+        assert exc.value.code == 1
+        assert "predates" not in capsys.readouterr().err
+
+    def test_old_daemon_envelope_rejection_is_explained(self, capsys):
+        """A daemon whose mempalace predates #501 answers the agent_name
+        error. Surfacing that verbatim sends the reader after a flag they
+        did not pass, so name the real cause."""
+        from mempalace import cli
+
+        strict, call, _ = _daemon({"error": "agent_name must be a non-empty string"})
+        with strict, call, patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_read_args(agent=None, wing="2g"))
+
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "--agent" in err
+        assert "older" in err.lower() or "predates" in err.lower()
+
+
+class TestDiaryAgents:
+    """#501(b): enumerate the agent names present so a reader can pick one."""
+
+    def test_lists_names_with_counts(self, capsys):
+        from mempalace import cli
+
+        strict, call, fake = _daemon(_AGENTS_OK)
+        with strict, call:
+            cli.cmd_diary(_agents_args(wing="2g"))
+
+        out = capsys.readouterr().out
+        assert "claude-code" in out
+        assert "1713" in out
+        assert "team-lead" in out
+        assert fake.call_args[0][0] == "mempalace_diary_agents"
+
+    def test_wing_is_forwarded(self):
+        from mempalace import cli
+
+        strict, call, fake = _daemon(_AGENTS_OK)
+        with strict, call:
+            cli.cmd_diary(_agents_args(wing="2g"))
+
+        assert fake.call_args[0][1] == {"wing": "2g"}
+
+    def test_no_wing_sends_an_empty_payload(self):
+        from mempalace import cli
+
+        strict, call, fake = _daemon(_AGENTS_OK)
+        with strict, call:
+            cli.cmd_diary(_agents_args(wing=None))
+
+        assert fake.call_args[0][1] == {}
+
+    def test_empty_result_says_so_and_exits_zero(self, capsys):
+        from mempalace import cli
+
+        strict, call, _ = _daemon({"wing": None, "agents": [], "scanned": 0, "truncated": False})
+        with strict, call:
+            cli.cmd_diary(_agents_args())
+
+        assert "No diary" in capsys.readouterr().out
+
+    def test_truncated_scan_is_reported_as_a_lower_bound(self, capsys):
+        """A capped count is a lower bound. Printing it bare would be the
+        report-disagrees-with-reality defect this wave keeps finding."""
+        from mempalace import cli
+
+        payload = dict(_AGENTS_OK, truncated=True, scanned=10000)
+        strict, call, _ = _daemon(payload)
+        with strict, call:
+            cli.cmd_diary(_agents_args())
+
+        out = capsys.readouterr().out
+        assert "least" in out.lower() or "lower bound" in out.lower()
+
+    def test_untruncated_scan_prints_no_caveat(self, capsys):
+        from mempalace import cli
+
+        strict, call, _ = _daemon(_AGENTS_OK)
+        with strict, call:
+            cli.cmd_diary(_agents_args())
+
+        out = capsys.readouterr().out
+        assert "lower bound" not in out.lower()
+
+    def test_json_passthrough(self, capsys):
+        from mempalace import cli
+
+        strict, call, _ = _daemon(_AGENTS_OK)
+        with strict, call:
+            cli.cmd_diary(_agents_args(json=True))
+
+        assert json.loads(capsys.readouterr().out)["agents"][0]["agent"] == "claude-code"
+
+    def test_tool_error_envelope_exits_2(self, capsys):
+        from mempalace import cli
+
+        strict, call, _ = _daemon({"error": "palace unavailable"})
+        with strict, call:
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_agents_args())
+
+        assert exc.value.code == 2
+
+    def test_daemon_unreachable_exits_1(self, capsys):
+        from mempalace import cli
+
+        fake = MagicMock(side_effect=cli.DaemonError("daemon error: connection refused"))
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=True),
+            patch("mempalace.cli._call_daemon_tool", fake),
+        ):
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_agents_args())
+
+        assert exc.value.code == 1
+
+    def test_local_path_calls_the_tool_function(self, tmp_path):
+        from mempalace import cli
+
+        fake_mod = MagicMock()
+        fake_mod.tool_diary_agents.return_value = _AGENTS_OK
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=False),
+            patch("mempalace.cli._local_mcp_server") as ctx,
+        ):
+            ctx.return_value.__enter__.return_value = fake_mod
+            cli.cmd_diary(_agents_args(palace=str(tmp_path)))
+
+        fake_mod.tool_diary_agents.assert_called_once_with(**{})
+
+
+class TestDiaryAgentsWiring:
+    """Two independent probes, because they see different layers.
+
+    ``--help`` exits inside argparse, so it proves the SUBPARSER exists but
+    is blind to a missing branch in ``cmd_diary``. The dispatch probe runs
+    the verb for real and sees that branch. Deletion matrix recorded in the
+    PR body: removing the subparser fails both; removing the cmd_diary
+    branch fails only the dispatch probe.
+    """
+
+    def test_help_smoke_exits_zero(self):
+        import os
+
+        from mempalace import cli
+
+        with patch.dict("os.environ", dict(os.environ)):
+            with patch("sys.argv", ["mempalace", "diary", "agents", "--help"]):
+                with pytest.raises(SystemExit) as exc:
+                    cli.main()
+
+        assert exc.value.code == 0
+
+    def test_dispatch_probe_reaches_the_tool(self, capsys):
+        import os
+
+        from mempalace import cli
+
+        strict, call, fake = _daemon(_AGENTS_OK)
+        with patch.dict("os.environ", dict(os.environ)), strict, call:
+            with patch("sys.argv", ["mempalace", "diary", "agents", "--wing", "2g"]):
+                cli.main()
+
+        assert fake.call_args[0][0] == "mempalace_diary_agents"
+        assert "claude-code" in capsys.readouterr().out

@@ -1,6 +1,6 @@
 # MemPalace - Codex CLI Plugin
 
-Give your AI a persistent memory -- mine projects and conversations into a searchable palace backed by ChromaDB, with 49 MCP tools, auto-save hooks, and guided skills.
+Give your AI a persistent memory -- mine projects and conversations into a searchable palace backed by ChromaDB, with 50 MCP tools, auto-save hooks, and guided skills.
 
 To run without the MCP tool surface (CLI + hooks + skills only), add `"mcp_mode": "cli-only"` to `~/.mempalace/config.json` -- saves ~9 KB context per session, fails open on bad config. See [MCP Integration guide](https://github.com/MemPalace/mempalace/blob/develop/website/guide/mcp-integration.md#cli-only-mode-mcp_mode).
 

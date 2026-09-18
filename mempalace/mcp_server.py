@@ -5475,7 +5475,15 @@ def tool_diary_write(
         return {"success": False, "error": str(e), "warnings": warnings}
 
 
-def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):
+# Diary scans read a bounded page rather than the whole room. The palace
+# daemon runs under a 2 GB cgroup cap and sits near it, so an unbounded
+# metadata sweep is a memory hazard, not merely slow (palace-daemon#256).
+# When a scan hits this limit the payload says so — a capped count is a
+# lower bound and must never be reported as a total.
+_DIARY_SCAN_LIMIT = 10000
+
+
+def tool_diary_read(agent_name: str = "", last_n: int = 10, wing: str = ""):
     """
     Read an agent's recent diary entries. Returns the last N entries
     in chronological order — the agent's personal journal.
@@ -5486,13 +5494,29 @@ def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):
     (``wing_<project>``), so requiring a specific wing on read would
     silo those entries from agent-initiated reads.
 
+    ``agent_name`` is OPTIONAL (#501). Omit it (or pass a blank string) to
+    read the diary room itself rather than one agent's slice — every
+    agent's entries, newest first, each row tagged with its own ``agent``.
+    This exists because the reader frequently cannot know the name to ask
+    for: the Stop/PreCompact hook writes ``agent_name=<harness>`` (hook.py's
+    ``--harness`` flag — ``claude-code`` / ``codex`` / ``gemini-cli``) and
+    never consults ``identity.txt`` or ``MEMPALACE_AGENT_NAME``, so entries
+    plainly visible in ``list --wing W`` answered "No diary entries yet."
+    to every name a human would guess. Use ``tool_diary_agents`` to
+    enumerate the names actually present.
+
     Note: ``agent_name`` is normalized to lowercase before filtering so
     that reads are case-insensitive (see #1243). Entries written under
     pre-fix mixed-case agent names will not match the lowercase filter;
     use ``mempalace repair`` to migrate legacy data if needed.
     """
     try:
-        agent_name = sanitize_name(agent_name, "agent_name").lower()
+        # A blank agent is "no agent filter", not bad input. Rejecting it
+        # with "agent_name must be a non-empty string" is what made an
+        # identity-less `diary read --wing W` report a problem the caller
+        # had not created (#501).
+        agent_name = str(agent_name or "").strip()
+        agent_name = sanitize_name(agent_name, "agent_name").lower() if agent_name else ""
         if wing:
             wing = sanitize_name(wing)
     except ValueError as e:
@@ -5512,19 +5536,24 @@ def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):
     # room=diary, read → room=diary. Wing is optional — when empty,
     # return entries across all wings this agent has written to
     # (matches the #1097 empty-string-as-no-filter convention).
-    conditions = [{"room": "diary"}, {"agent": agent_name}]
+    conditions = [{"room": "diary"}]
+    if agent_name:
+        conditions.append({"agent": agent_name})
     if wing:
         conditions.insert(0, {"wing": wing})
+    # A single-element ``$and`` is not portable across backends; pass the
+    # lone clause directly.
+    where = conditions[0] if len(conditions) == 1 else {"$and": conditions}
 
     try:
         results = col.get(
-            where={"$and": conditions},
+            where=where,
             include=["documents", "metadatas"],
-            limit=10000,
+            limit=_DIARY_SCAN_LIMIT,
         )
 
         if not results["ids"]:
-            return {"agent": agent_name, "entries": [], "message": "No diary entries yet."}
+            return {"agent": agent_name or None, "entries": [], "message": "No diary entries yet."}
 
         # Combine and sort by timestamp
         entries = []
@@ -5536,6 +5565,11 @@ def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):
                     "date": meta.get("date", ""),
                     "timestamp": meta.get("filed_at", ""),
                     "topic": meta.get("topic", ""),
+                    # Always present, not only in the agent-less mode: a
+                    # mixed listing is unusable if the reader cannot tell
+                    # which name to ask for next.
+                    "agent": meta.get("agent", ""),
+                    "wing": meta.get("wing", ""),
                     "content": doc,
                 }
             )
@@ -5544,14 +5578,85 @@ def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):
         entries = entries[:last_n]
 
         return {
-            "agent": agent_name,
+            "agent": agent_name or None,
+            "wing": wing or None,
             "entries": entries,
             "total": len(results["ids"]),
             "showing": len(entries),
+            "truncated": len(results["ids"]) >= _DIARY_SCAN_LIMIT,
         }
     except Exception:
         logger.exception("diary_read failed")
         return {"error": "Failed to read diary entries"}
+
+
+def tool_diary_agents(wing: str = ""):
+    """
+    List the agent names that have diary entries, with a count each.
+
+    The companion to an identity-less ``tool_diary_read`` (#501): the read
+    path keys on drawers, but choosing an ``agent_name`` still requires
+    knowing which ones exist. Hook-written entries are keyed on the
+    *harness* name rather than any configured identity, so the only
+    reliable way to learn the name is to ask what is present.
+
+    Scoped to one wing when ``wing`` is given, otherwise palace-wide.
+    Rows are sorted by entry count, descending, so the busiest writer is
+    first. Each row carries ``latest`` (the newest ``filed_at`` seen for
+    that agent) so a reader can tell an active writer from a dormant one.
+
+    Counts are a LOWER BOUND when ``truncated`` is true — the scan is
+    capped at ``_DIARY_SCAN_LIMIT`` because the daemon runs near a 2 GB
+    cgroup ceiling (palace-daemon#256) and an unbounded metadata sweep is
+    a memory hazard. Reporting a capped number as a total would be a
+    report that disagrees with reality, so the flag is part of the
+    contract rather than a detail.
+    """
+    try:
+        if wing:
+            wing = sanitize_name(wing)
+    except ValueError as e:
+        return {"error": str(e)}
+    col = _get_collection()
+    if not col:
+        return _collection_error_or_no_palace()
+
+    conditions = [{"room": "diary"}]
+    if wing:
+        conditions.insert(0, {"wing": wing})
+    where = conditions[0] if len(conditions) == 1 else {"$and": conditions}
+
+    try:
+        # Metadata only — the documents are the bulk of a diary drawer and
+        # nothing here reads them.
+        results = col.get(where=where, include=["metadatas"], limit=_DIARY_SCAN_LIMIT)
+        ids = results.get("ids") or []
+        counts: dict = {}
+        latest: dict = {}
+        for meta in results.get("metadatas") or []:
+            meta = _safe_meta(meta)
+            name = str(meta.get("agent") or "")
+            if not name:
+                continue
+            counts[name] = counts.get(name, 0) + 1
+            stamp = str(meta.get("filed_at") or meta.get("date") or "")
+            if stamp > latest.get(name, ""):
+                latest[name] = stamp
+        agents = [
+            {"agent": name, "entries": count, "latest": latest.get(name, "")}
+            for name, count in counts.items()
+        ]
+        # Count descending, then name so the order is stable for equal counts.
+        agents.sort(key=lambda row: (-row["entries"], row["agent"]))
+        return {
+            "wing": wing or None,
+            "agents": agents,
+            "scanned": len(ids),
+            "truncated": len(ids) >= _DIARY_SCAN_LIMIT,
+        }
+    except Exception:
+        logger.exception("diary_agents failed")
+        return {"error": "Failed to list diary agents"}
 
 
 def tool_hook_settings(silent_save: bool = None, desktop_toast: bool = None):
@@ -6974,7 +7079,7 @@ TOOLS = {
             "properties": {
                 "agent_name": {
                     "type": "string",
-                    "description": "Your name — each agent gets their own diary wing",
+                    "description": "Whose diary to read (optional). Omit to read every agent's entries in the diary room — use mempalace_diary_agents to see which names exist.",
                 },
                 "last_n": {
                     "type": "integer",
@@ -6982,12 +7087,29 @@ TOOLS = {
                 },
                 "wing": {
                     "type": "string",
-                    "description": "Wing to read diary entries from (optional). If omitted, reads from wing_{agent_name}.",
+                    "description": "Wing to read diary entries from (optional). If omitted, reads every wing in scope.",
                 },
             },
-            "required": ["agent_name"],
+            # agent_name is deliberately NOT required (#501): hook-written
+            # entries are keyed on the harness name, so a reader often
+            # cannot name the agent. Omit it to read the diary room itself.
+            "required": [],
         },
         "handler": tool_diary_read,
+    },
+    "mempalace_diary_agents": {
+        "description": "List which agents have diary entries, with a count and newest timestamp each. Use this to find the agent_name to pass to mempalace_diary_read — hook-written entries are keyed on the harness name, not on any configured identity.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "wing": {
+                    "type": "string",
+                    "description": "Limit to one wing (optional). If omitted, scans every wing.",
+                },
+            },
+            "required": [],
+        },
+        "handler": tool_diary_agents,
     },
     "mempalace_hook_settings": {
         "description": (

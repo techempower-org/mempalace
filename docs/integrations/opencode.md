@@ -194,7 +194,7 @@ A typical OpenCode turn produces a drawer like:
 
 ## Read-side recall
 
-OpenCode agents can call any of the 49 MCP tools the daemon exposes:
+OpenCode agents can call any of the 50 MCP tools the daemon exposes:
 
 - `mempalace_search` — semantic search across all drawers
 - `mempalace_list_wings` / `mempalace_list_rooms` / `mempalace_get_taxonomy` — palace navigation

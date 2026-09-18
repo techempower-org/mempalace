@@ -89,8 +89,21 @@ class Layer0:
             with open(self.path, "r") as f:
                 self._text = f.read().strip()
         else:
+            # Only rendered when identity.txt is absent, so the extra lines
+            # cost nothing in the configured case — and in the unconfigured
+            # case they are the whole point. #501: a session read "No
+            # identity configured", concluded the diary was unavailable, and
+            # then could not read entries that were sitting in the wing.
+            # Naming a missing file without naming its consequence is what
+            # made a true message misleading.
             self._text = (
-                "## L0 — IDENTITY\nNo identity configured. Create ~/.mempalace/identity.txt"
+                "## L0 — IDENTITY\n"
+                "No identity configured. Create ~/.mempalace/identity.txt to give "
+                "yourself a name and standing context.\n"
+                "It affects WRITES only — it is the author stamped on `diary write`. "
+                "Reads need no identity: `mempalace diary read --wing <wing>` lists "
+                "a wing's entries, and `mempalace diary agents` shows which authors "
+                "exist."
             )
 
         return self._text
