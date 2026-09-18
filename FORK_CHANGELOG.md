@@ -163,6 +163,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
+- **failure-shape index follow-up: overlap columns, record-set and markdownlint gates, schema README** (`HEAD` — pending resolution)
+  Six items queued during #531's review, one PR (Part of #524, #503).
+
+  **Harness** (`scripts/failure_shape_recall.py`): two token-overlap columns beside
+  each rank — the trigger's vocabulary against its `expected_slug`, and against the
+  record's `asked` + `answered` text (`|T ∩ G| / |T|` over stopword-stripped token
+  sets; `n/a` when the trigger has no tokens, never `0.0`). **Reported, never
+  subtracted**: a high overlap explains a hit, it does not discount one. Trusted only
+  after a two-way control: a trigger built from the slug's own words scores 0.50 /
+  1.00, a disjoint one scores 0.00 / 0.00, and the two arms differ. `--overlap-only`
+  computes the columns with no search and no corpus control, so the existing rows
+  could be characterised without touching the palace: B-blind shares slug vocabulary
+  (mean 0.23) more than A does (0.04) — consistent with B-blind having had the slug
+  list — and A shares `asked`/`answered` vocabulary (0.37) more than B-blind (0.16).
+  A characterisation, not a verdict. `docs/failure-shapes/README.md` is no longer
+  read as a record (it has no front matter and would have failed the set check).
+
+  **check-docs** gains two steps. Step 8 runs `--check-set-only`: the record set had
+  passed at every step of #531 — by hand — which stops being true the first time the
+  spec's runnable table is edited without the files. Step 9 runs markdownlint over
+  CI's own glob set, read from `.github/workflows/lint-docs.yml` so local and CI
+  cannot drift; it warns (never silently passes) when no runner is installed and
+  fails when one is present and red. Positive control: the new script run on the
+  `0b0c3487` tree reports the MD052 CI found there; on `42b33192` plus this PR it
+  lints 146 files clean.
+
+  **Spec**: the two bare "33 on record" echoes now say *seed* corpus, with the
+  shipped 31 named beside the first; §5 states the record file shape — `<slug>.md`,
+  YAML front matter, slug == filename stem, enforced by `--check-set-only`. The
+  earlier "as YAML" sentence had already been removed by #531; the spec at
+  `42b33192` names no extension at all, so this states one rather than fixing one.
+
+  **`docs/failure-shapes/README.md`**: the field list with types, the slug-equals-
+  filename rule and what enforces it, the provenance vocabulary and why partitions
+  are never pooled, and one line — do not wrap a value that already carries
+  backticks — with the seventeen-file incident that earned it.
+
+
 - **401/403 are 64 and 404 stays 2; every daemon-failure JSON carries error, code and source** (`HEAD` — pending resolution)
   Three issues, one defect at three layers: the transport discarded the HTTP
   status, so the renderers could not tell a refusal from an outage, so each
