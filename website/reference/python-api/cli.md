@@ -436,6 +436,34 @@ the failure mode that let the MCP bridge stay dead fleet-wide for days.
 def cmd_status(args)
 ```
 
+### `cmd_reconcile_docs`
+
+```python
+def cmd_reconcile_docs(args)
+```
+
+Queue a mine for every curated doc the palace has not seen (#529).
+
+The curated-docs hook is event-driven and therefore best-effort. Measured
+on the live hook before this verb was written, it misses a doc in at
+least five distinct ways: a worktree path its Bash matcher excludes; a
+worktree path its shell-glob matcher DOES match and which then dies on
+the palace host, which has no `.claude/worktrees` at all; a doc arriving
+by merge or pull, which produces no tool event; a glob token taken for a
+filename; and a path the command merely mentioned. Every one is invisible
+to a listener and obvious to a comparison against what is on disk.
+
+So this does not listen. It enumerates `CLAUDE.md` + `docs/**/*.md`,
+asks the palace what it recorded, and queues a background single-file
+projects-mode mine for anything newer or absent — the same payload
+`palace-doc-sync.sh` sends, through the same poster, so there is one
+wire format rather than two that drift.
+
+Undecidable files are reported and NOT queued. "No recorded mtime" is an
+absence of an answer, not a stale answer, and re-mining a whole wing on
+the strength of a missing field is how a reconciler becomes the thing
+that needs reconciling.
+
 ### `cmd_mined`
 
 ```python
