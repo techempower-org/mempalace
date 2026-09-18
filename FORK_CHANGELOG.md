@@ -271,6 +271,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **check-docs examines every mention of a PR, not just the first, and matches state words as words** (`HEAD` — pending resolution)
+  `scripts/check-docs.sh` step 4 did `grep … | head -1` per document, so only
+  the FIRST line mentioning a PR number contributed to that document's claimed
+  state. The check answered *"does the first mention agree?"* rather than *"do
+  all mentions agree?"*, and a drifted claim appearing after a correct one was
+  invisible.
+
+  Reproduced on the real repo before the fix: a stale open-state line for
+  #1377 (MERGED upstream), appended to the end of README.md, left check-docs
+  reporting `✓ all 245 PR references match upstream state`. The appended line
+  was confirmed to be inside the instrument's own match set first — a control
+  that is present but never looked at produces "did not fire" for the wrong
+  reason, which is indistinguishable from "no drift".
+
+  The control sentence is deliberately NOT quoted verbatim here. Quoting it
+  would re-supply a parseable claim about #1377 and make this very entry trip
+  the checker it documents — the `self-quoting-retraction` shape recorded in
+  the #503 spec, which is how the matcher fix in #511 went green, then warned
+  again once its own changelog entry landed. Verified: this file now reads as
+  a MERGED claim for #1377, which is what #1377 actually is.
+
+  Three defects, one scan:
+
+  - **Only the first line was read.** Now every matching line is, with the
+    multi-PR commentary skip applied per line rather than zeroing a whole
+    document's claims.
+  - **No right boundary.** The claim scan used `(#$n|/$n)`, so `#45`
+    matched `#452` and `/45` matched `/459efab`; the commentary scan
+    beside it used `[^0-9]`, so the two loops could read different lines and
+    reach a conclusion neither supported. One scan, one regex, anchored on a
+    non-digit or end of line.
+  - **State words matched as substrings.** "opencode", "openai-compat" and
+    "reopened" all contain "open" and were read as a claim that the PR is OPEN.
+    Latent while one line per document was examined; amplified the moment every
+    line is. Now matched as whole words.
+
+  Measured differentially against the whole repo with every PR stubbed MERGED:
+  7 findings before, 7 after — and **five different ones in each direction**.
+  Five false positives removed (#45 read off a line about `#452`; #56, #463,
+  #1567 from "OpenCode" / "openai-compat" / ".opencode/") and five real claims
+  found that had never been looked at (#23, #168, #665, #1087, #1094, each an
+  explicit `(OPEN)` or "stays open"). The unchanged total is the trap: a
+  reader checking whether the count moved would conclude nothing had.
+
+  Also removes both of the file's shellcheck errors (SC1087, `$n[` read as
+  array indexing) without adding any.
+
+  Known limit, asserted in a test rather than left implicit: when one clean
+  line claims the true state and another claims a different one, drift cannot
+  be told from history and the PR is skipped. `#1024` in FORK_CHANGELOG.md is
+  exactly that shape — "pushed to the open #1024 PR branch (squash-merged
+  upstream)" alongside an authoritative "(MERGED)" — and is correct
+  documentation of a merged PR. It is the only such pair in the repo.
+
+
 - **check-docs must not match a PR number against a commit-sha prefix** (`HEAD` — pending resolution)
   `scripts/check-docs.sh`'s PR-state step extracted candidate numbers as `#NNNN`
   but then matched them per-document as `(#$n|/$n)`. A PR number is also a valid
