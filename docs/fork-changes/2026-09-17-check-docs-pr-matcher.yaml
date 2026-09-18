@@ -1,0 +1,56 @@
+seq: 150
+id: check-docs-pr-matcher
+date: '2026-09-17'
+bucket: Fixed
+commit: HEAD
+area: Testing
+summary: check-docs must not match a PR number against a commit-sha prefix
+body: |
+  `scripts/check-docs.sh`'s PR-state step extracted candidate numbers as `#NNNN`
+  but then matched them per-document as `(#$n|/$n)`. A PR number is also a valid
+  commit-sha prefix, so `/459` matched `.../commit/459efab` — and the README line
+  carrying that sha reads *"purge / prune / mined share one **open**-and-refuse
+  sequence"*. Upstream `MemPalace/mempalace#459` is CLOSED, the substring test saw
+  that state word, and the checker reported drift against a document containing no
+  such reference at all (`grep -c '#459' README.md` → 0).
+
+  ⚠️ Note the line above: naming the number and the state word together is
+  deliberate. An earlier draft of this entry put them on separate lines and
+  **re-triggered the very warning it documents** — the checker reads the first
+  matching line, saw the quoted state word without the actual state, and warned.
+  2g cards this shape as *a retraction quotes its target*: documenting a
+  string-matched defect reintroduces the string. Keep the real state adjacent to
+  the reference.
+
+  The matcher now requires `#$n` or `/pull/$n`. `/pull/N` references are real in
+  these docs — `/pull/1000`, `/pull/1021` and others — so deleting the slash
+  alternative outright would have blinded the check on genuine URLs; narrowing it
+  is what keeps the function and drops the collision.
+
+  Twelve numbers currently referenced in the docs prefix a referenced sha (#22,
+  #45, #46, #47, #59, #63, #69, #82, #86, #167, #428, #459). Only #459 warned,
+  because only that line happened to carry a contradicting state word — so the
+  other eleven were latent, not absent. `STRICT_PR_STATE=1` promotes these
+  warnings to errors; anyone enabling it would have gone red on false positives
+  and most likely "corrected" accurate documentation.
+
+  Controls in both directions, because the obvious wrong fix here is to silence
+  the check rather than aim it. (a) The #459 warning disappears and the other
+  eleven collisions cannot fire. (b) A fixture claiming an OPEN state for upstream
+  #1000, which is MERGED, still warns — plus a negative control (same fixture
+  with no state word) proving that WARN is not a constant. The first version of
+  that harness reported BLIND for both arms and would have condemned a correct
+  change; the cause was a field delimiter colliding with the pattern syntax, and
+  the tell was that the arm reporting no warning contradicted the behaviour the
+  fix exists to remove.
+
+  Also records four instances in the #503 failure-shape spec and adds a
+  `direction` field (`false-confidence` | `false-alarm`) to its record schema:
+  the corpus is almost entirely false-confidence, so an index without the field
+  answers *"my check says the fix broke it"* with cards about distrusting green.
+  The seed count is re-derived from sources rather than from a summary line,
+  which is what produced the original 25/21 figure — 31 on record, 27 citable.
+tests: 'none (shell script + docs); both controls reproducible via scratch/refuted-claims-provenance/nebula-505b-matcher-control.sh'
+files:
+- scripts/check-docs.sh
+- docs/specs/2026-09-17-failure-shape-index.md
