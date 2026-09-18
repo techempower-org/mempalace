@@ -24,58 +24,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **30 failure-shape records as drawers, a recall harness, and a section 5 that runs** (`HEAD` — pending resolution)
-  The #503 spec described a slice and it was never built: `docs/failure-shapes/`
-  had 0 files, `scripts/failure_shape_recall.py` did not exist, and the falsifier
-  table's columns were `outcome | reading` — interpretations with no queries
-  behind them.
+- **check-docs step 8 — every merged fork PR must carry a fork-changes entry** (`HEAD` — pending resolution)
+  ``check-docs.sh`` verified render parity, sha resolution, sha ancestry and
+  upstream PR states, but never that a merged fork PR documented itself. #517
+  was green on every check with **no entry at all**, and nothing would have
+  surfaced it later — ``--next-seq`` and the renderers are happy with any
+  subset. The checker answered a narrower question than its name, which is
+  #516's twin and the failure-shape index's own class (#505).
 
-  **31 records, not 33.** The corpus counts 33 instances, but four of 2g-c6's
-  eight are counted and never described: #503 gives their total, not their
-  mechanisms, so they have no `asked`, no `answered`, and cannot be written
-  without inventing them. §25.6 holds two distinct mechanisms that the
-  section-unit count merged into one.
+  Step 8 lists squash-merge commits since a baseline by the trailing
+  ``(#NNN)`` every squash carries, and requires either a ``fork_pr: NNN``
+  entry under ``docs/fork-changes/`` or a reasoned line in
+  ``docs/fork-changes-no-entry.txt``. The baseline is ``6da87755``, the
+  commit that introduced the per-entry layout **and** the ``fork_pr`` field
+  (#480): before it the field did not exist, so "missing" would be meaningless
+  for the ~137 older entries. It reads ``git log`` only and never the GitHub
+  API — a docs check that needs the network is one that gets skipped.
 
-      33 counted  −  4 undescribed  +  1 (§25.6 split)  +  1 (added by review)  =  31
+  Warn-only by default so the residue can be worked; ``--strict`` fails. A
+  bare number in the allowlist is **refused**: an allowlist records WHY, or it
+  is a mute button and the next person cannot tell a deliberate omission from
+  an abandoned one.
 
-  The gap is stated in the spec rather than reconciled. Those four are real and
-  are retrievable by nothing, which is a fact about the corpus, not a rounding
-  error — and a count-based acceptance check would have passed at 33 files with
-  four invented ones.
+  The backlog was enumerated by hand before the step was written — 20 squash
+  commits since the baseline, 19 carrying ``fork_pr``, exactly one missing —
+  and the step reports exactly that set. The one is #495, the docs-tooling
+  sweep (``scripts/maintain-fork-changes.py``) that rewrites landed
+  ``commit: HEAD`` values across existing entries and adds no change of its
+  own: the producer this allowlist exists for, and the pair this check
+  consumes. A test verifies every allowlisted PR is genuinely missing an entry
+  and genuinely in range, so the allowlist cannot drift into a mute button.
 
-  The 31st arrived from review: `docstring-asserts-an-unimplemented-control`,
-  accepted by `oracle-issue-audit` with two instances — this PR's rename control
-  (a docstring asserting "a renamed file must fail" over code comparing slug sets,
-  which are invariant under rename) and PART 26.5 (`_fail_daemon`'s docstring
-  naming three commands that call it zero times, scoping #499 to 4 verbs when 16
-  were affected). Its instrument is prose adjacent to code, trusted because
-  proximity reads as authority. Partition B-TBD accordingly, not blind: Oracle
-  authored one of its instances.
-
-  Each record carries `slug`, `shape`, `asked`, `instrument`, `answered`,
-  `control_passed`, `direction`, `direction_basis`, `provenance` and
-  `instances` in front matter, so it mines as one drawer into wing
-  `memorypalace`. Content is parsed out of the spec's own tables rather than
-  retyped, which caught its own bug: unescaping `\|` *before* splitting the
-  markdown row turned an escaped pipe into a column separator and shifted one
-  record's `direction` into its `answered` field.
-
-  The harness reads only, reports recall@3 and first-hit rank, and prints **no
-  aggregate across partitions** — pooling an authored partition with an
-  independent one reports the author's recall as a reader's. A = 4 2g-sourced
-  (this author), B-blind = 6 written blind by `oracle-issue-audit`, B-TBD = 20
-  awaiting a lane that has never read the spec. Per Oracle's ruling, independence
-  is checked against a corpus's sources, not its authors.
-
-  Its set check is a two-way diff read from front matter rather than filenames,
-  and it compares each slug to its own filename. The second half was missing at
-  first, and the pre-registered rename control is what found it: a renamed file
-  passed while the docstring asserted that renames must fail. The docstring
-  described the design intent; the code checked something narrower — the shape
-  this corpus exists to index, found in the instrument built to measure it.
-
-  *Tests:* 5 (test_failure_shape_recall.py: refusal on a silent search, refusal names the slug, the guard can PASS, a hit for another record does not satisfy it, control phrase is usable). Plus four set-check controls re-run by hand — removed slug, renamed file, edited front-matter slug all exit 1; unmodified tree exits 0. Live read-only end-to-end: refusal fires on the real palace (exit 2) and --force-score prints its banner.
-  *Files:* `docs/failure-shapes/`, `scripts/failure_shape_recall.py`, `docs/specs/2026-09-17-failure-shape-index.md`
+  *Tests:* 8 (test_check_docs_entry_coverage — fixture git repos under the project's tmp/)
+  *Files:* `scripts/check-entry-coverage.sh`, `scripts/check-docs.sh`, `docs/fork-changes-no-entry.txt`
 
 
 ## [2026-09-17]
