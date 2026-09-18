@@ -50,3 +50,4 @@ files:
 - docs/failure-shapes/
 - scripts/failure_shape_recall.py
 - docs/specs/2026-09-17-failure-shape-index.md
+fork_pr: 531
