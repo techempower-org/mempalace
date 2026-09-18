@@ -374,7 +374,7 @@ def _call_daemon_rest(path: str, params: dict | None = None) -> dict:
 class _DaemonHTTPResult(NamedTuple):
     """One daemon HTTP answer, with the status kept rather than collapsed.
 
-    ``_get_daemon_rest`` returns ``None`` for 404, 401 and 403 alike, which
+    ``_call_daemon_rest`` returns ``None`` for 404, 401 and 403 alike, which
     is right for a caller that falls back to MCP but wrong for one that has
     to tell the user WHY. A missing route means "deploy a newer daemon"; a
     401 means "your key is wrong". Reporting the second as the first sends
@@ -383,6 +383,17 @@ class _DaemonHTTPResult(NamedTuple):
 
     ``code`` is 0 only when no HTTP exchange happened (transport failure),
     and that case raises ``DaemonError`` instead of returning.
+
+    Relationship to #509, which landed between this branch's review and its
+    rebase: that PR added ``DaemonRequestError(status=..., detail=...)`` and
+    ``_daemon_error_detail``, solving the "a 4xx must carry the daemon's own
+    message" half of this problem in the shared layer — and this helper now
+    calls ``_daemon_error_detail`` rather than re-parsing the body. What
+    #509 deliberately kept is the 404/401/403 collapse to ``None``, because
+    its callers fall back to MCP. These two verbs cannot: there is no local
+    path, so they must tell the operator which of the three happened. That
+    residual difference is the only reason this helper still exists, and it
+    is the thing to check before consolidating the two.
     """
 
     code: int
@@ -416,13 +427,13 @@ def _window_daemon_get(path: str, params: dict | None = None) -> _DaemonHTTPResu
             body = json.loads(resp.read().decode("utf-8", errors="replace"))
             return _DaemonHTTPResult(code=resp.status, payload=body, detail="")
     except urllib.error.HTTPError as e:
-        detail = ""
-        try:
-            raw = e.read().decode("utf-8", errors="replace")
-            parsed = json.loads(raw)
-            detail = str(parsed.get("detail") or parsed.get("error") or raw)[:400]
-        except Exception:  # noqa: BLE001 - a non-JSON error body is still an error
-            detail = str(e.reason)
+        # Reuse #509's extractor rather than parsing the body again. It
+        # handles FastAPI's dict-shaped detail — the room validator answers
+        # {"error": ..., "valid_rooms": [...]} — and renders the options
+        # inline. An inline json.loads here would stringify that dict and
+        # throw away exactly the guidance the operator needs, which is the
+        # defect #499 was filed about.
+        detail = _daemon_error_detail(e) or str(e.reason)
         return _DaemonHTTPResult(code=e.code, payload=None, detail=detail)
     except (urllib.error.URLError, ConnectionError, OSError) as e:
         raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e

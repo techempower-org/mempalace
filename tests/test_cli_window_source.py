@@ -433,3 +433,47 @@ def test_the_real_cli_refuses_against_a_closed_port(argv, expect_in_err, tmp_pat
     )
     assert proc.returncode == 2, f"rc={proc.returncode} out={proc.stdout!r} err={proc.stderr!r}"
     assert expect_in_err in (proc.stdout + proc.stderr).lower()
+
+
+# ---------------------------------------------------------------------------
+# The daemon's dict-shaped detail must survive to the operator
+# ---------------------------------------------------------------------------
+
+
+def test_a_dict_shaped_detail_renders_its_options_not_a_python_repr(monkeypatch, capsys):
+    """#509's room validator answers a DICT, and that is the useful part.
+
+    FastAPI's detail can be a string or a dict; the room validator uses
+    ``{"error": ..., "valid_rooms": [...]}``, which is exactly the guidance
+    the operator needs. An inline ``json.loads`` in this verb would
+    stringify that dict — printing a Python repr instead of the options —
+    which is the defect #499 was filed about, reintroduced one layer down.
+    This pins the reuse of ``_daemon_error_detail``.
+    """
+    import io
+    import urllib.error
+
+    monkeypatch.setenv("PALACE_DAEMON_URL", "http://127.0.0.1:9")
+    body = json.dumps(
+        {
+            "detail": {
+                "error": "room 'nope' is not in the canonical set",
+                "valid_rooms": ["diary", "sessions"],
+            }
+        }
+    ).encode()
+
+    def boom(req, timeout=None):
+        raise urllib.error.HTTPError(
+            req.full_url, 422, "Unprocessable Entity", {}, io.BytesIO(body)
+        )
+
+    monkeypatch.setattr(cli, "urlopen_with_wake", boom)
+
+    assert _run(cli.cmd_window, _args(room="nope")) == 64
+    err = capsys.readouterr().err
+    assert "not in the canonical set" in err
+    assert "diary" in err and "sessions" in err, (
+        f"the valid options must reach the operator, not a dict repr: {err!r}"
+    )
+    assert "{'error'" not in err, f"a Python repr leaked instead of the message: {err!r}"
