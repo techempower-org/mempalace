@@ -1,0 +1,65 @@
+seq: 161
+id: search-curated-layer-depth
+date: '2026-09-18'
+bucket: Fixed
+commit: HEAD
+area: Search
+summary: --limit 3 reaches the curated layer — conditional deep fetch plus one reserved, marked slot
+body: |
+  In a wing with ~941K transcript drawers ``mempalace search --limit 3``
+  returned three session transcripts and the banner said no curated document
+  matched, so the reader concluded the corpus held nothing. The first curated
+  document ranks 14-27 (#526).
+
+  **Two causes, both measured on production before the fix was written.**
+
+  The requested limit sizes the hybrid *fusion candidate pool*, not just the
+  cut: ``limit=3`` and ``limit=30`` return different top-3 drawers for the
+  same query, while the bm25 route is stable across limits, and repeated
+  identical calls are deterministic so this is not drift. At ``--limit 3`` the
+  curated document is not ranked below the cut — it is never a candidate.
+  #477's widen already fired here, but computed ``min(n*2, 40)`` = **six** at
+  limit 3 while the curated layer begins at 14: it fired and landed short.
+
+  And #477's ordering cannot lift it. That ordering is bounded to
+  near-duplicates by design, and two review rounds hardened the bound. Measured
+  similarity between the first curated hit and the transcripts above it:
+  0.0/0.0/0.0 on one query and 0.008 on another, against a 0.35 threshold.
+  #477 fixes *a transcript that quotes the card*; this is *the same topic with
+  no shared 3-grams*. A re-rank is the wrong instrument.
+
+  The fix is therefore a conditional deeper fetch to ``max(limit, 30)`` — a
+  floor, not a multiple — fired only when the shallow result has no curated
+  hit, and then **one reserved slot**, the last of the N, for the top curated
+  hit in the ranker's own order. The promotion is marked on both channels:
+  ``promoted: true`` and ``promoted_from_rank`` on the hit in ``--json``,
+  ``⟨curated, promoted from rank K⟩`` in prose, and a top-level
+  ``curated_first_rank`` carrying the rank in the deep fetch *before*
+  reordering — after reordering it would be 1 almost every time and say nothing
+  about corpus depth. A silent promotion would be #526's own error in reverse.
+
+  Conditional because depth is not free: a limit-30 hybrid call on wing 2g
+  measured 19-22 s (#533). Measured after, interleaved, n=2 per arm: base
+  14.49/14.46 s vs head 14.33/15.92 s on the hybrid-fallback query, and
+  0.18-0.26 vs 0.16-0.24 s on the bm25 route — no measurable regression,
+  because the cost is the hybrid call itself rather than the row count.
+
+  Acceptance on production, wing 2g, ``--limit 3``, five pre-registered
+  queries, **as measured 2026-09-18 ~07:50 PDT**: four returned a curated hit
+  where the base returned zero (K = 15, 27, 15, 9 promoted into the last slot);
+  the fifth found no curated document within depth 30 on the bm25 route it
+  takes, and reported ``curated_first_rank: null`` rather than inventing one.
+  The K values are a snapshot: wing 2g is re-mined continuously and a
+  re-run hours later read two of the queries at 0 hits on both arms and the
+  fifth at K=8, with no code change. The durable check is the invariant
+  above — a curated hit within the deep fetch is always visible at the limit,
+  always marked, and ``curated_first_rank`` is the pre-reorder rank — not the
+  numbers.
+
+  The marker is produced once (``_promotion_tag``) and rendered by every prose
+  renderer — ``table`` (default), ``full`` and ``compact`` — each under its own
+  test. The first cut marked ``compact`` only, so the default view shipped the
+  very silent promotion the slot exists to avoid (Oracle PART 44 on #534).
+tests: "18 new (test_search_depth: depth floor, conditional trigger, curated_first_rank pre-reorder + null, reservation last-slot/marking/edge cases, prose mark per renderer: table, full, compact, plus a ranked-not-promoted negative); 3 #477 tests updated to the new contract"
+fork_pr: 534
+files: [mempalace/cli.py]

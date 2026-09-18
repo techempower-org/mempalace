@@ -857,7 +857,10 @@ def _print_hit_table(index: int, hit: dict, *, full: bool, use_color: bool) -> N
     sim = hit.get("similarity")
     bm25 = hit.get("bm25_score")
 
-    print(f"  [{index}] {wing} / {room}")
+    # The reserved slot is marked in every prose renderer, not only ``compact``
+    # (#526, review finding on #534): the default view shipping an unmarked promotion is
+    # the silent-promotion failure this feature exists to prevent.
+    print(f"  [{index}] {wing} / {room}{_promotion_tag(hit)}")
 
     bar = _relevance_bar(sim)
     if bar:
@@ -895,6 +898,18 @@ def _print_hit_table(index: int, hit: dict, *, full: bool, use_color: bool) -> N
     print(f"  {'─' * 56}")
 
 
+def _promotion_tag(hit: dict) -> str:
+    """``⟨curated, promoted from rank K⟩`` for a hit reserved into its slot, else ``""``.
+
+    One producer for the prose marker, called by every renderer (``table`` and
+    ``full`` via :func:`_print_hit_table`, ``compact`` via :func:`_provenance_tag`)
+    so no renderer can be the one that shows a promotion as an ordinary rank (#526).
+    """
+    if hit.get("promoted"):
+        return f" ⟨curated, promoted from rank {hit.get('promoted_from_rank')}⟩"
+    return ""
+
+
 def _provenance_tag(hit: dict) -> str:
     """Short source-shape tag for ``--format compact`` (empty when unremarkable).
 
@@ -911,6 +926,10 @@ def _provenance_tag(hit: dict) -> str:
     field: deciding it costs an ``os.stat`` per hit, and every path that
     produces hits already stamps it.
     """
+    promoted = _promotion_tag(hit)
+    if promoted:
+        # Reserved into this slot rather than ranked into it (#526).
+        return promoted
     kind = hit.get("source_kind") or source_kind(hit)
     flags = []
     if kind == "transcript":
@@ -2841,31 +2860,87 @@ def _resolve_search_limit(args) -> int:
 # truncated; when a curated hit is already present — the common case — no
 # extra call happens at all. Bounded deliberately: this wave is cutting
 # daemon load, not adding to it.
-_WIDEN_FACTOR = 2
-_WIDEN_CAP = 40
+# How deep the conditional second fetch goes. #477 widened to
+# ``min(n_results * 2, 40)``, which is SIX at ``--limit 3`` — and in a wing with
+# ~941K transcript drawers the curated layer begins at rank 14-27, so that widen
+# fired and landed short (#526). The floor is absolute, not a multiple.
+#
+# It stays CONDITIONAL because the depth is not free: a limit-30 hybrid call on
+# wing 2g measured 19-22 s (#533), so an unconditional deep fetch would put a
+# ~20 s floor under every interactive search on a large wing.
+_DEEP_FETCH_DEPTH = 30
+
+# What counts as a curated document. ``file`` and ``memory`` both mean "something
+# a human maintains", matching ``no_curated_source`` and ``prefer_curated``'s
+# kind ranking. #526 says "source_kind: file"; using only that would let a
+# memory-only result trigger the deep fetch (``no_curated_source`` counts it)
+# while reporting ``curated_first_rank: null``, so the trigger and the reported
+# rank would disagree about the same result set.
+_CURATED_KINDS = ("file", "memory")
 
 
-def _widen_when_nothing_curated(hits: list, n_results: int, fetch) -> list:
-    """One wider fetch when no curated document matched; else ``hits`` as-is.
+def _is_curated_hit(hit) -> bool:
+    return isinstance(hit, dict) and hit.get("source_kind") in _CURATED_KINDS
 
-    ``fetch(limit)`` returns a fresh, already-normalised hit list (or None).
-    The widened list is annotated before it is returned so the caller can
-    rank it. A failed or unhelpful second call degrades to the original
-    hits — the extra fetch is an optimisation, never a dependency.
+
+def _first_curated_rank(hits) -> int | None:
+    """1-based rank of the first curated hit, or None. Caller must pass the list
+    in the RANKER's order — this is a statement about corpus depth, so taking it
+    after ``prefer_curated`` would report 1 almost every time and say nothing."""
+    if not isinstance(hits, list):
+        return None
+    for i, hit in enumerate(hits, 1):
+        if _is_curated_hit(hit):
+            return i
+    return None
+
+
+def _deep_fetch_when_nothing_curated(hits: list, n_results: int, fetch):
+    """``(hits_to_rank, curated_first_rank)`` — one deeper fetch when needed.
+
+    Fires only when the shallow result contains no curated document at all. The
+    deeper list is annotated before return so the caller can rank it. A failed
+    or unhelpful second call degrades to the shallow hits: the extra fetch is an
+    optimisation, never a dependency.
     """
     if not no_curated_source(hits):
-        return hits
-    widened_limit = min(n_results * _WIDEN_FACTOR, _WIDEN_CAP)
-    if widened_limit <= n_results:
-        return hits
+        return hits, _first_curated_rank(hits)
+    depth = max(n_results, _DEEP_FETCH_DEPTH)
+    if depth <= len(hits):
+        return hits, _first_curated_rank(hits)
     try:
-        wider = fetch(widened_limit)
+        deeper = fetch(depth)
     except DaemonError:
-        return hits
-    if not isinstance(wider, list) or len(wider) <= len(hits):
-        return hits
-    annotate(wider)
-    return wider
+        return hits, _first_curated_rank(hits)
+    if not isinstance(deeper, list) or len(deeper) <= len(hits):
+        return hits, _first_curated_rank(hits)
+    annotate(deeper)
+    return deeper, _first_curated_rank(deeper)
+
+
+def _truncate_reserving_curated(ordered: list, n_results: int, curated_hit, rank):
+    """Truncate to ``n_results``, reserving the LAST slot for a curated hit.
+
+    Only when the top N would otherwise contain none and the deeper fetch found
+    one. #477's near-duplicate ordering cannot do this job: it lifts a curated
+    document over transcripts that QUOTE it, and here the document and the
+    transcripts above it share no 3-grams at all (measured: similarity 0.0 and
+    0.008 against a 0.35 threshold). Same topic, different words — a different
+    defect needing a reserved slot rather than a re-rank.
+
+    The promotion is MARKED on the returned hit. A silent one would be #526's
+    own error in reverse: the reader could not tell "ranked here" from
+    "reserved here".
+    """
+    top = list(ordered[:n_results])
+    if curated_hit is None or rank is None:
+        return top
+    if any(_is_curated_hit(h) for h in top):
+        return top
+    promoted = dict(curated_hit)
+    promoted["promoted"] = True
+    promoted["promoted_from_rank"] = rank
+    return top[: max(0, n_results - 1)] + [promoted]
 
 
 def _fast_hits(query: str, limit: int, wing: str = None) -> list | None:
@@ -2902,11 +2977,17 @@ def _daemon_search_fast(query: str, n_results: int, wing: str = None) -> dict | 
     if hits is None:
         return None
     annotate(hits)
-    hits = _widen_when_nothing_curated(
+    hits, curated_rank = _deep_fetch_when_nothing_curated(
         hits, n_results, lambda limit: _fast_hits(query, limit, wing)
     )
+    curated_hit = hits[curated_rank - 1] if curated_rank else None
     prefer_curated(hits)
-    return {"results": hits[:n_results], "query": query, "source": "bm25-fast"}
+    return {
+        "results": _truncate_reserving_curated(hits, n_results, curated_hit, curated_rank),
+        "query": query,
+        "source": "bm25-fast",
+        "curated_first_rank": curated_rank,
+    }
 
 
 def _daemon_search_hybrid(
@@ -2931,9 +3012,11 @@ def _daemon_search_hybrid(
             wider = _post_daemon_rest("/search/hybrid", wider_body)
             return (wider or {}).get("results")
 
-        hits = _widen_when_nothing_curated(hits, n_results, _refetch)
+        hits, curated_rank = _deep_fetch_when_nothing_curated(hits, n_results, _refetch)
+        curated_hit = hits[curated_rank - 1] if curated_rank else None
         prefer_curated(hits)
-        data["results"] = hits[:n_results]
+        data["results"] = _truncate_reserving_curated(hits, n_results, curated_hit, curated_rank)
+        data["curated_first_rank"] = curated_rank
     return data
 
 

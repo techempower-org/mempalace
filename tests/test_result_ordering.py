@@ -362,14 +362,14 @@ class TestStabilisationCap:
     cap). Raised to 32, which measured zero non-fixed-points at that width."""
 
     def test_cap_is_high_enough_for_the_widest_window_we_fetch(self):
+        from mempalace.cli import _DEEP_FETCH_DEPTH
         from mempalace.result_ordering import _MAX_STABILISE_PASSES
-        from mempalace.cli import _WIDEN_CAP
 
         # 32 still left 2/600 non-fixed-points on a dense generator at n=40;
         # 48 measured zero, at identical cost (the loop exits as soon as a
         # pass moves nothing). Pinned so a future trim re-measures first.
         assert _MAX_STABILISE_PASSES >= 48, (
-            f"cap must clear the densest window the widen can produce (_WIDEN_CAP={_WIDEN_CAP})"
+            f"cap must clear the densest window the widen can produce (_DEEP_FETCH_DEPTH={_DEEP_FETCH_DEPTH})"
         )
 
     def test_warns_when_the_cap_is_exhausted(self, caplog, monkeypatch):
