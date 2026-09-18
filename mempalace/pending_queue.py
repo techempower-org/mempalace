@@ -144,6 +144,47 @@ def _is_legacy_dir_request(request: dict) -> bool:
     return "/.claude/projects/" in target
 
 
+def peek(directory: Optional[Path] = None) -> list:
+    """Every request a :func:`replay` would POST, without touching the queue.
+
+    Read-only on purpose and by construction: ``replay`` claims each file by
+    renaming it before it reads a line, so using it with a no-op ``post_fn``
+    to preview a drain would still mutate the queue — a dry run that is not
+    dry.
+
+    It reproduces replay's filter chain rather than counting lines, because
+    the two must agree. Replay de-duplicates per file, skips unparseable
+    lines, and DROPS legacy whole-directory requests without posting them
+    (the multi-hour lock-holder of #414/#426). A preview over raw lines would
+    promise twelve and post nine — the same "report disagrees with what
+    happened" defect ``pending drain`` was added to remove (#498).
+
+    Not deadline-aware: a plan describes the whole queue, while a real sweep
+    may stop early. That difference is one-sided and safe — the plan can
+    over-state what a time-boxed run achieves, never under-state what an
+    unbounded one will touch.
+    """
+    base = directory if directory is not None else PENDING_DIR
+    if not base.is_dir():
+        return []
+    planned: list = []
+    for path in sorted(base.glob("*.jsonl")):
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw_lines = [line.rstrip("\n") for line in f if line.strip()]
+        except OSError:
+            continue
+        for line in _dedupe(raw_lines):
+            try:
+                request = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if _is_legacy_dir_request(request):
+                continue
+            planned.append(request)
+    return planned
+
+
 def replay(
     post_fn: Callable[[dict], bool],
     *,

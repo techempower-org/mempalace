@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -214,23 +215,39 @@ def test_replay_processes_files_in_date_order(queue_dir):
 
 
 # ---- CLI integration --------------------------------------------------------
+#
+# These guard the DRAIN mechanics (#456's background flag, the exit code, the
+# measured lock-starvation incident). #498 moved that body from `cmd_replay`
+# to `cmd_pending_drain` and put a `--yes` guard in front of it, so they call
+# the verb the behaviour now lives in; `cmd_replay` is a thin warning alias
+# covered in `test_cli_pending_drain.py`. Two contract changes, both
+# deliberate: a drain needs `--yes`, and every path exits rather than
+# returning (`main` discards handler return values, so `return 1` never
+# reached the shell).
 
 
-def test_cmd_replay_no_daemon_short_circuits(monkeypatch, capsys):
-    """`mempalace replay` without PALACE_DAEMON_URL is a no-op (no transmit)."""
+def _drain_args(**overrides):
+    """argparse.Namespace as the parser builds it for `pending drain`."""
+    defaults = {"yes": True, "json": False, "quiet": False, "pending_action": "drain"}
+    defaults.update(overrides)
+    return argparse.Namespace(**defaults)
+
+
+def test_cmd_pending_drain_no_daemon_short_circuits(monkeypatch, capsys):
+    """Without PALACE_DAEMON_URL a drain is a no-op (no transmit)."""
     from mempalace import cli
 
     monkeypatch.delenv("PALACE_DAEMON_URL", raising=False)
     monkeypatch.setattr(cli, "_daemon_strict", lambda: False)
 
-    rc = cli.cmd_replay(object())
-    assert rc == 0
-    captured = capsys.readouterr()
-    assert "nothing to do" in captured.err
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_pending_drain(_drain_args())
+    assert exc.value.code == 0
+    assert "nothing to do" in capsys.readouterr().err
 
 
-def test_cmd_replay_drains_queue(monkeypatch, capsys, tmp_path):
-    """`mempalace replay` drains the queue when daemon is reachable."""
+def test_cmd_pending_drain_drains_queue(monkeypatch, capsys, tmp_path):
+    """With `--yes`, a drain posts every queued request."""
     from mempalace import cli, pending_queue as pq
 
     monkeypatch.setattr(pq, "PENDING_DIR", tmp_path / "pending")
@@ -245,16 +262,21 @@ def test_cmd_replay_drains_queue(monkeypatch, capsys, tmp_path):
     pq.enqueue({"dir": "/a", "wing": "wing_a", "mode": "convos"})
     pq.enqueue({"dir": "/b", "wing": "wing_b", "mode": "projects"})
 
-    rc = cli.cmd_replay(object())
-    assert rc == 0
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_pending_drain(_drain_args())
+    assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "attempted=2" in out
     assert "succeeded=2" in out
     assert {p["dir"] for p in posted} == {"/a", "/b"}
 
 
-def test_cmd_replay_returns_1_on_partial_failure(monkeypatch, capsys, tmp_path):
-    """If any request fails to drain, cmd_replay exits 1 so cron can alert."""
+def test_cmd_pending_drain_exits_1_on_partial_failure(monkeypatch, tmp_path):
+    """If any request fails to drain, the shell sees 1 so cron can alert.
+
+    This used to `return 1`, which `main` discarded — the command reported a
+    failure on stdout and exited 0. It exits now.
+    """
     from mempalace import cli, pending_queue as pq
 
     monkeypatch.setattr(pq, "PENDING_DIR", tmp_path / "pending")
@@ -267,12 +289,13 @@ def test_cmd_replay_returns_1_on_partial_failure(monkeypatch, capsys, tmp_path):
     pq.enqueue({"dir": "/ok", "wing": "w", "mode": "convos"})
     pq.enqueue({"dir": "/fail", "wing": "w", "mode": "convos"})
 
-    rc = cli.cmd_replay(object())
-    assert rc == 1
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_pending_drain(_drain_args())
+    assert exc.value.code == 1
 
 
-def test_cmd_replay_requests_background(monkeypatch, tmp_path):
-    """Replay must ask the daemon to QUEUE each mine, not run it inline (#456)."""
+def test_cmd_pending_drain_requests_background(monkeypatch, tmp_path):
+    """A drain must ask the daemon to QUEUE each mine, not run it inline (#456)."""
     from mempalace import cli, pending_queue as pq
 
     monkeypatch.setattr(pq, "PENDING_DIR", tmp_path / "pending")
@@ -286,11 +309,13 @@ def test_cmd_replay_requests_background(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "_post_daemon_mine_cli", fake_post)
     pq.enqueue({"dir": "/a", "wing": "wing_a", "mode": "convos"})
 
-    assert cli.cmd_replay(object()) == 0
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_pending_drain(_drain_args())
+    assert exc.value.code == 0
     assert seen == [True]
 
 
-def test_cmd_replay_drains_against_a_daemon_that_only_answers_background(
+def test_cmd_pending_drain_against_a_daemon_that_only_answers_background(
     monkeypatch, tmp_path, capsys
 ):
     """The measured incident, as a test.
@@ -335,9 +360,10 @@ def test_cmd_replay_drains_against_a_daemon_that_only_answers_background(
         pq.enqueue({"dir": f"/proj/{i}", "wing": f"wing_{i}", "mode": "convos"})
 
     with patch("urllib.request.urlopen", side_effect=fake_urlopen):
-        rc = cli.cmd_replay(object())
+        with pytest.raises(SystemExit) as exc:
+            cli.cmd_pending_drain(_drain_args())
 
-    assert rc == 0
+    assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "attempted=3" in out
     assert "succeeded=3" in out
