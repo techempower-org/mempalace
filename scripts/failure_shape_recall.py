@@ -124,6 +124,43 @@ def search(trigger: str, wing: str, limit: int) -> list:
     return data.get("results", data if isinstance(data, list) else [])
 
 
+def control_record() -> tuple:
+    """Pick one record deterministically and return (slug, a verbatim phrase from it).
+
+    The phrase is the record's own `answered` text, which appears in the body verbatim.
+    Querying it is a positive control on the CORPUS: if a record's own words cannot be
+    retrieved, no arrival-phrasing score below is interpretable.
+    """
+    for path in sorted(RECORDS.glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        slug = _front_matter_slug(path)
+        marker = "**Actually answered:** "
+        for line in text.splitlines():
+            if line.startswith(marker):
+                phrase = line[len(marker) :].strip()
+                if slug and len(phrase) >= 20:
+                    return slug, phrase
+    return None, None
+
+
+def corpus_is_indexed(wing: str, limit: int, search_fn=None) -> tuple:
+    """Refuse to score a corpus that is not in the index yet.
+
+    An unindexed corpus makes every partition read recall@3 = 0, which lands exactly on
+    the falsifier row "baseline low and unchanged" and reads as a clean refutation of the
+    idea. The honest answer is "the drawers are not there". Asked: is this retrievable by
+    arrival phrasing? Answered: is it in the index at all?
+    """
+    search_fn = search_fn or search
+    slug, phrase = control_record()
+    if not slug:
+        return False, "corpus not indexed: no record with a usable verbatim phrase"
+    hits = search_fn(phrase, wing, limit)
+    if rank_of(hits, slug) is None:
+        return False, f"corpus not indexed: verbatim text of {slug} not retrievable"
+    return True, f"corpus control ok: verbatim text of {slug} retrievable"
+
+
 def rank_of(hits: list, slug: str):
     """1-based rank of the first hit naming this slug, else None."""
     for i, h in enumerate(hits, 1):
@@ -141,6 +178,11 @@ def main(argv=None) -> int:
     ap.add_argument("--wing", default="memorypalace")
     ap.add_argument("--limit", type=int, default=30)
     ap.add_argument("--check-set-only", action="store_true", help="run the slug set diff and exit")
+    ap.add_argument(
+        "--force-score",
+        action="store_true",
+        help="score even if the corpus control fails; the refusal reason is printed above the table",
+    )
     args = ap.parse_args(argv)
 
     rc = check_set()
@@ -148,6 +190,21 @@ def main(argv=None) -> int:
         return rc
     if not args.triggers:
         ap.error("--triggers is required unless --check-set-only")
+
+    indexed, reason = corpus_is_indexed(args.wing, args.limit)
+    if not indexed and not args.force_score:
+        print(f"\nREFUSING TO SCORE — {reason}", file=sys.stderr)
+        print(
+            "Every partition would read recall@3 = 0 and look like a refutation. "
+            "Re-run once the drawers are indexed, or pass --force-score.",
+            file=sys.stderr,
+        )
+        return 2
+    if not indexed:
+        print(f"\n!! SCORING ANYWAY (--force-score) — {reason}")
+        print("!! The numbers below measure indexing, not retrievability. Do not cite them.")
+    else:
+        print(f"\n{reason}")
 
     rows = list(csv.DictReader(args.triggers.open(encoding="utf-8")))
     parts: dict = {}
