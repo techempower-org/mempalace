@@ -65,7 +65,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   described the design intent; the code checked something narrower — the shape
   this corpus exists to index, found in the instrument built to measure it.
 
-  *Tests:* none (docs + read-only script); three controls re-run after the fix — removed slug fails, renamed file fails, edited front-matter slug fails, unmodified tree passes; --check-set-only exit 0
+  *Tests:* 5 (test_failure_shape_recall.py: refusal on a silent search, refusal names the slug, the guard can PASS, a hit for another record does not satisfy it, control phrase is usable). Plus four set-check controls re-run by hand — removed slug, renamed file, edited front-matter slug all exit 1; unmodified tree exits 0. Live read-only end-to-end: refusal fires on the real palace (exit 2) and --force-score prints its banner.
   *Files:* `docs/failure-shapes/`, `scripts/failure_shape_recall.py`, `docs/specs/2026-09-17-failure-shape-index.md`
 
 
