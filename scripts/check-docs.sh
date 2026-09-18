@@ -21,6 +21,14 @@
 #      entry (fork_pr:) or a reasoned line in docs/fork-changes-no-entry.txt
 #      (#519). Warn-only unless --strict; delegates to
 #      scripts/check-entry-coverage.sh, which is also runnable on its own.
+#   9. The failure-shape record set (docs/failure-shapes/*.md) equals the
+#      spec's runnable table both ways and every filename matches its own
+#      slug — `scripts/failure_shape_recall.py --check-set-only`. Until now
+#      this ran only by hand.
+#  10. markdownlint over CI's glob set, read from .github/workflows/
+#      lint-docs.yml so local and CI cannot drift. Warns (does not pass)
+#      when no markdownlint-cli2 runner is installed. A lint that runs only
+#      in CI is a check nobody ran (#531: MD052 reached CI on a green tree).
 #
 # Exit codes:
 #   0 — clean
@@ -65,7 +73,7 @@ failures=0
 # re-derive it. The count is reported here for whoever is looking; it is not a
 # gate, because there is no longer a literal that can go stale. A literal that
 # nothing can contradict is the only kind worth keeping.
-step "1/8  test count (derived)"
+step "1/10  test count (derived)"
 readme_count=$(grep -oE '[0-9]+ tests pass on `main`' README.md | grep -oE '^[0-9]+' || echo "")
 if false; then
     :
@@ -112,7 +120,7 @@ else
 fi
 
 # ── 2. commit hash references ────────────────────────────────────────────
-step "2/8  commit hashes referenced in docs resolve"
+step "2/10  commit hashes referenced in docs resolve"
 docs=(README.md CLAUDE.md FORK_CHANGELOG.md)
 # Strip cross-repo URLs first so we only check hashes that should resolve
 # in *this* fork. Pattern: anything inside (https://github.com/<other>/<repo>/commit/HASH)
@@ -161,9 +169,9 @@ for arg in "$@"; do
     [ "$arg" = "--strict-resolved" ] && strict_resolved=1
 done
 if (( strict_resolved )); then
-    step "2b/7 fork-change entry commits are ancestors of HEAD (STRICT: no placeholders)"
+    step "2b/10 fork-change entry commits are ancestors of HEAD (STRICT: no placeholders)"
 else
-    step "2b/7 fork-change entry commits are ancestors of HEAD"
+    step "2b/10 fork-change entry commits are ancestors of HEAD"
 fi
 py_entries="$REPO_ROOT/.venv/bin/python"
 [ -x "$py_entries" ] || py_entries="$(command -v python3 2>/dev/null || true)"
@@ -215,7 +223,7 @@ else
 fi
 
 # ── 3. FORK_CHANGELOG.md is up-to-date with the canonical entries ────────
-step "3/8  FORK_CHANGELOG.md regenerates clean"
+step "3/10  FORK_CHANGELOG.md regenerates clean"
 render_bin="$REPO_ROOT/scripts/render-docs.py"
 if [ -x "$render_bin" ]; then
     py="$REPO_ROOT/.venv/bin/python"
@@ -232,7 +240,7 @@ else
 fi
 
 # ── 4. upstream PR states ────────────────────────────────────────────────
-step "4/8  upstream PR states match doc claims"
+step "4/10  upstream PR states match doc claims"
 if ! command -v gh >/dev/null 2>&1; then
     warn "gh not on PATH — skipping PR state check"
 elif ! gh auth status >/dev/null 2>&1; then
@@ -345,7 +353,7 @@ else
 fi
 
 # ── 5. llms-full.txt regenerates clean from its sources ─────────────────
-step "5/8  llms-full.txt regenerates clean"
+step "5/10  llms-full.txt regenerates clean"
 llms_bin="$REPO_ROOT/scripts/render-llms-full.py"
 if [ -x "$llms_bin" ]; then
     py="$REPO_ROOT/.venv/bin/python"
@@ -362,7 +370,7 @@ else
 fi
 
 # ── 6. Python API reference regenerates clean from source docstrings ────
-step "6/8  python-api/ regenerates clean"
+step "6/10  python-api/ regenerates clean"
 api_bin="$REPO_ROOT/scripts/render-api-docs.py"
 if [ -x "$api_bin" ]; then
     py="$REPO_ROOT/.venv/bin/python"
@@ -379,7 +387,7 @@ else
 fi
 
 # ── 7. MCP tool count claims match mcp_server.TOOLS ─────────────────────
-step "7/8  MCP tool count in docs matches mcp_server.TOOLS"
+step "7/10  MCP tool count in docs matches mcp_server.TOOLS"
 py="$REPO_ROOT/.venv/bin/python"
 [ -x "$py" ] || py="$(command -v python3 2>/dev/null || true)"
 if [ -z "$py" ]; then
@@ -446,7 +454,7 @@ fi
 # green with no entry at all (#519). Delegated to a standalone script so it can
 # run on its own (a pre-push hook, the sweep) and so its tests can drive the
 # REAL script over throwaway repos.
-step "8/8  every merged fork PR has a fork-changes entry"
+step "8/10  every merged fork PR has a fork-changes entry"
 _cov_args=()
 (( quiet ))  && _cov_args+=(--quiet)
 (( strict )) && _cov_args+=(--strict)
@@ -458,6 +466,68 @@ else
     warn "scripts/check-entry-coverage.sh not found — step skipped"
 fi
 
+
+# ── 9. failure-shape record set ───────────────────────────────────────────
+# The set check passed at every step of #531 — by hand. That stops being true
+# the first time someone edits the spec's runnable table without touching the
+# files, or renames a file without its slug. Delegated to the harness's own
+# --check-set-only so there is one definition of "the set".
+step "9/10  failure-shape record set matches the spec"
+py="$REPO_ROOT/.venv/bin/python"
+[ -x "$py" ] || py="$(command -v python3 2>/dev/null || true)"
+recall_bin="$REPO_ROOT/scripts/failure_shape_recall.py"
+if [ ! -f "$recall_bin" ]; then
+    warn "scripts/failure_shape_recall.py not found — record-set check skipped"
+elif [ -z "$py" ]; then
+    warn "no python interpreter — record-set check skipped"
+else
+    set_out="$("$py" "$recall_bin" --check-set-only 2>&1)"
+    set_rc=$?
+    if (( set_rc == 0 )); then
+        ok "failure-shape record set matches the spec (--check-set-only)"
+    else
+        printf '%s\n' "$set_out" | sed 's/^/    /' >&2
+        fail "failure-shape record set drifted from the spec (see above)"
+    fi
+fi
+
+# ── 10. markdownlint, CI's glob set ───────────────────────────────────────
+# lint-docs.yml is the only place CI's globs are written; read them from there
+# rather than keeping a second list that can drift. The runner is node-based
+# and check-docs.yml installs no node, so "not installed" is a warning that
+# names the install line — never a silent pass.
+step "10/10 markdownlint over CI's glob set (lint-docs.yml)"
+lint_wf="$REPO_ROOT/.github/workflows/lint-docs.yml"
+ml_globs=()
+if [ -f "$lint_wf" ]; then
+    while IFS= read -r g; do
+        [ -n "$g" ] && ml_globs+=("$g")
+    done < <(awk '/^[[:space:]]*globs:[[:space:]]*\|/{f=1; next}
+                  f && /^[[:space:]]+[^[:space:]]/{sub(/^[[:space:]]+/, ""); print; next}
+                  f {exit}' "$lint_wf")
+fi
+if (( ${#ml_globs[@]} == 0 )); then
+    warn "could not read globs from .github/workflows/lint-docs.yml — falling back to docs/**/*.md"
+    ml_globs=('docs/**/*.md')
+else
+    ok "${#ml_globs[@]} globs from .github/workflows/lint-docs.yml"
+fi
+ml_bin="$(command -v markdownlint-cli2 2>/dev/null || true)"
+if [ -z "$ml_bin" ] && [ -x "$HOME/.npm-global/bin/markdownlint-cli2" ]; then
+    ml_bin="$HOME/.npm-global/bin/markdownlint-cli2"
+fi
+if [ -z "$ml_bin" ]; then
+    warn "markdownlint-cli2 not found — lint step skipped locally; CI's lint-docs.yml still runs it (npm i -g markdownlint-cli2)"
+else
+    ml_out="$("$ml_bin" "${ml_globs[@]}" 2>&1)"
+    ml_rc=$?
+    if (( ml_rc == 0 )); then
+        ok "markdownlint clean: $(printf '%s\n' "$ml_out" | grep -oE 'Linting: [0-9]+ files' || echo 'ok')"
+    else
+        printf '%s\n' "$ml_out" | grep -vE '^(markdownlint-cli2 v|Finding:)' | sed 's/^/    /' >&2
+        fail "markdownlint reported issues (see above) — the same set CI's lint-docs.yml runs"
+    fi
+fi
 
 # ── summary ──────────────────────────────────────────────────────────────
 if (( failures == 0 )); then
