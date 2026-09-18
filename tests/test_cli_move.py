@@ -289,7 +289,8 @@ class TestMoveDaemonDown:
                     cli.cmd_move(_args(wing="projects"))
         assert ex.value.code == 2
 
-    def test_401_exits_2(self, capsys):
+    def test_401_exits_64(self, capsys):
+        """#518: a refused credential is a rejection, not an outage."""
         from mempalace import cli
 
         def unauthorized(req, timeout=None):
@@ -299,9 +300,10 @@ class TestMoveDaemonDown:
             with patch("urllib.request.urlopen", side_effect=unauthorized):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_move(_args(wing="projects"))
-        assert ex.value.code == 2
+        assert ex.value.code == 64
 
-    def test_403_exits_2(self, capsys):
+    def test_403_exits_64(self, capsys):
+        """#518: same for 403."""
         from mempalace import cli
 
         def forbidden(req, timeout=None):
@@ -311,7 +313,7 @@ class TestMoveDaemonDown:
             with patch("urllib.request.urlopen", side_effect=forbidden):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_move(_args(wing="projects"))
-        assert ex.value.code == 2
+        assert ex.value.code == 64
 
     def test_inner_error_envelope_exits_2(self, capsys):
         """Daemon returns 200 with ``success=False`` — drawer not found or

@@ -289,7 +289,7 @@ class TestCypherDaemonDown:
         assert "error" in payload
         assert "timeout" in payload["error"]
 
-    def test_403_read_only_exits_2_with_hint(self, capsys):
+    def test_403_read_only_exits_64_with_hint(self, capsys):
         """SQLSTATE 25006 → HTTP 403 — write verbs in a read-only txn.
         CLI must surface the read-only hint, not just a bare error."""
         from mempalace import cli
@@ -298,7 +298,7 @@ class TestCypherDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_cypher(_make_args(query="CREATE (n:Entity {name:'x'})"))
 
-        assert ex.value.code == 2
+        assert ex.value.code == 64
         err = capsys.readouterr().err
         assert "read-only" in err
         assert "MATCH" in err and "RETURN" in err  # the rewrite hint
@@ -310,11 +310,15 @@ class TestCypherDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_cypher(_make_args(format="json", query="DELETE (n)"))
 
-        assert ex.value.code == 2
+        assert ex.value.code == 64
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert payload["status"] == 403
         assert "read-only" in payload["error"]
+        # Option C (#521): the prose stays in `error` so this assertion is
+        # untouched; the branchable key arrives alongside it.
+        assert payload["code"] == "read_only"
+        assert payload["source"] == "daemon"
 
     def test_404_exits_2_endpoint_missing(self, capsys):
         """Older daemon without /cypher → 404 → same shape as unreachable."""
@@ -329,7 +333,7 @@ class TestCypherDaemonDown:
         assert "404" in err
         assert "unreachable" in err
 
-    def test_401_auth_failure_exits_2(self):
+    def test_401_auth_failure_exits_64(self):
         """Missing/bad x-api-key → 401 → exit 1."""
         from mempalace import cli
 
@@ -337,7 +341,7 @@ class TestCypherDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_cypher(_make_args())
 
-        assert ex.value.code == 2
+        assert ex.value.code == 64
 
     def test_503_non_postgres_exits_2_with_status(self, capsys):
         """Daemon on non-postgres backend → 503; same failure shape."""

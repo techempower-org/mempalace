@@ -121,13 +121,38 @@ class TestRequestErrorsAreDistinctFromOutages:
                 _call_daemon_rest("/list", {})
         assert not isinstance(exc.value, DaemonRequestError), "an outage is not a bad request"
 
-    def test_404_401_403_still_fall_through_to_none(self):
-        """Older daemons lack routes; that is a fallback, not a user error."""
+    def test_404_still_falls_through_to_none(self):
+        """Older daemons lack routes; that is a fallback, not a user error.
+
+        404 keeps returning None deliberately — six call sites read None as
+        "fall back to MCP", and a missing route is unavailability for that
+        verb, which the contract numbers 2.
+        """
         from mempalace.cli import _call_daemon_rest
 
-        for code in (404, 401, 403):
+        with patch("urllib.request.urlopen", side_effect=_http_error(404, {}, "nope")):
+            assert _call_daemon_rest("/list", {}) is None
+
+    def test_401_and_403_no_longer_collapse_onto_the_404_path(self):
+        """#518: the status stops being discarded at the transport.
+
+        Collapsing all three to None is what made a wrong PALACE_API_KEY
+        indistinguishable from an old daemon — both rendered as "palace daemon
+        unreachable" while the daemon was up and answering. Measured on
+        7ed80f03 before the fix: `stats` and `wings`, 401/403/404, all exited
+        2 with the same sentence.
+        """
+        from mempalace.cli import DaemonAuthError, DaemonRequestError, _call_daemon_rest
+
+        for code in (401, 403):
             with patch("urllib.request.urlopen", side_effect=_http_error(code, {}, "nope")):
-                assert _call_daemon_rest("/list", {}) is None
+                with pytest.raises(DaemonAuthError) as exc:
+                    _call_daemon_rest("/list", {})
+            assert exc.value.status == code
+            # A refusal, so every site that already routes DaemonRequestError
+            # to 64 picks it up without knowing about auth specifically.
+            assert isinstance(exc.value, DaemonRequestError)
+            assert exc.value.code == "auth_failed"
 
 
 # ── what the operator sees ─────────────────────────────────────────────
@@ -183,6 +208,12 @@ class TestListRendersARequestError:
         )
         assert code == BAD_ARGS
         payload = json.loads(capsys.readouterr().out)
-        assert payload["error"] == "bad_request"
+        # Option C (#521). Before: `error` held the KEY "bad_request" here
+        # while `_fail_daemon` put PROSE in `error` — a caller could not read
+        # one field the same way across two helpers. Now the prose is always
+        # in `error` and the branchable key is always in `code`.
+        assert payload["code"] == "bad_request"
+        assert "canonical" in payload["error"]
+        assert payload["source"] == "daemon"
         assert payload["status"] == 400
         assert "canonical" in payload["detail"]

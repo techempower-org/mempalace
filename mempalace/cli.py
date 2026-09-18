@@ -79,7 +79,44 @@ from .version import __version__
 #      palace missing) OR a usage error (argparse parse failures, a verb
 #      group named without an action)
 #   64 the daemon answered and REJECTED a well-formed request (a 4xx —
-#      e.g. an unknown room filter). Nothing else uses 64.
+#      an unknown room filter, a refused credential, a read-only /cypher
+#      write). Nothing else uses 64.
+#
+# 2 vs 64 on a 4xx is decided by WHO could not proceed, not by the status
+# number (#518):
+#
+#   401 / 403  64 — the daemon is up, it understood the request, and it
+#              declined. A wrong PALACE_API_KEY is one line of config, and
+#              reporting it as "palace unavailable" sends the operator to
+#              check whether the daemon is running. `/cypher`'s 403 is a
+#              read-only refusal rather than an auth one — same class,
+#              same code.
+#   404        2  — the route does not exist on this daemon. That is
+#              unavailability FOR THAT VERB, not a user error, and it is
+#              also the signal six call sites use to fall back to MCP.
+#   5xx        2  — the daemon answered but could not serve it.
+#
+# The transport carries the status to make that decision possible:
+# `_call_daemon_rest` and `_patch_daemon_rest` returned None for 404, 401
+# and 403 alike, so a refused key and an old daemon were the same event to
+# every caller. Measured on 7ed80f03 before the change: `stats` and
+# `wings`, 401/403/404, all exited 2 with "palace daemon unreachable".
+#
+# Machine-readable failures (#521). Every daemon-failure JSON carries:
+#
+#   error   the prose — what went wrong, in English
+#   code    a branchable key: daemon_unreachable | daemon_error |
+#           bad_request | auth_failed | read_only | route_missing |
+#           daemon_unavailable | daemon_required
+#   source  "daemon" (or "cli" for a client-input error)
+#   status  the HTTP status, when an HTTP exchange produced the failure
+#
+# `error` holds PROSE in every writer, so the 20+ existing readers that
+# print `.error` keep working; `code` is additive. Before this, `error`
+# held the key in some helpers and the prose in others, and which one a
+# caller got depended on which helper happened to handle the failure.
+# The window/source family also still emits `message` (a duplicate of
+# `error`), DEPRECATED and kept for one release.
 #
 # 1 vs 2 is the load-bearing line: 1 means the palace was reachable and
 # had nothing to say; 2 means the question never got asked. A command
@@ -181,6 +218,26 @@ class DaemonRequestError(DaemonError):
         super().__init__(message)
         self.status = status
         self.detail = detail
+
+
+class DaemonAuthError(DaemonRequestError):
+    """The daemon answered and refused the CREDENTIAL — 401 or 403 (#518).
+
+    A subclass of ``DaemonRequestError`` because it is the same event class: the
+    daemon is up, it understood the request, and it declined. Under the #44
+    contract as restated by #476/#523 that is 64 ("the daemon answered and
+    rejected a well-formed request"), not 2 ("the operation could not run").
+    Reporting a wrong ``PALACE_API_KEY`` as *palace unavailable* sends the
+    operator to check whether the daemon is running when the fix is one line of
+    config — the same misattribution #499 removed for 400.
+
+    404 deliberately does NOT raise this. A missing route means "this daemon
+    cannot serve the verb", which is unavailability for that verb and stays 2;
+    it also stays ``None`` from ``_call_daemon_rest`` so the MCP fallback that
+    six call sites depend on is untouched.
+    """
+
+    code = "auth_failed"
 
 
 def _print_retired_local_palace_or_default(palace_path: str) -> None:
@@ -329,16 +386,26 @@ def _exit_daemon_request_error(e, *, want_json: bool, source: str = "daemon"):
     not touch.
     """
     if want_json:
+        # Option C (#521): prose in `error` so the 20+ existing readers that
+        # print `.error` keep working, the branchable key in `code`. Before
+        # this, `error` held the key "bad_request" here and the prose in
+        # `detail`, while `_fail_daemon` put the prose in `error` — two
+        # conventions a caller had to tell apart by which helper happened to
+        # run.
         _emit_json(
             {
-                "error": "bad_request",
+                "error": e.detail or str(e),
+                "code": getattr(e, "code", "bad_request"),
                 "status": e.status,
                 "detail": e.detail or str(e),
                 "source": source,
             }
         )
     else:
-        print(f"daemon rejected the request ({e.status}): {e}", file=sys.stderr)
+        verb = (
+            "refused the credential" if isinstance(e, DaemonAuthError) else "rejected the request"
+        )
+        print(f"daemon {verb} ({e.status}): {e}", file=sys.stderr)
     sys.exit(64)
 
 
@@ -364,8 +431,21 @@ def _call_daemon_rest(path: str, params: dict | None = None) -> dict:
         with urlopen_with_wake(req, timeout=10) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
-        if e.code in (404, 401, 403):
-            return None  # endpoint missing or auth mismatch — caller falls back to MCP
+        if e.code == 404:
+            # Route missing on an older daemon. Still None, deliberately: six
+            # call sites read None as "fall back to MCP", and a missing route
+            # IS unavailability for that verb (#518 keeps 404 at 2).
+            return None
+        if e.code in (401, 403):
+            # NOT None. Collapsing auth onto the 404 path is what made a wrong
+            # PALACE_API_KEY indistinguishable from an old daemon — both
+            # rendered as "palace daemon unreachable" while the daemon was up
+            # and answering (#518). Measured on 7ed80f03: `stats`, `wings`,
+            # 401/403/404 all exited 2 with the same sentence.
+            detail = _daemon_error_detail(e)
+            raise DaemonAuthError(
+                detail or e.reason or f"HTTP {e.code}", status=e.code, detail=detail
+            ) from e
         if 400 <= e.code < 500:
             # The daemon answered and refused. Its body already says WHY —
             # FastAPI puts it in `detail` — and discarding it is what made
@@ -511,8 +591,16 @@ def _patch_daemon_rest(path: str, body: dict) -> dict:
         with urlopen_with_wake(req, timeout=_daemon_timeout()) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
-        if e.code in (404, 401, 403):
-            return None
+        if e.code == 404:
+            return None  # route missing on an older daemon -> MCP fallback (#518)
+        if e.code in (401, 403):
+            # Same split as _call_daemon_rest (#518): a refused credential is
+            # not a missing route. This transport collapsed all three to None
+            # too, so `move` reported a bad key as an outage.
+            detail = _daemon_error_detail(e)
+            raise DaemonAuthError(
+                detail or e.reason or f"HTTP {e.code}", status=e.code, detail=detail
+            ) from e
         raise DaemonError(f"daemon REST {path} failed ({e.code}): {e.reason}") from e
     except (urllib.error.URLError, ConnectionError, OSError) as e:
         raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
@@ -4375,15 +4463,29 @@ def cmd_cypher(args):
             "rewrite as MATCH / RETURN, or use the mempalace_kg_* MCP tools to mutate"
         )
         if want_json:
-            _emit_json({"error": hint, "source": "daemon", "status": 403})
+            _emit_json({"error": hint, "code": "read_only", "source": "daemon", "status": 403})
         else:
             print(hint, file=sys.stderr)
-        sys.exit(2)
+        # 64, not 2 (#518). This 403 is not an auth failure — it is the
+        # daemon enforcing read-only (SQLSTATE 25006) — but it is the same
+        # CLASS of event: the daemon answered and refused a well-formed
+        # request. Same status, different cause, same contract sentence.
+        sys.exit(64)
+
+    if status in (401, 403):
+        # A refused credential is a rejection, not an outage (#518). Before
+        # this it fell into the branch below and was reported as "treat the
+        # same as unreachable so scripts get one failure shape" — one shape
+        # bought at the cost of sending the operator to check whether the
+        # daemon was running when the fix was one line of config.
+        _exit_daemon_request_error(
+            DaemonAuthError(f"daemon /cypher refused the credential ({status})", status=status),
+            want_json=want_json,
+        )
 
     if status is not None:
-        # 401/404/503 etc — endpoint missing on an older daemon, auth
-        # mismatch, or non-postgres backend. Treat the same as
-        # unreachable so scripts get one failure shape.
+        # 404/503 etc — route missing on an older daemon, or a non-postgres
+        # backend. Unavailability for this verb, which the contract numbers 2.
         _fail_daemon(
             f"daemon /cypher returned {status}",
             want_json,
@@ -5723,11 +5825,12 @@ def cmd_status(args):
             if data is None:
                 data = _call_daemon_tool("mempalace_status", {})
         except DaemonError as e:
-            if want_json:
-                _emit_json({"error": str(e), "source": "daemon"})
-            else:
-                print(f"\n  ERROR: {e}", file=sys.stderr)
-            sys.exit(2)
+            # Delegated (#521): this site hand-rolled the payload and the exit
+            # code, so a refusal reached it as an outage — `status` with a 401
+            # exited 2 saying "ERROR: <detail>" while `stats` exited 64. The
+            # shared helper carries both the option-C shape and the
+            # refusal-vs-outage split.
+            _fail_daemon(e, want_json)
         if want_json:
             _emit_json(data)
             return
@@ -8169,7 +8272,12 @@ def _window_route_failed(path: str, result, want_json: bool) -> None:
             f"palace daemon at {_daemon_url()} rejected the credentials "
             f"({code}) — check PALACE_API_KEY" + (f": {detail}" if detail else "")
         )
-        exit_code, error_key = 2, "auth_failed"
+        # 64, not 2 (#518). #512 chose 2 here deliberately, and its reason
+        # still stands — an auth failure must not be reported with the DEPLOY
+        # message — but that was an argument about the *message*, not the
+        # code. A refused credential is "the daemon answered and rejected a
+        # well-formed request", which the #44 contract numbers 64.
+        exit_code, error_key = 64, "auth_failed"
     elif code in (400, 422):
         msg = detail or f"daemon rejected the request ({code})"
         exit_code, error_key = 64, "bad_request"
@@ -8180,7 +8288,25 @@ def _window_route_failed(path: str, result, want_json: bool) -> None:
         exit_code, error_key = 2, "daemon_error"
 
     if want_json:
-        _emit_json({"error": error_key, "message": msg, "status": code, "route": path})
+        # Option C (#521). This family put the KEY in `error` and the prose in
+        # `message`; the daemon family did the opposite. A caller could branch
+        # on `window`/`source` and had to pattern-match English everywhere
+        # else. Now the prose is in `error` everywhere and the key is in
+        # `code` everywhere.
+        #
+        # `message` is kept as a duplicate of `error` for ONE release and is
+        # DEPRECATED: the readers #512 created read it, and dropping it in the
+        # same release that adds `code` would break them for no reason.
+        _emit_json(
+            {
+                "error": msg,
+                "code": error_key,
+                "message": msg,  # DEPRECATED (#521) — remove one release after this
+                "status": code,
+                "route": path,
+                "source": "daemon",
+            }
+        )
     else:
         print(msg, file=sys.stderr)
     sys.exit(exit_code)
@@ -8195,7 +8321,14 @@ def _window_require_daemon(verb: str, want_json: bool) -> None:
         "(the listing is served by the daemon's SQL, not by a local palace)."
     )
     if want_json:
-        _emit_json({"error": "daemon_required", "message": msg})
+        _emit_json(
+            {
+                "error": msg,
+                "code": "daemon_required",
+                "message": msg,  # DEPRECATED (#521)
+                "source": "daemon",
+            }
+        )
     else:
         print(msg, file=sys.stderr)
     sys.exit(2)
@@ -8365,7 +8498,14 @@ def _fail_daemon_unavailable(err, want_json: bool) -> None:
     """
     text = str(err)
     if want_json:
-        _emit_json({"error": "daemon_unavailable", "message": text})
+        _emit_json(
+            {
+                "error": text,
+                "code": "daemon_unavailable",
+                "message": text,  # DEPRECATED (#521) — see _window_route_failed
+                "source": "daemon",
+            }
+        )
     else:
         print(
             f"palace daemon unreachable at {_daemon_url()} — "
@@ -8410,11 +8550,21 @@ def _fail_daemon(
       prose diff (#523).
     """
     text = str(err) if err is not None else ""
+    # A refusal that reached here is still a refusal (#518). Five of the eight
+    # `_call_daemon_rest` consumers catch DaemonRequestError before DaemonError
+    # and would exit 64 on their own; `_fast_hits`, `cmd_status` and cmd_doctor
+    # do not, and would have reported a wrong API key as an outage. Routing it
+    # here means no call site can get this wrong by the ORDER of its except
+    # clauses — the "fixed one of two paths, read as success" shape.
+    if isinstance(err, DaemonRequestError):
+        _exit_daemon_request_error(err, want_json=want_json)
+
     # Same predicate the tool helper used, kept verbatim so the JSON
     # `reachable` flag means exactly what it meant before the message moved.
     unreachable = not text.startswith("daemon error")
     if want_json:
         payload = {
+            "code": "daemon_unreachable" if unreachable else "daemon_error",
             "error": f"daemon {route} unavailable" if err is None and route else text,
             "source": "daemon",
         }
@@ -13287,7 +13437,21 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         cmd_duplicate(args)
         return
 
-    dispatch[args.command](args)
+    # #508: propagate a handler's exit code instead of discarding it.
+    #
+    # `isinstance(rc, int)` rather than `sys.exit(rc)` is load-bearing and was
+    # measured, not guessed: `cmd_sync` returns a `SyncReport`, and
+    # `sys.exit(<non-int>)` exits **1** after printing repr() to stderr — so
+    # the obvious one-liner would turn a SUCCESSFUL `mempalace sync` into a
+    # failure with the report dumped on stderr.
+    #
+    # `True` is an int in Python, so a handler returning a bare truthy flag
+    # would exit 1; none does today (AST over the dispatch table: exactly one
+    # handler returns non-None, and it is cmd_sync's report object), and the
+    # guard below keeps a bool from being read as a status by accident.
+    rc = dispatch[args.command](args)
+    if isinstance(rc, int) and not isinstance(rc, bool):
+        sys.exit(rc)
 
 
 if __name__ == "__main__":

@@ -58,7 +58,15 @@ class TestHelperSpeaksEveryShapeItReplaced:
         out = io.StringIO()
         with contextlib.redirect_stdout(out), pytest.raises(SystemExit):
             cli._fail_daemon(RuntimeError("boom"), True)
-        assert json.loads(out.getvalue()) == {"error": "boom", "source": "daemon"}
+        # Exact equality, deliberately — it is what caught option C adding a
+        # field (#521), which is the point of asserting the whole payload
+        # rather than a subset. `error` still holds the prose, so every
+        # existing reader of `.error` is unaffected; `code` is additive.
+        assert json.loads(out.getvalue()) == {
+            "error": "boom",
+            "code": "daemon_unreachable",
+            "source": "daemon",
+        }
 
     def test_a_404_site_names_the_route_and_omits_the_parenthetical(self):
         """err=None is the 404 case: there is no exception to interpolate."""
