@@ -241,27 +241,40 @@ else
         # We don't try to parse exhaustively; just flag when a doc says
         # MERGED but gh says OPEN, or vice versa.
         doc_says_merged=0; doc_says_open=0; doc_says_closed=0
-        # `/pull/$n`, never a bare `/$n`: a PR number is also a valid commit-sha
-        # prefix, so `/459` matches `.../commit/459efab`. That put PR #459 on a
-        # README line reading "one OPEN-and-refuse sequence" and reported drift
-        # against a doc that never mentions #459 at all. 12 numbers in these docs
-        # currently prefix a referenced sha. Do not "simplify" this back.
         for d in "${docs[@]}"; do
-            line=$(grep -E "(#$n|/pull/$n)" "$d" 2>/dev/null | head -1 | tr A-Z a-z)
-            [[ "$line" == *"merged"* ]] && doc_says_merged=1
-            [[ "$line" == *"open"*    ]] && doc_says_open=1
-            [[ "$line" == *"closed"*  ]] && doc_says_closed=1
-        done
-        # Skip narrative paragraphs that mention multiple PRs — words
-        # like "merged" / "open" usually refer to *other* PRs on the
-        # same line, not the one we're checking. Only check lines that
-        # mention this PR alone.
-        for d in "${docs[@]}"; do
-            line=$(grep -E "(#$n[^0-9]|/pull/$n[^0-9])" "$d" 2>/dev/null | head -1)
-            other_prs=$(echo "$line" | grep -oE '#[0-9]{2,5}' | grep -v "^#$n$" | wc -l)
-            if (( other_prs > 0 )); then
-                doc_says_merged=0; doc_says_open=0; doc_says_closed=0
-            fi
+            # EVERY line mentioning this PR, not just the first (#516). With
+            # `head -1` the check answered "does the FIRST mention agree?"
+            # rather than "do all mentions agree?", so a drifted claim after a
+            # correct one was invisible — and, in the other direction, a
+            # narrative whose first line said "was open" was reported as drift
+            # even though a later line said "merged".
+            #
+            # The boundary matters as much as the iteration: the old claim scan
+            # used `(#$n|/$n)` with no right boundary, so `#101` matched
+            # `#1018`/`#1021`/`#1023`, while the commentary scan below it used
+            # `[^0-9]` — the two loops could read different lines and reach a
+            # conclusion neither line supported. One scan, one regex, anchored
+            # on either a non-digit or end of line.
+            while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                # A line naming several PRs cannot be attributed to any one of
+                # them: "superseded by #1377, which closed #1286" says nothing
+                # about #1377's own state. Skipped per LINE now, rather than
+                # zeroing the whole document's claims.
+                other_prs=$(printf '%s' "$line" | grep -oE '#[0-9]{2,5}' \
+                    | grep -vc "^#$n$" || true)
+                (( other_prs > 0 )) && continue
+                # Whole words, not substrings. "opencode" and "reopened"
+                # both contain "open", and the substring test read them as a
+                # claim that the PR is OPEN — latent before #516 because only
+                # one line per doc was ever examined, and amplified the moment
+                # every line is. Measured on this repo: #108 and #110 became
+                # findings purely because their lines say "opencode".
+                low=$(printf '%s' "$line" | tr A-Z a-z)
+                printf '%s' "$low" | grep -qE '\bmerged\b' && doc_says_merged=1
+                printf '%s' "$low" | grep -qE '\bopen\b'   && doc_says_open=1
+                printf '%s' "$low" | grep -qE '\bclosed\b' && doc_says_closed=1
+            done < <(grep -E "(#$n([^0-9]|\$)|/$n([^0-9]|\$))" "$d" 2>/dev/null || true)
         done
         # If both states appear, it's commentary too.
         if (( doc_says_merged )) && (( doc_says_open )); then
