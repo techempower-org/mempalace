@@ -299,39 +299,97 @@ where the caller's string and the card's string have no lexical overlap by desig
 
 ---
 
-## 5. Minimal first slice — one PR, and it measures before it builds
+## 5. The slice, and how it is scored
 
-**Do not ship an index first.** The honest first slice is 2g's own method applied
-to the palace: *measure the retrieval gap on a labelled corpus.*
+**Do not ship an index first.** The slice measures the retrieval gap on a labelled
+corpus — 2g's own method applied to the palace.
 
-**One PR delivers:**
+**Shipped here:** `docs/failure-shapes/` — **30** records, one file per record, fields
+per §1 in front matter so each mines as one drawer into wing `memorypalace`; and
+`scripts/failure_shape_recall.py`, which issues each trigger against
+`mempalace search --json` and reports **recall@3** and first-hit rank. Reads only — no
+index, no CLI verb, no ranking change.
 
-1. `docs/failure-shapes/` — the 21 citable instances as YAML, one file per shape,
-   fields per §1. Curated, mineable, `source_kind: file`.
-2. `scripts/failure_shape_recall.py` — for each shape, issue its `triggers[]`
-   against the live search at `--limit 3`, record whether the shape's own drawer is
-   returned. Emits recall@3, recall@10, and the per-trigger table.
-   **Interleaves baseline and candidate per query** (#477 instability).
-3. The measurement, committed as a dated result — the `n=11`-equivalent for this
-   corpus, at whatever n it actually reaches.
+### Why 30 files and not 33
 
-No new CLI verb, no ranking change, no daemon route. Roughly the size of #493.
+The corpus counts **33 on record**. Four of 2g-c6's eight are counted but never
+described — #503 gives their total, not their mechanisms — so they have no `asked`, no
+`answered`, and cannot be written without inventing them. §25.6 holds **two** distinct
+mechanisms that the section-unit count merged into one.
+
+    33 counted  −  4 counted-but-undescribed  +  1 (§25.6 split)  =  30 describable
+
+⚠️ **The gap is stated, not reconciled.** The recall denominator is 30; the four
+undescribed instances are real, and are retrievable by nothing. That is a fact about
+the corpus rather than a rounding error. (`29 citable` in the derivation table counts
+PART 25 as 8 sections; this counts its 9 rows, because a file needs one `asked` /
+`answered` pair.)
+
+### Partitions — scored separately, never pooled
+
+Oracle's ruling: **independence is checked against a corpus's sources, not its
+authors.** A trigger written by whoever wrote the record measures whether an author can
+find their own words — precisely §2's keyed-on-terms regime, the one where retrieval
+already works and is not needed.
+
+| partition | n | who wrote the trigger |
+|---|---|---|
+| **A · 2g-sourced** | 4 | this author, for records sourced from the 2g-c6 report — 2g-sourced but not 2g-written, so scored apart from B |
+| **B-blind · independent** | 6 | `oracle-issue-audit`, blind — written without reading `asked` / `answered` |
+| **B-TBD · independent** | 20 | a fresh lane that has never read this spec, given `ls docs/failure-shapes/` and the incident sources only |
+
+The harness prints **no aggregate**. Pooling A with B would report an author's recall as
+a reader's, and B-blind is the only partition that currently answers the question the
+index exists to answer.
+
+### The runnable table
+
+`trigger` is the phrasing an agent would ARRIVE with. `TBD(fresh-lane)` rows count as
+pending and are never scored; a partial table is the expected state.
+
+| slug | partition | trigger |
+|---|---|---|
+| `add-parser-multiline-grep` | B-TBD · independent | TBD(fresh-lane) |
+| `ancestor-of-itself` | B-TBD · independent | TBD(fresh-lane) |
+| `bare-path-receipt` | B-blind · independent | it printed the path, so the file was written |
+| `branch-merged-under-squash` | B-TBD · independent | TBD(fresh-lane) |
+| `cat-file-object-exists` | B-TBD · independent | TBD(fresh-lane) |
+| `check-ignore-for-tracked` | B-TBD · independent | TBD(fresh-lane) |
+| `count-measured-formatting` | A · 2g-sourced | the diff is huge so the change must be substantial |
+| `diff-filter-a-on-branch` | B-TBD · independent | TBD(fresh-lane) |
+| `diff-filter-excludes-list-lines` | B-TBD · independent | TBD(fresh-lane) |
+| `escaped-backslash-in-heredoc` | B-TBD · independent | TBD(fresh-lane) |
+| `extractor-truncated-anchor` | B-TBD · independent | TBD(fresh-lane) |
+| `fallback-behind-a-pipe` | B-TBD · independent | TBD(fresh-lane) |
+| `field-grep-for-set` | B-TBD · independent | TBD(fresh-lane) |
+| `frequency-table-no-zero` | A · 2g-sourced | the table shows every case, so nothing was missed |
+| `hardcoded-path-after-rename` | B-TBD · independent | TBD(fresh-lane) |
+| `harness-indicts-shipping` | B-blind · independent | the test harness failed, so the change I shipped is broken |
+| `heading-string-presence` | B-TBD · independent | TBD(fresh-lane) |
+| `help-smoke-blind-to-dispatch` | B-TBD · independent | TBD(fresh-lane) |
+| `marker-glyph-for-survival` | B-TBD · independent | TBD(fresh-lane) |
+| `own-vocabulary-grep` | B-blind · independent | grep for the term I just coined to see if it is used |
+| `pgrep-self-match` | A · 2g-sourced | is that process still running |
+| `porcelain-collapses-untracked` | B-TBD · independent | TBD(fresh-lane) |
+| `regex-measured-spacing` | A · 2g-sourced | my pattern matches, so the field is formatted correctly |
+| `rendered-output-diff` | B-TBD · independent | TBD(fresh-lane) |
+| `self-quoting-retraction` | B-blind · independent | I already said this earlier, so I can cite my own note as the source |
+| `sha-prefix-match` | B-blind · independent | match the commit by its short sha prefix |
+| `single-line-grep-wrapped-prose` | B-TBD · independent | TBD(fresh-lane) |
+| `stale-worktree-read` | B-TBD · independent | TBD(fresh-lane) |
+| `tally-line` | B-blind · independent | take the count from the summary line at the end |
+| `two-dot-diff-range` | B-TBD · independent | TBD(fresh-lane) |
 
 ### What would falsify the idea
 
-| outcome | reading |
-|---|---|
-| baseline recall@3 is **high** (say ≥0.6) on arrival phrasings | the index is unnecessary — plain search already connects actions to shapes; close #503 |
-| baseline low, and **trigger-indexed retrieval does not beat it** | the bottleneck is the embedding, not the index; a trigger field is the wrong fix |
-| baseline low, trigger retrieval **beats it but only on triggers authored with the card** | the index is overfit — it retrieves phrasings someone already thought of, which is the keyed-on-terms regime, not arrival |
-| baseline low, trigger retrieval beats it on **held-out phrasings written by a different lane** | the idea holds; proceed to a retrieval surface |
+| outcome | reading | measured by |
+|---|---|---|
+| **B-blind** recall@3 ≥ 0.6 | the index is unnecessary — plain search already connects arrivals to records; close #503 | `--triggers` over the B-blind rows |
+| **B-blind** recall@3 low and unchanged by trigger indexing | the bottleneck is the embedding, not the index; a trigger field is the wrong fix | re-run once triggers are indexed |
+| **A** high while **B-blind** stays low | overfit to its authors — the keyed-on-terms regime reported as success | compare partitions, never the pool |
+| **B-blind** and **B-TBD** both beat baseline | the idea holds; proceed to a retrieval surface | both independent partitions |
 
-That third row is the one to guard hardest, and it is the reason the triggers for
-the held-out test **must be written by a lane that did not author the cards** —
-otherwise the measurement reproduces 2g's "keyed-on phrasings work" regime and
-reports it as success.
-
-> **Pre-register the expected answer before running the harness** (Oracle PART 23):
-> write down the predicted recall@3 for baseline, then diff. A harness whose result
-> is read without a prediction is an instrument nobody has proven can see — which is
-> the very shape this corpus exists to index.
+Row three is the trap, and separating the partitions is the whole defence against it.
+**Pre-register the expected recall before running the harness** (Oracle PART 23): a
+harness whose result is read without a prediction is an instrument nobody has proven can
+see — the shape this corpus exists to index.
