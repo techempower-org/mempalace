@@ -24,6 +24,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **`mempalace window` walks a wing chronologically; `mempalace source` lists one file's drawers in order** (`HEAD` — pending resolution)
+  There was no way to ask the palace "what happened between these two
+  timestamps". ``search --since`` filters a **ranked** search, so inside
+  the window you get whatever scores highest rather than the sequence — a
+  2g session kept landing on the same three high-scoring drawers and the
+  question went unanswered four times in one night. ``list`` is
+  insertion-ordered with no time filter at all, so against a 201K-drawer
+  wing a date is ~200 pages away. And search hits carry a ``source_file``
+  whose obvious follow-up — "the drawers from *that* file, in order" — had
+  no command either.
+
+      mempalace window --wing W --from TS --to TS [--room R]
+                       [--limit N] [--cursor C] [--format json]
+      mempalace source --file <transcript.jsonl> [--wing W] [--format json]
+
+  **The time semantics are the palace's existing ones, not new ones.**
+  ``--from`` inclusive, ``--to`` exclusive, wall-clock comparison, and a
+  drawer with no ``filed_at`` excluded while a bound is active — the same
+  contract ``list --since`` and ``search --since`` already use, because
+  the daemon parses the bounds by *calling*
+  ``mempalace.date_window.parse_window`` rather than with a second
+  implementation (a test makes that helper raise and asserts the route
+  surfaces it, so drift is prevented structurally rather than by
+  convention). What changed is the performance envelope: the filter is now
+  a SQL predicate instead of a Python pass after fetching every row.
+
+  Two findings corrected the issue text on the way, both read read-only
+  off production. **There is no ``created_at`` column** — the live table
+  is ``id | document | embedding | metadata | wing | room | doc_tsv`` with
+  no index on any time value; #500's "pgvector backend already indexes it"
+  describes upstream's table, not the fork's shape that production runs.
+  Time lives in ``metadata->>'filed_at'``. And **``filed_at`` carries two
+  timezone conventions** (915,562 naive host-local, 5,474 ``Z``/UTC), so a
+  wall-clock walk places 0.6% of drawers up to 7h out of position — a
+  cross-surface defect rather than this verb's, filed as #506 with the
+  measurements. #507 carries the index numbers and recommends *not*
+  building one until #506 settles.
+
+  Exit codes are written into ``cli.py``'s header table, because the
+  interesting rows look alike from outside: 404 → 2 naming the minimum
+  daemon version; 401/403 → 2 naming ``PALACE_API_KEY`` and deliberately
+  **not** the version; 400/422 → 64 carrying the daemon's own message;
+  transport/5xx → 2; an empty window → 1. The 401 row needed a new HTTP
+  helper rather than ``_get_daemon_rest``, which collapses 404, 401 and
+  403 all into ``None`` — reusing it would have reported a wrong API key
+  as "deploy a newer daemon", a refusal naming the wrong reason.
+
+  Verified end to end against a real daemon on a scratch postgres, and
+  against the **production** daemon for the 404 path (1.9.x returns 404
+  for ``/window``, so the message was tested against the condition it
+  describes rather than a simulation — and since exit 2 also covers a
+  transport failure, the message was read, not just the code). Chunk
+  ordering came back 0, 1, 10 — numeric, not lexical, which is the "in
+  order" #502 asks for.
+
+  Pairs with palace-daemon#283 (``/window`` + ``/source``, v1.10.0).
+
+  *Tests:* 35 (test_cli_window_source — three-layer wiring with the probes verified to fail independently, every exit-code row executed, the auth-vs-version distinction in both directions, and a real-binary probe)
+  *Files:* `mempalace/cli.py`, `tests/test_cli_window_source.py`
+
+
 - **design spec for indexing failure SHAPES, keyed on the action about to be taken** (`HEAD` — pending resolution)
   A design spec only — `docs/specs/2026-09-17-failure-shape-index.md`, no code.
 

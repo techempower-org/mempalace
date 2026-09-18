@@ -576,6 +576,39 @@ def cmd_update(args)
 
 Configure, check, or prepare updates without installing automatically.
 
+### `cmd_window`
+
+```python
+def cmd_window(args) -> None
+```
+
+Drawers in filed order between two bounds — unranked, paged.
+
+#500: ``search --since`` filters a *ranked* search, so inside a window
+you get whatever scores highest rather than the sequence, and ``list``
+has no time filter at all (against a 201K-drawer wing a date is ~200
+pages away). This is the chronological walk.
+
+Semantics are the palace's existing ones, not new: ``--from`` inclusive,
+``--to`` exclusive, wall-clock comparison, and a drawer with no
+``filed_at`` excluded while a bound is active — the same contract
+``list --since`` and ``search --since`` use. What changed is that the
+daemon evaluates it in SQL instead of filtering in Python after
+fetching every row.
+
+### `cmd_source`
+
+```python
+def cmd_source(args) -> None
+```
+
+Every drawer from one source file, in chunk order (#502).
+
+Search hits carry ``source_file``; the natural next question is "give
+me the drawers from THAT file, in order", which had no command. Order
+is chunk order within the file — ``chunk_index`` numerically, so chunk
+10 follows chunk 2 — then filed time, then id.
+
 ### `cmd_diary`
 
 ```python
