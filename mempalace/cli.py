@@ -58,7 +58,7 @@ from .provenance import (
     provenance_note,
     source_kind,
 )
-from .result_ordering import prefer_curated
+from .result_ordering import collapse_identical_text, prefer_curated
 from .version import __version__
 
 
@@ -975,7 +975,7 @@ def _print_hit_table(index: int, hit: dict, *, full: bool, use_color: bool) -> N
     # The reserved slot is marked in every prose renderer, not only ``compact``
     # (#526, review finding on #534): the default view shipping an unmarked promotion is
     # the silent-promotion failure this feature exists to prevent.
-    print(f"  [{index}] {wing} / {room}{_promotion_tag(hit)}")
+    print(f"  [{index}] {wing} / {room}{_promotion_tag(hit)}{_collapse_tag(hit)}")
 
     bar = _relevance_bar(sim)
     if bar:
@@ -1025,6 +1025,20 @@ def _promotion_tag(hit: dict) -> str:
     return ""
 
 
+def _collapse_tag(hit: dict) -> str:
+    """``⟨N identical copies collapsed⟩`` for a hit that absorbed duplicates, else ``""``.
+
+    One producer for every prose renderer (``table``/``full`` via
+    :func:`_print_hit_table`, ``compact`` via :func:`_provenance_tag`): a slot
+    recovered from a second path is said out loud, never silently (#526).
+    """
+    n = hit.get("duplicates_collapsed") if isinstance(hit, dict) else None
+    if not isinstance(n, int) or n <= 0:
+        return ""
+    noun = "copy" if n == 1 else "copies"
+    return f" ⟨{n} identical {noun} collapsed⟩"
+
+
 def _provenance_tag(hit: dict) -> str:
     """Short source-shape tag for ``--format compact`` (empty when unremarkable).
 
@@ -1044,7 +1058,7 @@ def _provenance_tag(hit: dict) -> str:
     promoted = _promotion_tag(hit)
     if promoted:
         # Reserved into this slot rather than ranked into it (#526).
-        return promoted
+        return promoted + _collapse_tag(hit)
     kind = hit.get("source_kind") or source_kind(hit)
     flags = []
     if kind == "transcript":
@@ -1053,7 +1067,8 @@ def _provenance_tag(hit: dict) -> str:
         flags.append("diary")
     elif hit.get("source_stale") is True:
         flags.append("stale")
-    return f" ⟨{','.join(flags)}⟩" if flags else ""
+    tag = f" ⟨{','.join(flags)}⟩" if flags else ""
+    return tag + _collapse_tag(hit)
 
 
 def _print_hit_compact(index: int, hit: dict, *, use_color: bool) -> None:
@@ -3010,15 +3025,18 @@ def _first_curated_rank(hits) -> int | None:
     return None
 
 
-def _deep_fetch_when_nothing_curated(hits: list, n_results: int, fetch):
+def _deep_fetch_when_nothing_curated(hits: list, n_results: int, fetch, *, short: bool = False):
     """``(hits_to_rank, curated_first_rank)`` — one deeper fetch when needed.
 
-    Fires only when the shallow result contains no curated document at all. The
-    deeper list is annotated before return so the caller can rank it. A failed
-    or unhelpful second call degrades to the shallow hits: the extra fetch is an
-    optimisation, never a dependency.
+    Fires when the shallow result contains no curated document at all, or when
+    ``short`` — collapsing identical-text copies left it shorter than the
+    requested limit, so the freed slot has nothing to fill it from. Either way
+    it is ONE extra call, only when a shallow list has shown it is needed. The
+    deeper list is annotated and collapsed before return so the caller can rank
+    it. A failed or unhelpful second call degrades to the shallow hits: the
+    extra fetch is an optimisation, never a dependency.
     """
-    if not no_curated_source(hits):
+    if not short and not no_curated_source(hits):
         return hits, _first_curated_rank(hits)
     depth = max(n_results, _DEEP_FETCH_DEPTH)
     if depth <= len(hits):
@@ -3030,6 +3048,7 @@ def _deep_fetch_when_nothing_curated(hits: list, n_results: int, fetch):
     if not isinstance(deeper, list) or len(deeper) <= len(hits):
         return hits, _first_curated_rank(hits)
     annotate(deeper)
+    collapse_identical_text(deeper)
     return deeper, _first_curated_rank(deeper)
 
 
@@ -3092,8 +3111,15 @@ def _daemon_search_fast(query: str, n_results: int, wing: str = None) -> dict | 
     if hits is None:
         return None
     annotate(hits)
+    # Collapse BEFORE the depth decision and the reserved slot, so the trigger,
+    # curated_first_rank and the truncation all see one list (#526 PR 3).
+    shallow_n = len(hits)
+    collapse_identical_text(hits)
     hits, curated_rank = _deep_fetch_when_nothing_curated(
-        hits, n_results, lambda limit: _fast_hits(query, limit, wing)
+        hits,
+        n_results,
+        lambda limit: _fast_hits(query, limit, wing),
+        short=len(hits) < min(n_results, shallow_n),
     )
     curated_hit = hits[curated_rank - 1] if curated_rank else None
     prefer_curated(hits)
@@ -3121,13 +3147,17 @@ def _daemon_search_hybrid(
     hits = data.get("results")
     annotate(hits)
     if isinstance(hits, list):
+        shallow_n = len(hits)
+        collapse_identical_text(hits)
 
         def _refetch(limit):
             wider_body = dict(body, limit=limit)
             wider = _post_daemon_rest("/search/hybrid", wider_body)
             return (wider or {}).get("results")
 
-        hits, curated_rank = _deep_fetch_when_nothing_curated(hits, n_results, _refetch)
+        hits, curated_rank = _deep_fetch_when_nothing_curated(
+            hits, n_results, _refetch, short=len(hits) < min(n_results, shallow_n)
+        )
         curated_hit = hits[curated_rank - 1] if curated_rank else None
         prefer_curated(hits)
         data["results"] = _truncate_reserving_curated(hits, n_results, curated_hit, curated_rank)
@@ -3365,6 +3395,7 @@ def cmd_search(args):
                 data = _call_daemon_tool("mempalace_search", arguments)
                 results = data.get("results") if isinstance(data, dict) else None
                 annotate(results)
+                collapse_identical_text(results)
                 prefer_curated(results)
         except DaemonError as e:
             if want_json:

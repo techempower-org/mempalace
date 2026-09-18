@@ -1619,8 +1619,8 @@ class TestCmdSearchProvenance:
         """A widened window with no curated hit must leave the header firing."""
         from mempalace import cli
 
-        narrow = self._fast_payload_n([self._t(i, UNRELATED) for i in range(2)])
-        wide = self._fast_payload_n([self._t(i, UNRELATED) for i in range(4)])
+        narrow = self._fast_payload_n([self._t(i, f"{UNRELATED} {i}") for i in range(2)])
+        wide = self._fast_payload_n([self._t(i, f"{UNRELATED} {i}") for i in range(4)])
         env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
         with (
             patch.dict("os.environ", env, clear=True),
@@ -1641,7 +1641,10 @@ class TestCmdSearchProvenance:
         """The extra fetch is an optimisation; losing it must not lose the search."""
         from mempalace import cli
 
-        narrow = self._fast_payload_n([self._t(i, UNRELATED) for i in range(2)])
+        # Distinct texts: two hits saying the SAME words are collapsed to one
+        # before the depth decision (#526 PR 3), which is not what this test is
+        # about — it is about the second call failing.
+        narrow = self._fast_payload_n([self._t(i, f"{UNRELATED} {i}") for i in range(2)])
         env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
         with (
             patch.dict("os.environ", env, clear=True),

@@ -323,7 +323,12 @@ class TestSearchCompactFormat:
     def test_one_line_per_hit(self, capsys):
         from mempalace import cli
 
-        hits = [_hit(similarity=0.91), _hit(similarity=0.7, wing="other")]
+        # Distinct texts: two hits with the SAME words collapse to one line by
+        # design (#526 PR 3); this test is about one line per hit.
+        hits = [
+            _hit(similarity=0.91),
+            _hit(similarity=0.7, wing="other", text="a different drawer"),
+        ]
         payload = {"results": hits, "warnings": []}
         env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
         with patch.dict("os.environ", env, clear=True):
