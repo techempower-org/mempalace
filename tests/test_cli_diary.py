@@ -91,14 +91,23 @@ _ENTRIES = [
 _READ_OK = {"agent": "morpheus", "entries": _ENTRIES, "total": 3, "showing": 3}
 
 
-# `_fail_daemon`'s exit code, in one place so the rebase that changes it is a
+# `_fail_daemon`'s exit code, in one place so the change that moves it is a
 # one-line edit rather than a hunt. Contract #44 wants 2 for "palace
-# unavailable"; the diary family (and cmd_why / cmd_tags / cmd_graph) have
-# always used 1. VERIFIED 2026-09-17: #509 does NOT move it — its two exit(64)s
-# are a daemon *4xx refusal* helper and cmd_pending's unknown-action guard, and
-# `_fail_daemon` is untouched by that PR. So this stays 1 until someone owns
-# that cross-cutting change.
-_DAEMON_FAIL_EXIT = 1
+# unavailable"; the diary family (and cmd_why / cmd_tags / cmd_graph) used 1
+# for years. The previous revision of this comment said it "stays 1 until
+# someone owns that cross-cutting change" — #523 owns it, and this is the
+# one-line edit that comment was written for.
+#
+# It covers a transport failure AND a JSON-RPC error from a daemon that
+# ANSWERED (a -32602 schema rejection, below): both mean the palace could not
+# serve the request, which the contract calls 2. The distinction between them
+# survives in the message, not in the exit code.
+#
+# ⚠️ NOT the same as a no-results exit. `TestDiaryReadNoResultsExitCode` stays
+# at a literal 1 on purpose: the read RAN and matched nothing. Flipping those
+# with these would report an empty result as an outage — the exact defect #523
+# exists to remove, re-created by its own fix.
+_DAEMON_FAIL_EXIT = 2
 
 
 def _daemon(payload):
@@ -272,7 +281,7 @@ class TestDiaryWrite:
         assert exc.value.code == 2
         assert "another mine is in progress" in capsys.readouterr().err
 
-    def test_daemon_unreachable_exits_1(self, capsys):
+    def test_daemon_unreachable_exits_2(self, capsys):
         from mempalace import cli
 
         with (
@@ -282,7 +291,7 @@ class TestDiaryWrite:
             with pytest.raises(SystemExit) as exc:
                 cli.cmd_diary(_write_args())
 
-        assert exc.value.code == 1
+        assert exc.value.code == 2
         assert "daemon unreachable" in capsys.readouterr().err
 
     def test_local_path_calls_tool_function(self):
@@ -603,9 +612,11 @@ class TestDiaryReadWithoutIdentity:
             -32602: Missing required parameter 'agent_name'
                     for tool mempalace_diary_read
 
-        Exit stays 1 (the diary family's daemon-failure code); only the
-        wording changes, because the bare daemon message sends the reader
-        after a flag they never passed.
+        Exit is `_DAEMON_FAIL_EXIT` — 2 since #523, because a JSON-RPC
+        error is the daemon ANSWERING and failing, which the contract calls
+        "could not run" rather than "no results". The wording changes too,
+        because the bare daemon message sends the reader after a flag they
+        never passed.
         """
         from mempalace import cli
 
@@ -623,7 +634,7 @@ class TestDiaryReadWithoutIdentity:
             with pytest.raises(SystemExit) as exc:
                 cli.cmd_diary(_read_args(agent=None, wing="2g"))
 
-        assert exc.value.code == 1
+        assert exc.value.code == _DAEMON_FAIL_EXIT
         err = capsys.readouterr().err
         assert "predates" in err
         assert "--agent" in err
@@ -750,7 +761,7 @@ class TestDiaryAgents:
 
         assert exc.value.code == 2
 
-    def test_daemon_unreachable_exits_1(self, capsys):
+    def test_daemon_unreachable_uses_the_daemon_failure_code(self, capsys):
         from mempalace import cli
 
         fake = MagicMock(side_effect=cli.DaemonError("daemon error: connection refused"))

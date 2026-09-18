@@ -11,17 +11,22 @@ exit codes drifted apart:
     unreachable backend         1        1        2
 
 The codes are not a matter of taste here — `cli.py` has carried a documented
-contract since #44:
+contract since #44, revised by #523/#514:
 
     0  success
-    1  no results / search returned empty
-    2  palace unavailable (daemon unreachable, palace missing, etc.)
-    64 bad args
+    1  no results — the operation RAN and selected nothing
+    2  the operation could not run: palace unavailable, or a usage error
+    64 the daemon answered and REJECTED a well-formed request (a 4xx)
 
-Every refusal in that table is "palace unavailable", so the answer is 2 for
-all nine cells, and the two commands exiting 0 were reporting a refusal as a
+Every refusal in that table is "could not run", so the answer is 2 for all
+nine cells, and the two commands exiting 0 were reporting a refusal as a
 success — the defect family #418 and #459 exist to remove, surviving in the
 exit status after being fixed in the prose.
+
+⚠️ The old wording of this block said `64 bad args (argparse default for parse
+errors)`. argparse exits **2**, and nothing in `mempalace/` subclasses
+`ArgumentParser` or overrides `error()`, so that row described a behaviour the
+CLI never had (#514). `TestTheContractItself` below pins the real one.
 
 This file is a TABLE rather than nine hand-written tests on purpose: the
 failure being prevented is divergence, and a table makes adding a command
@@ -29,6 +34,7 @@ without adding it here the visible thing to do.
 """
 
 import argparse
+import ast
 import inspect
 import json
 import os
@@ -267,3 +273,103 @@ class TestJsonRefusalsShareOneShape:
         assert payload["error"] == "palace_unavailable"
         assert payload["palace_path"] == os.path.abspath(str(palace))
         assert "backend" in payload
+
+
+class TestTheContractItself:
+    """The four codes, one test each, and the boundary that matters most.
+
+    Added with #523/#514. The previous contract text claimed 64 was argparse's
+    parse-error code; it is 2, and no test had ever checked, which is how a
+    false sentence sat in the header of the file that defines the contract.
+    """
+
+    def test_argparse_parse_errors_exit_2_not_64(self):
+        """#514: the header said 64 for years. Nothing ever asserted it."""
+        from mempalace import cli
+
+        with patch.object(sys, "argv", ["mempalace", "--no-such-flag"]):
+            with pytest.raises(SystemExit) as exc:
+                cli.main()
+        assert exc.value.code == 2
+
+    def test_no_argumentparser_subclass_overrides_error(self):
+        """The reason argparse's 2 reaches the shell unmodified.
+
+        If some future change subclasses ArgumentParser and overrides error(),
+        the row above silently stops being true — so assert the absence.
+        """
+        import mempalace.cli as cli_mod
+
+        tree = ast.parse(inspect.getsource(cli_mod))
+        subclasses = [
+            n.name
+            for n in ast.walk(tree)
+            if isinstance(n, ast.ClassDef)
+            and any(getattr(b, "attr", getattr(b, "id", None)) == "ArgumentParser" for b in n.bases)
+        ]
+        assert subclasses == [], f"ArgumentParser subclassed by {subclasses}"
+
+    def test_a_verb_group_without_an_action_exits_2(self):
+        """A usage error, not a daemon rejection — 2, and never 64."""
+        from mempalace import cli
+
+        args = argparse.Namespace(pending_action=None, json=False)
+        with pytest.raises(SystemExit) as exc:
+            cli.cmd_pending(args)
+        assert exc.value.code == 2
+
+    def test_that_guard_emits_a_json_document_for_json_callers(self, capsys):
+        """A hand-rolled `print(..., file=sys.stderr)` gives a --json caller
+        prose and no document at all — the wave's recurring shape, a report
+        that disagrees with the promised contract. `_fail_client` fixes it."""
+        from mempalace import cli
+
+        args = argparse.Namespace(pending_action=None, json=True)
+        with pytest.raises(SystemExit) as exc:
+            cli.cmd_pending(args)
+        assert exc.value.code == 2
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["source"] == "cli"
+        assert "drain" in payload["error"]
+
+    def test_that_guard_never_reaches_the_drain(self):
+        """The exit code alone would pass even if it had already posted half
+        the queue. What must be true is that nothing was drained."""
+        from mempalace import cli
+
+        args = argparse.Namespace(pending_action=None, json=False)
+        with patch("mempalace.cli.cmd_pending_drain") as drain:
+            with pytest.raises(SystemExit):
+                cli.cmd_pending(args)
+        drain.assert_not_called()
+
+    def test_a_daemon_refusal_is_64_and_nothing_else_is(self):
+        """64 means exactly one thing: the daemon answered and refused."""
+        from mempalace import cli
+
+        err = cli.DaemonRequestError("room 'diary' is not in the canonical set", status=400)
+        with pytest.raises(SystemExit) as exc:
+            cli._exit_daemon_request_error(err, want_json=False)
+        assert exc.value.code == 64
+
+    def test_an_outage_is_2_not_1(self):
+        """The load-bearing line: 1 means it ran and found nothing."""
+        from mempalace import cli
+
+        with patch("mempalace.cli._daemon_url", return_value="http://d:8085"):
+            with pytest.raises(SystemExit) as exc:
+                cli._fail_daemon(cli.DaemonError("daemon unreachable at http://d:8085"), False)
+        assert exc.value.code == 2
+
+    def test_the_header_block_documents_exactly_these_codes(self):
+        """Docs-vs-code: the contract is stated in a comment, and a comment
+        cannot be executed. This is the only thing that keeps it honest."""
+        import mempalace.cli as cli_mod
+
+        header = inspect.getsource(cli_mod)[:6000]
+        assert "1  no results" in header
+        assert "2  the operation could not run" in header
+        assert "64 the daemon answered and REJECTED" in header
+        assert "argparse default for parse errors" not in header, (
+            "the #514 falsehood must not come back"
+        )

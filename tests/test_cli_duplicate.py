@@ -380,7 +380,7 @@ class TestDuplicateRouting:
 
 
 class TestDuplicateFailureModes:
-    def test_daemon_unreachable_exits_1(self, capsys):
+    def test_daemon_unreachable_exits_2(self, capsys):
         import urllib.error
 
         from mempalace import cli
@@ -393,7 +393,7 @@ class TestDuplicateFailureModes:
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_duplicate(_args())
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         assert "palace daemon unreachable" in capsys.readouterr().err
 
     def test_tool_error_exits_2(self, capsys):

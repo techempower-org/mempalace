@@ -285,7 +285,7 @@ class TestListEmpty:
 
 
 class TestListDaemonDown:
-    def test_none_response_exits_1_with_stderr(self, capsys):
+    def test_none_response_exits_2_with_stderr(self, capsys):
         """``_call_daemon_rest`` returns None on 404/401/403 — endpoint
         missing or auth mismatch. ``mempalace list`` should not silently
         fall back to "no results"; it should treat this as daemon-down
@@ -296,12 +296,12 @@ class TestListDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_list(_make_args())
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         err = capsys.readouterr().err
         assert "palace daemon unreachable" in err
         assert "mempalace status" in err
 
-    def test_daemon_error_exits_1_with_stderr(self, capsys):
+    def test_daemon_error_exits_2_with_stderr(self, capsys):
         """Network failures raise DaemonError; same stderr/exit-code contract."""
         from mempalace import cli
 
@@ -312,7 +312,7 @@ class TestListDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_list(_make_args())
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         err = capsys.readouterr().err
         assert "palace daemon unreachable" in err
         assert "connection refused" in err
@@ -330,7 +330,7 @@ class TestListDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_list(_make_args(format="json"))
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert "error" in payload

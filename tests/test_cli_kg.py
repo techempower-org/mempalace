@@ -197,7 +197,7 @@ class TestKgAdd:
         assert exc.value.code == 2
         assert "subject must not be empty" in capsys.readouterr().err
 
-    def test_daemon_unreachable_exits_1(self, capsys):
+    def test_daemon_unreachable_exits_2(self, capsys):
         from mempalace import cli
 
         with (
@@ -207,7 +207,7 @@ class TestKgAdd:
             with pytest.raises(SystemExit) as exc:
                 cli.cmd_kg(_add_args())
 
-        assert exc.value.code == 1
+        assert exc.value.code == 2
         assert "daemon unreachable" in capsys.readouterr().err
 
     def test_local_path_calls_tool_function(self):
@@ -455,7 +455,7 @@ class TestKgTimeline:
                 cli.cmd_kg(_tl_args())
 
         err = capsys.readouterr().err
-        assert exc.value.code == 1
+        assert exc.value.code == 2
         assert "rejected the call" in err
         assert "unreachable" not in err
 

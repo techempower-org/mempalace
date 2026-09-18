@@ -436,7 +436,7 @@ class TestStatsDaemonDown:
         err = capsys.readouterr().err
         assert "PALACE_DAEMON_URL" in err
 
-    def test_unreachable_exits_1(self, capsys):
+    def test_unreachable_exits_2(self, capsys):
         """Network failure surfaces as exit 1 (matches sibling commands).
 
         Earlier multi-RPC implementation exited 2 here; the migration to
@@ -451,11 +451,11 @@ class TestStatsDaemonDown:
             with patch("urllib.request.urlopen", side_effect=boom):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_stats(self._args())
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         err = capsys.readouterr().err
         assert "daemon" in err.lower()
 
-    def test_404_exits_1(self, capsys):
+    def test_404_exits_2(self, capsys):
         """An older daemon without /stats returns 404 — exit 1."""
         from mempalace import cli
 
@@ -466,9 +466,9 @@ class TestStatsDaemonDown:
             with patch("urllib.request.urlopen", side_effect=four_oh_four):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_stats(self._args())
-        assert ex.value.code == 1
+        assert ex.value.code == 2
 
-    def test_401_exits_1(self, capsys):
+    def test_401_exits_2(self, capsys):
         """Bad auth surfaces as exit 1, same shape as 404."""
         from mempalace import cli
 
@@ -479,9 +479,9 @@ class TestStatsDaemonDown:
             with patch("urllib.request.urlopen", side_effect=unauthorized):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_stats(self._args())
-        assert ex.value.code == 1
+        assert ex.value.code == 2
 
-    def test_403_exits_1(self, capsys):
+    def test_403_exits_2(self, capsys):
         """Forbidden surfaces as exit 1 — daemon reachable but auth bad
         or endpoint disabled."""
         from mempalace import cli
@@ -493,7 +493,7 @@ class TestStatsDaemonDown:
             with patch("urllib.request.urlopen", side_effect=forbidden):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_stats(self._args())
-        assert ex.value.code == 1
+        assert ex.value.code == 2
 
     def test_inner_error_envelope_exits_2(self, capsys):
         """Daemon returns 200 with ``{"error": ...}`` — palace itself broken

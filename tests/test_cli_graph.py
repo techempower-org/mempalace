@@ -327,7 +327,7 @@ class TestGraphEmpty:
 
 
 class TestGraphDaemonDown:
-    def test_none_response_exits_1_with_stderr(self, capsys):
+    def test_none_response_exits_2_with_stderr(self, capsys):
         """``_call_daemon_rest`` returns None on 404/401/403. ``mempalace
         graph`` should treat this as daemon-down per the team-lead's spec,
         not silently render an empty snapshot."""
@@ -337,12 +337,12 @@ class TestGraphDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_graph(_make_args())
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         err = capsys.readouterr().err
         assert "palace daemon unreachable" in err
         assert "mempalace status" in err
 
-    def test_daemon_error_exits_1_with_stderr(self, capsys):
+    def test_daemon_error_exits_2_with_stderr(self, capsys):
         """Network failures (incl. /graph timeouts under backfill load)
         raise DaemonError; same stderr/exit-code contract."""
         from mempalace import cli
@@ -354,7 +354,7 @@ class TestGraphDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_graph(_make_args())
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         err = capsys.readouterr().err
         assert "palace daemon unreachable" in err
         assert "timed out" in err
@@ -372,7 +372,7 @@ class TestGraphDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_graph(_make_args(format="json"))
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert "error" in payload
@@ -387,7 +387,7 @@ class TestGraphDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_graph(_make_args(format="json"))
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert "error" in payload

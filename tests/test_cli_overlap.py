@@ -238,7 +238,7 @@ class TestOverlapFailureModes:
         err = capsys.readouterr().err
         assert "PALACE_DAEMON_URL" in err
 
-    def test_unreachable_exits_1(self, capsys):
+    def test_unreachable_exits_2(self, capsys):
         from mempalace import cli
 
         def boom(req, timeout=None):
@@ -248,11 +248,11 @@ class TestOverlapFailureModes:
             with patch("urllib.request.urlopen", side_effect=boom):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_overlap(_args())
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         err = capsys.readouterr().err
         assert "daemon" in err.lower()
 
-    def test_404_exits_1(self, capsys):
+    def test_404_exits_2(self, capsys):
         """Older daemon without /cypher → exit 1."""
         from mempalace import cli
 
@@ -263,9 +263,9 @@ class TestOverlapFailureModes:
             with patch("urllib.request.urlopen", side_effect=four_oh_four):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_overlap(_args())
-        assert ex.value.code == 1
+        assert ex.value.code == 2
 
-    def test_503_non_postgres_exits_1(self, capsys):
+    def test_503_non_postgres_exits_2(self, capsys):
         """Daemon on chroma backend returns 503 for /cypher — exit 1."""
         from mempalace import cli
 
@@ -278,7 +278,7 @@ class TestOverlapFailureModes:
             with patch("urllib.request.urlopen", side_effect=unavail):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_overlap(_args())
-        assert ex.value.code == 1
+        assert ex.value.code == 2
 
     def test_inner_error_envelope_exits_2(self, capsys):
         from mempalace import cli

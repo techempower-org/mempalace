@@ -71,11 +71,25 @@ from .version import __version__
 # a TTY we default to quiet mode so piped output stays clean — explicit
 # ``--quiet`` / ``--json`` still override (see ``_resolve_quiet``).
 #
-# Exit codes (per issue #44):
+# Exit codes (per issue #44, revised #523/#514):
 #   0  success
-#   1  no results / search returned empty
-#   2  palace unavailable (daemon unreachable, palace missing, etc.)
-#   64 bad args (argparse default for parse errors)
+#   1  no results — the operation RAN and selected nothing
+#   2  the operation could not run: palace unavailable (daemon
+#      unreachable, a server-side error from a daemon that answered,
+#      palace missing) OR a usage error (argparse parse failures, a verb
+#      group named without an action)
+#   64 the daemon answered and REJECTED a well-formed request (a 4xx —
+#      e.g. an unknown room filter). Nothing else uses 64.
+#
+# 1 vs 2 is the load-bearing line: 1 means the palace was reachable and
+# had nothing to say; 2 means the question never got asked. A command
+# that reports "no results" for an outage sends the reader looking for
+# missing data instead of a missing daemon.
+#
+# argparse's own parse errors exit 2 and always have — mempalace does not
+# subclass ArgumentParser and does not override error(). The previous
+# revision of this block claimed 64 was "argparse default for parse
+# errors", which was never true of this CLI (#514).
 #
 # How the daemon-strict read verbs ``window`` / ``source`` (#500, #502)
 # resolve against that contract — written down because the interesting rows
@@ -5104,16 +5118,26 @@ def _print_pending_plan(planned: list, *, want_json: bool) -> None:
 
 
 def cmd_pending(args):
-    """Dispatch the ``pending`` verb group."""
+    """Dispatch the ``pending`` verb group.
+
+    A verb group named without an action is a usage error, the same class
+    as argparse's own "invalid choice" — so it exits 2, not 64. 64 means
+    exactly one thing: the daemon answered and rejected a well-formed
+    request. This guard never reaches the daemon.
+
+    It goes through ``_fail_client`` rather than printing and exiting
+    inline, because a hand-rolled ``print(..., file=sys.stderr)`` gives a
+    ``--json`` caller prose and no document at all — the wave's recurring
+    shape, a report that disagrees with the promised contract.
+    """
     action = getattr(args, "pending_action", None)
     if action == "drain":
         cmd_pending_drain(args)
         return
-    print(
+    _fail_client(
         "mempalace pending: choose an action (drain). See `mempalace pending --help`.",
-        file=sys.stderr,
+        getattr(args, "json", False),
     )
-    sys.exit(64)
 
 
 def cmd_replay(args):
@@ -5672,8 +5696,9 @@ def _open_drawers_or_refuse(
     you happened to run.
 
     **The exit codes are not a taste call.** ``cli.py`` has carried a
-    contract since #44 — 0 success, 1 no results, 2 palace unavailable, 64
-    bad args — and every refusal below is "palace unavailable", so every one
+    contract since #44 — 0 success, 1 no results, 2 the operation could not
+    run, 64 the daemon rejected a well-formed request — and every refusal
+    below is "could not run", so every one
     is 2. Two of the three commands were exiting **0** on a missing
     database: a refusal reported as a success, which is the defect #418 and
     #459 removed from the prose, still alive in the exit status.
@@ -8198,9 +8223,29 @@ def _fail_daemon_unavailable(err, want_json: bool) -> None:
     An earlier version of this docstring said the consolidation would
     become correct "once #499 lands". It did not, and leaving that sentence
     in place would have invited a tidy-up that silently changed these verbs
-    from 2 to 1. ``test_a_transport_failure_exits_2`` is what makes the
-    mistake loud rather than silent — if ``_fail_daemon`` ever does move to
-    2, delete this helper and that test still passes.
+    from 2 to 1.
+
+    ⚠️ That version also said: "if ``_fail_daemon`` ever does move to 2,
+    delete this helper and that test still passes." #523 moved it to 2 and
+    the test *does* still pass — which is exactly why the helper is still
+    here. The retirement condition was written in exit-code terms, and the
+    exit code is not the only contract:
+
+        _fail_daemon_unavailable   {"error": "daemon_unavailable", "message": …}
+        _window_route_failed       {"error": <key>, "message": …, "status", "route"}
+        _fail_daemon               {"error": <text>, "source": "daemon"}
+
+    ``window`` and ``source`` use **key + message** across the whole family,
+    deliberately, so a client can branch on ``error`` without parsing prose.
+    ``_fail_daemon`` puts the prose *in* ``error``. Folding would therefore
+    change these two verbs' machine output and leave them inconsistent with
+    their own sibling — while every existing test passed, because none of
+    them asserted the shape.
+
+    ⭐ The real retirement condition: delete this helper when the two
+    families agree on a JSON shape, not when they agree on an exit code.
+    ``test_transport_failure_json_keeps_the_window_family_shape`` now pins
+    that, so the next fold attempt fails loudly instead of silently.
     """
     text = str(err)
     if want_json:
@@ -8214,47 +8259,58 @@ def _fail_daemon_unavailable(err, want_json: bool) -> None:
     sys.exit(2)
 
 
-def _fail_daemon(err, want_json: bool, *, route: str | None = None, **extra) -> None:
-    """Daemon call failed → exit 1 (matches cmd_why / cmd_tags / cmd_graph).
+def _fail_daemon(
+    err, want_json: bool, *, route: str | None = None, tool: str | None = None, **extra
+) -> None:
+    """The daemon could not serve the request → exit 2 (palace unavailable).
 
-    ``DaemonError`` covers two different situations and the distinction
-    matters to whoever reads the line: a transport failure (the daemon is
-    asleep, wrong port, no route) versus a JSON-RPC error the daemon
-    itself returned (the tool raised server-side — e.g. a dropped
-    postgres connection under an AGE query). Reporting the second as
-    "unreachable" sends the reader after the wrong problem, so keep the
-    sibling commands' wording for transport and say what actually
-    happened otherwise.
+    ``DaemonError`` covers two situations and the distinction matters to
+    whoever reads the line: a transport failure (the daemon is asleep,
+    wrong port, no route) versus a JSON-RPC error the daemon itself
+    returned (the tool raised server-side — e.g. a dropped postgres
+    connection under an AGE query). Reporting the second as "unreachable"
+    sends the reader after the wrong problem, so the MESSAGE still
+    separates them even though the exit code no longer does: both mean
+    the palace could not serve the request, which the contract calls 2.
 
-    ``route`` and ``extra`` exist because the twenty call sites this
+    A 4xx refusal is NOT this. The daemon answered and rejected a
+    well-formed request; that is 64, and it arrives through
+    ``DaemonRequestError`` / ``_exit_daemon_request_error`` (#499).
+
+    ``route``, ``tool`` and ``extra`` exist because the call sites this
     replaced did not all say the same thing, and a helper that cannot
-    express what they said would make the CLI report LESS than it did.
-    Specifically:
+    express what they said would make the CLI report LESS than it did:
 
     * ``err=None`` is the 404/401/403 case — ``_call_daemon_rest`` returns
       ``None`` and **nothing was raised**, so there is no exception to
       interpolate. The prose drops the parenthetical rather than printing
       "(None)", and ``route`` carries the only identifying information
       those sites ever had.
-    * ``route`` preserves the per-route JSON error ("daemon /list
-      unavailable") that five sites emitted. Without it a script loses
-      which route failed.
-    * ``extra`` carries structured fields the site already published —
-      today ``status`` from the two ``/cypher`` sites. Dropping a JSON
-      field is a breaking change to a machine interface and is invisible
-      to a prose diff (#476).
+    * ``tool`` names the MCP tool that failed, in prose and in JSON, so
+      consolidating ``_daemon_tool_or_fail``'s message loses neither.
+    * ``extra`` carries structured fields a site already published —
+      ``status`` from the two ``/cypher`` sites. Dropping a JSON field is
+      a breaking change to a machine interface and is invisible to a
+      prose diff (#523).
     """
     text = str(err) if err is not None else ""
+    # Same predicate the tool helper used, kept verbatim so the JSON
+    # `reachable` flag means exactly what it meant before the message moved.
+    unreachable = not text.startswith("daemon error")
     if want_json:
         payload = {
             "error": f"daemon {route} unavailable" if err is None and route else text,
             "source": "daemon",
         }
+        if tool is not None:
+            payload["tool"] = tool
+            payload["reachable"] = not unreachable
         payload.update(extra)
         _emit_json(payload)
-    elif text.startswith("daemon error"):
+    elif not unreachable:
+        target = tool if tool else "the call"
         print(
-            f"palace daemon at {_daemon_url()} rejected the call — {text}",
+            f"palace daemon at {_daemon_url()} rejected {target} — {text}",
             file=sys.stderr,
         )
     else:
@@ -8264,7 +8320,9 @@ def _fail_daemon(err, want_json: bool, *, route: str | None = None, **extra) -> 
             f"see mempalace status for diagnostics{detail}",
             file=sys.stderr,
         )
-    sys.exit(1)
+    # 2, not 1: the operation could not run against the palace. 1 is
+    # reserved for "it ran and selected nothing" (#44 contract, #514).
+    sys.exit(2)
 
 
 def _fail_tool(data, want_json: bool) -> None:
@@ -10083,44 +10141,31 @@ def _read_family_fail(message: str, want_json: bool, code: int, source: str = "c
 def _daemon_tool_or_fail(name: str, arguments: dict, want_json: bool) -> dict:
     """``_call_daemon_tool`` with the family's uniform failure handling.
 
-    Splits the two failure modes ``DaemonError`` conflates, because the
-    operator response differs and the sibling commands' single
-    "unreachable" message is actively wrong for the second:
+    This wrapper stays, and so do its six callers; what moved is its
+    duplicated failure MESSAGE, which now delegates to ``_fail_daemon`` with
+    a ``tool=`` kwarg. It kept its own copy for as long as it drew a
+    distinction ``_fail_daemon`` did not: transport failure → exit 1,
+    JSON-RPC error from a daemon that answered → exit 2. That is why the
+    message consolidation deliberately left it alone — merging then would
+    have forced one exit code onto two situations in six commands, as a
+    "cleanup".
 
-    - transport failure (message starts ``daemon unreachable``) → exit 1
-    - JSON-RPC error from a daemon that answered (``daemon error -32001:
-      ... exceeded PALACE_MCP_TOOL_TIMEOUT_SECONDS``) → exit 2, same
-      class as an inner ``{"error": ...}`` envelope
+    The two **converge** rather than become identical: the transport branch
+    moves 1 → 2, the JSON-RPC branch is unchanged at 2, and the distinction
+    between them survives in the PROSE only — plus the ``reachable`` flag on
+    the JSON, which means exactly what it meant before.
 
     Never falls back to local: a silent fallback is exactly the
     split-brain daemon-strict exists to prevent.
     """
     try:
         return _call_daemon_tool(name, arguments)
+    except DaemonRequestError as e:
+        # The daemon answered and refused a well-formed request — 64, not
+        # an outage (#499).
+        _exit_daemon_request_error(e, want_json=want_json)
     except DaemonError as e:
-        detail = str(e)
-        unreachable = detail.startswith("daemon unreachable")
-        if want_json:
-            _emit_json(
-                {
-                    "error": detail,
-                    "source": "daemon",
-                    "tool": name,
-                    "reachable": not unreachable,
-                }
-            )
-        elif unreachable:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                f"see mempalace status for diagnostics ({detail})",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"\n  ERROR: daemon rejected {name}: {detail}",
-                file=sys.stderr,
-            )
-        sys.exit(1 if unreachable else 2)
+        _fail_daemon(e, want_json, tool=name)
 
 
 def _fail_on_error_envelope(data, want_json: bool, populated_key: str | None = None) -> None:
@@ -10275,7 +10320,7 @@ def cmd_wings(args):
             # A refusal is not an outage (#499).
             _exit_daemon_request_error(_req_err, want_json=want_json)
         except DaemonError as e:
-            # Normalised onto the shared helper (#476). This site had
+            # Normalised onto the shared helper (#523). This site had
             # drifted furthest: a leading blank line, an "  ERROR: "
             # prefix, no "see mempalace status" clause, and a JSON error
             # holding a pre-rendered sentence rather than the exception.
