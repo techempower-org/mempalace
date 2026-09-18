@@ -1,0 +1,37 @@
+seq: 163
+id: search-collapse-identical-text
+date: '2026-09-18'
+bucket: Fixed
+commit: HEAD
+area: Search
+summary: identical-text hits from different paths are collapsed before the curated deep fetch and the reserved slot
+body: |
+  A document mined at two paths — ``docs/foo.md`` and its
+  ``docs/rescued-from-vartmp-20260905/foo.md`` copy — comes back twice, so a
+  ``--limit 3`` spends two of its three slots on the same words (#526).
+  Existing mechanisms were checked first: ``prefer_curated`` reorders
+  near-duplicates but never removes, and the searcher's
+  ``_dedupe_rendered_hits`` keys on the SAME path and closet hits only.
+
+  ``result_ordering.collapse_identical_text`` keys on the text with
+  whitespace runs collapsed — nothing looser, so a one-line edit between two
+  copies stays two documents. The first occurrence keeps the ranker's slot; a
+  later higher-trust copy (memory < file < transcript < diary) takes it and
+  inherits the bookkeeping — same words, the copy a reader can cite. The kept
+  hit is marked on both channels: ``duplicates_collapsed`` and
+  ``duplicate_of`` in ``--json``, ``⟨N identical copies collapsed⟩`` in every
+  prose renderer from one producer, with one test per renderer.
+
+  It runs BEFORE the depth decision and the reserved slot on the fast, hybrid
+  and MCP-fallback routes, and on the deeper list, so the trigger,
+  ``curated_first_rank`` and the truncation all see one list. The deep fetch
+  now also fires when a collapse left the shallow list shorter than the
+  requested limit — one extra call, only when a duplicate was actually seen;
+  the common path still makes one call.
+
+  Two existing fixtures had two hits with identical text — exactly the shape
+  this collapses — and were given distinct texts so each test keeps testing
+  what it names (a failed second call; one compact line per hit).
+tests: "13 new (test_search_dedup: helper — keep-first, whitespace identity, curated copy takes the slot, distinct text survives, idempotent/tolerant; cmd_search — refill via one deeper call, collapse before reservation, no extra call on the common path; prose mark per renderer table/full/compact + plural + unique-hits negative); 3 existing fixtures given distinct texts"
+fork_pr: 543
+files: [mempalace/cli.py, mempalace/result_ordering.py]
