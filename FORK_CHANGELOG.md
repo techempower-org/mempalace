@@ -18,6 +18,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-09-18]
+
+
+### Added
+
+
+- **30 failure-shape records as drawers, a recall harness, and a section 5 that runs** (`HEAD` — pending resolution)
+  The #503 spec described a slice and it was never built: `docs/failure-shapes/`
+  had 0 files, `scripts/failure_shape_recall.py` did not exist, and the falsifier
+  table's columns were `outcome | reading` — interpretations with no queries
+  behind them.
+
+  **30 records, not 33.** The corpus counts 33 instances, but four of 2g-c6's
+  eight are counted and never described: #503 gives their total, not their
+  mechanisms, so they have no `asked`, no `answered`, and cannot be written
+  without inventing them. §25.6 holds two distinct mechanisms that the
+  section-unit count merged into one.
+
+      33 counted  −  4 counted-but-undescribed  +  1 (§25.6 split)  =  30
+
+  The gap is stated in the spec rather than reconciled. Those four are real and
+  are retrievable by nothing, which is a fact about the corpus, not a rounding
+  error — and a count-based acceptance check would have passed at 33 files with
+  four invented ones.
+
+  Each record carries `slug`, `shape`, `asked`, `instrument`, `answered`,
+  `control_passed`, `direction`, `direction_basis`, `provenance` and
+  `instances` in front matter, so it mines as one drawer into wing
+  `memorypalace`. Content is parsed out of the spec's own tables rather than
+  retyped, which caught its own bug: unescaping `\|` *before* splitting the
+  markdown row turned an escaped pipe into a column separator and shifted one
+  record's `direction` into its `answered` field.
+
+  The harness reads only, reports recall@3 and first-hit rank, and prints **no
+  aggregate across partitions** — pooling an authored partition with an
+  independent one reports the author's recall as a reader's. A = 4 2g-sourced
+  (this author), B-blind = 6 written blind by `oracle-issue-audit`, B-TBD = 20
+  awaiting a lane that has never read the spec. Per Oracle's ruling, independence
+  is checked against a corpus's sources, not its authors.
+
+  Its set check is a two-way diff read from front matter rather than filenames,
+  and it compares each slug to its own filename. The second half was missing at
+  first, and the pre-registered rename control is what found it: a renamed file
+  passed while the docstring asserted that renames must fail. The docstring
+  described the design intent; the code checked something narrower — the shape
+  this corpus exists to index, found in the instrument built to measure it.
+
+  *Tests:* none (docs + read-only script); three controls re-run after the fix — removed slug fails, renamed file fails, edited front-matter slug fails, unmodified tree passes; --check-set-only exit 0
+  *Files:* `docs/failure-shapes/`, `scripts/failure_shape_recall.py`, `docs/specs/2026-09-17-failure-shape-index.md`
+
+
 ## [2026-09-17]
 
 
