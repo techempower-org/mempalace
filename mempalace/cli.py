@@ -126,6 +126,31 @@ class DaemonError(RuntimeError):
     """Raised when a daemon HTTP call fails or returns a JSON-RPC error."""
 
 
+class DaemonRequestError(DaemonError):
+    """The daemon answered and REFUSED the request — a 4xx, not an outage.
+
+    A subclass so every existing `except DaemonError` keeps working; call
+    sites that can tell the operator something useful catch this first.
+
+    The distinction is the whole of #499: one exception type meant a client
+    could not tell "the palace is down" from "your argument is wrong", and it
+    guessed the former. `mempalace list --room diary` reported "palace daemon
+    unreachable … see mempalace status" while the daemon was up and had
+    answered with, verbatim:
+
+        {"detail": {"error": "room 'diary' is not in the canonical set",
+                    "valid_rooms": [...]}}
+
+    The message the operator needed had already arrived. `detail` carries it
+    forward so the client stops substituting a guess for it.
+    """
+
+    def __init__(self, message: str, *, status: int, detail=None):
+        super().__init__(message)
+        self.status = status
+        self.detail = detail
+
+
 def _print_retired_local_palace_or_default(palace_path: str) -> None:
     """If the user's default palace is missing AND a RETIRED marker
     exists, print the marker's content as the not-found message — so
@@ -231,6 +256,60 @@ def _call_daemon_tool(name: str, arguments: dict) -> dict:
         return {"_raw": text}
 
 
+def _daemon_error_detail(exc) -> str:
+    """The daemon's own explanation for a refusal, as plain text.
+
+    FastAPI returns ``{"detail": ...}`` where detail is a string or a dict;
+    the room validator uses a dict with ``error`` and ``valid_rooms``, which
+    is exactly the guidance the operator needs. Anything unparseable falls
+    back to the raw body, and an unreadable body to "" — this runs while
+    already reporting a failure and must not raise a second one.
+    """
+    try:
+        raw = exc.read().decode("utf-8", errors="replace").strip()
+    except Exception:  # noqa: BLE001 — the body is best-effort
+        return ""
+    if not raw:
+        return ""
+    try:
+        detail = json.loads(raw).get("detail", raw)
+    except (ValueError, AttributeError):
+        return raw[:300]
+    if isinstance(detail, dict):
+        text = str(detail.get("error") or detail)
+        options = detail.get("valid_rooms") or detail.get("valid")
+        if options:
+            text = f"{text} (valid: {', '.join(map(str, options))})"
+        return text[:300]
+    return str(detail)[:300]
+
+
+def _exit_daemon_request_error(e, *, want_json: bool, source: str = "daemon"):
+    """Report a daemon REFUSAL and exit 64 (bad args), never as an outage.
+
+    One renderer for every REST call site, because there were five of them
+    and every one reported the same wrong thing. Fixing only the one named
+    in #499 is the shape that produced #459 three weeks after #418: two of
+    four call sites corrected, the rest found later by an audit.
+
+    Exit 64 is `cli.py`'s documented code for bad args; each site keeps its
+    own (differing) code for a genuine outage, which this deliberately does
+    not touch.
+    """
+    if want_json:
+        _emit_json(
+            {
+                "error": "bad_request",
+                "status": e.status,
+                "detail": e.detail or str(e),
+                "source": source,
+            }
+        )
+    else:
+        print(f"daemon rejected the request ({e.status}): {e}", file=sys.stderr)
+    sys.exit(64)
+
+
 def _call_daemon_rest(path: str, params: dict | None = None) -> dict:
     """GET a daemon REST endpoint directly — no MCP envelope, no AGE locks.
 
@@ -255,6 +334,20 @@ def _call_daemon_rest(path: str, params: dict | None = None) -> dict:
     except urllib.error.HTTPError as e:
         if e.code in (404, 401, 403):
             return None  # endpoint missing or auth mismatch — caller falls back to MCP
+        if 400 <= e.code < 500:
+            # The daemon answered and refused. Its body already says WHY —
+            # FastAPI puts it in `detail` — and discarding it is what made
+            # `list --room diary` report the daemon unreachable while it was
+            # up and explaining itself (#499).
+            detail = _daemon_error_detail(e)
+            # The message is the daemon's EXPLANATION; the status is a field.
+            # Keeping the code out of the string means a renderer composes it
+            # once from `status` rather than depending on how the string was
+            # built — a test that constructed this directly caught exactly
+            # that coupling.
+            raise DaemonRequestError(
+                detail or e.reason or f"HTTP {e.code}", status=e.code, detail=detail
+            ) from e
         raise DaemonError(f"daemon REST {path} failed ({e.code}): {e.reason}") from e
     except (urllib.error.URLError, ConnectionError, OSError) as e:
         raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
@@ -3178,6 +3271,9 @@ def cmd_list(args):
 
     try:
         data = _call_daemon_rest("/list", params)
+    except DaemonRequestError as e:
+        # The daemon answered and refused: say what IT said (#499).
+        _exit_daemon_request_error(e, want_json=want_json)
     except DaemonError as e:
         # Match cmd_status's daemon-down fallback (line 2230) and the
         # graceful 401/403 + unreachable handling added in 850e08c. On
@@ -3422,6 +3518,9 @@ def _gather_bulk_move_matches(wing, room, want_json):
             params["room"] = room
         try:
             data = _call_daemon_rest("/list", params)
+        except DaemonRequestError as _req_err:
+            # A refusal is not an outage (#499).
+            _exit_daemon_request_error(_req_err, want_json=want_json)
         except DaemonError as e:
             if want_json:
                 _emit_json({"error": str(e), "source": "daemon"})
@@ -3872,6 +3971,9 @@ def cmd_graph(args):
 
     try:
         data = _call_daemon_rest("/graph", params)
+    except DaemonRequestError as _req_err:
+        # A refusal is not an outage (#499).
+        _exit_daemon_request_error(_req_err, want_json=want_json)
     except DaemonError as e:
         # Match cmd_list / cmd_status daemon-down fallback. JSON callers
         # get a structured error on stdout; humans get the standard
@@ -6027,6 +6129,9 @@ def cmd_stats(args):
 
     try:
         data = _call_daemon_rest("/stats")
+    except DaemonRequestError as _req_err:
+        # A refusal is not an outage (#499).
+        _exit_daemon_request_error(_req_err, want_json=want_json)
     except DaemonError as e:
         if want_json:
             _emit_json({"error": str(e), "source": "daemon"})
@@ -9842,6 +9947,9 @@ def cmd_wings(args):
     if _daemon_strict() and not getattr(args, "palace", None):
         try:
             fast = _call_daemon_rest("/status/fast")
+        except DaemonRequestError as _req_err:
+            # A refusal is not an outage (#499).
+            _exit_daemon_request_error(_req_err, want_json=want_json)
         except DaemonError as e:
             _read_family_fail(
                 f"palace daemon unreachable at {_daemon_url()} ({e})", want_json, 1, "daemon"
