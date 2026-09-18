@@ -45,10 +45,21 @@ body: |
   because the cost is the hybrid call itself rather than the row count.
 
   Acceptance on production, wing 2g, ``--limit 3``, five pre-registered
-  queries: four now return a curated hit where the base returned zero
-  (K = 15, 27, 15, 9 promoted into the last slot); the fifth finds no curated
-  document within depth 30 on the bm25 route it takes, and correctly reports
-  ``curated_first_rank: null`` rather than inventing one.
-tests: "15 new (test_search_depth: depth floor, conditional trigger, curated_first_rank pre-reorder + null, reservation last-slot/marking/edge cases, prose mark); 3 #477 tests updated to the new contract"
+  queries, **as measured 2026-09-18 ~07:50 PDT**: four returned a curated hit
+  where the base returned zero (K = 15, 27, 15, 9 promoted into the last slot);
+  the fifth found no curated document within depth 30 on the bm25 route it
+  takes, and reported ``curated_first_rank: null`` rather than inventing one.
+  The K values are a snapshot: wing 2g is re-mined continuously and a
+  re-run hours later read two of the queries at 0 hits on both arms and the
+  fifth at K=8, with no code change. The durable check is the invariant
+  above — a curated hit within the deep fetch is always visible at the limit,
+  always marked, and ``curated_first_rank`` is the pre-reorder rank — not the
+  numbers.
+
+  The marker is produced once (``_promotion_tag``) and rendered by every prose
+  renderer — ``table`` (default), ``full`` and ``compact`` — each under its own
+  test. The first cut marked ``compact`` only, so the default view shipped the
+  very silent promotion the slot exists to avoid (Oracle PART 44 on #534).
+tests: "18 new (test_search_depth: depth floor, conditional trigger, curated_first_rank pre-reorder + null, reservation last-slot/marking/edge cases, prose mark per renderer: table, full, compact, plus a ranked-not-promoted negative); 3 #477 tests updated to the new contract"
 fork_pr: 534
 files: [mempalace/cli.py]

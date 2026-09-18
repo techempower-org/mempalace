@@ -184,8 +184,29 @@ class TestCuratedSlotReservation:
         got = json.loads(out.out)["results"]
         assert len(got) == 1 and got[0]["source_kind"] == "file"
 
-    def test_prose_marks_the_promotion_too(self, capsys):
-        """Both channels or neither: a reader of the table must be able to tell
-        'ranked here' from 'reserved here' exactly as a script can."""
+    # Both channels or neither: a reader of the prose must be able to tell
+    # 'ranked here' from 'reserved here' exactly as a script can. "Prose" is not
+    # one surface — it is three renderers, and each gets its own assertion. The
+    # marker used to live only in the ``compact`` renderer's provenance tag, so
+    # the DEFAULT view shipped the very silent promotion this PR exists to avoid
+    # (review finding on #534).
+
+    _MARK = "⟨curated, promoted from rank 14⟩"
+
+    def test_table_marks_the_promotion(self, capsys):
+        out, _ = _run(capsys, [_payload(3), _payload(30, curated_at=14)], fmt="table")
+        assert self._MARK in out.out
+
+    def test_full_marks_the_promotion(self, capsys):
+        out, _ = _run(capsys, [_payload(3), _payload(30, curated_at=14)], fmt="full")
+        assert self._MARK in out.out
+
+    def test_compact_marks_the_promotion(self, capsys):
         out, _ = _run(capsys, [_payload(3), _payload(30, curated_at=14)], fmt="compact")
-        assert "⟨curated, promoted from rank 14⟩" in out.out
+        assert self._MARK in out.out
+
+    def test_table_does_not_mark_ranked_hits(self, capsys):
+        """Curated already visible in the shallow fetch: no reservation, no marker."""
+        out, m = _run(capsys, [_payload(3, curated_at=1)], fmt="table")
+        assert m.call_count == 1
+        assert "promoted from rank" not in out.out

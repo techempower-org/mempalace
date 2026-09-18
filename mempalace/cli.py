@@ -857,7 +857,10 @@ def _print_hit_table(index: int, hit: dict, *, full: bool, use_color: bool) -> N
     sim = hit.get("similarity")
     bm25 = hit.get("bm25_score")
 
-    print(f"  [{index}] {wing} / {room}")
+    # The reserved slot is marked in every prose renderer, not only ``compact``
+    # (#526, review finding on #534): the default view shipping an unmarked promotion is
+    # the silent-promotion failure this feature exists to prevent.
+    print(f"  [{index}] {wing} / {room}{_promotion_tag(hit)}")
 
     bar = _relevance_bar(sim)
     if bar:
@@ -895,6 +898,18 @@ def _print_hit_table(index: int, hit: dict, *, full: bool, use_color: bool) -> N
     print(f"  {'─' * 56}")
 
 
+def _promotion_tag(hit: dict) -> str:
+    """``⟨curated, promoted from rank K⟩`` for a hit reserved into its slot, else ``""``.
+
+    One producer for the prose marker, called by every renderer (``table`` and
+    ``full`` via :func:`_print_hit_table`, ``compact`` via :func:`_provenance_tag`)
+    so no renderer can be the one that shows a promotion as an ordinary rank (#526).
+    """
+    if hit.get("promoted"):
+        return f" ⟨curated, promoted from rank {hit.get('promoted_from_rank')}⟩"
+    return ""
+
+
 def _provenance_tag(hit: dict) -> str:
     """Short source-shape tag for ``--format compact`` (empty when unremarkable).
 
@@ -911,9 +926,10 @@ def _provenance_tag(hit: dict) -> str:
     field: deciding it costs an ``os.stat`` per hit, and every path that
     produces hits already stamps it.
     """
-    if hit.get("promoted"):
+    promoted = _promotion_tag(hit)
+    if promoted:
         # Reserved into this slot rather than ranked into it (#526).
-        return f" ⟨curated, promoted from rank {hit.get('promoted_from_rank')}⟩"
+        return promoted
     kind = hit.get("source_kind") or source_kind(hit)
     flags = []
     if kind == "transcript":
