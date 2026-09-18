@@ -538,6 +538,15 @@ def _post_daemon_mine_cli(
     was asked for and its absence cannot creep back in. A daemon predating
     the field ignores it and blocks as before.
 
+    ⚠️ ``mode`` is annotated ``str`` and defaults to ``"convos"``, and
+    **neither is a guard against an explicit ``None``**: a default applies
+    only when the argument is OMITTED, and an annotation is not enforced at
+    runtime. A caller passing ``mode=None`` therefore put ``"mode": null``
+    on the wire and the daemon's ``MineBody`` answered 422 for every
+    daemon-strict mine (#525). That is why this function now raises rather
+    than quietly substituting the default — substituting would trade a loud
+    422 for a silently wrong corpus.
+
     Note what "success" means with ``background=True``: the daemon has taken
     the request into its durable pending-mines queue, not that the mine has
     finished. That is the right contract for a replay — the queue's job is a
@@ -546,6 +555,17 @@ def _post_daemon_mine_cli(
     """
     import urllib.error
     import urllib.request
+
+    if mode is None:
+        # Refuse rather than substitute the default. A caller that reaches
+        # here with None has skipped its own normalization (#525 was exactly
+        # that), and quietly mining in "convos" when the caller meant
+        # "projects" would trade a loud 422 for a silently wrong corpus —
+        # the worse half of the same trade.
+        raise ValueError(
+            "_post_daemon_mine_cli: mode must be a string, not None — "
+            'resolve it at the call site (`args.mode or "projects"`)'
+        )
 
     headers = {"content-type": "application/json"}
     api_key = os.environ.get("PALACE_API_KEY", "").strip()
@@ -1817,7 +1837,10 @@ def _forward_mine_to_hub(args, palace_path: str) -> bool:
 
     arguments = {
         "source": os.path.abspath(os.path.expanduser(args.dir)),
-        "mode": args.mode,
+        # Normalized, never the raw attribute: --mode defaults to None
+        # upstream, and a null here reaches the hub's own validator
+        # the same way it reached the daemon's in #525.
+        "mode": getattr(args, "mode", None) or "projects",
         "agent": args.agent,
         "limit": args.limit or 0,
         "dry_run": bool(args.dry_run),
@@ -2214,7 +2237,12 @@ def cmd_mine(args):
         ok = _post_daemon_mine_cli(
             directory,
             wing=wing,
-            mode=args.mode,
+            # `mode`, not `args.mode`: upstream v3.8 made --mode default to
+            # None and this function normalized it at the top for exactly
+            # this reason. Passing the raw attribute put `"mode": null` on
+            # the wire and the daemon's MineBody rejected every daemon-strict
+            # mine with 422 body.mode (#525).
+            mode=mode,
             background=getattr(args, "background", False),
         )
         sys.exit(0 if ok else 1)
@@ -5216,7 +5244,12 @@ def cmd_pending_drain(args):
         return _post_daemon_mine_cli(
             request["dir"],
             request["wing"],
-            request.get("mode", "convos"),
+            # `or`, not a .get default: a queued line may carry an explicit
+            # `"mode": null` (the hooks write whatever they were given), and
+            # `.get("mode", "convos")` returns None for that, not the
+            # default. Since #525 the poster REFUSES None, so the difference
+            # is a crashed drain versus a drained queue.
+            request.get("mode") or "convos",
             background=True,
         )
 

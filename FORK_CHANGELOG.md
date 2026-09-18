@@ -271,6 +271,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **daemon-strict `mempalace mine` sent `mode: null` and every mine 422'd** (`HEAD` — pending resolution)
+  Upstream v3.8 made `--mode` default to `None` so an unset flag could
+  inherit a per-source default. `cmd_mine` normalizes it once at the top —
+  `mode = getattr(args, "mode", None) or "projects"` — under a comment
+  saying every branch below *and the daemon payload* read it.
+
+  ⭐ **One branch did not.** The daemon-strict call passed `args.mode` raw,
+  128 lines after the normalization, while the sibling payload eight lines
+  earlier used the resolved value. So the daemon's `MineBody` rejected
+  every daemon-strict mine:
+
+      422  {"loc": ["body", "mode"],
+            "msg": "Input should be a valid string", "input": None}
+
+  That is why a grep cannot find this class of defect: the token
+  `args.mode` is identical at a correct site and a broken one, and only the
+  *distance from the normalization* differs. The audit was an AST walk over
+  every dict literal carrying a `"mode"` key and every call passing
+  `mode=`, which found four sites where the report named one.
+
+  Measured before the fix, daemon-strict with no `--mode`: **every input
+  shape that reached the POST sent null** — a directory with or without
+  `--wing`, with `--background`, with `--no-tunnels`, and a prose file. The
+  one shape that did not was a `.jsonl` transcript, and only because it
+  never reached the daemon: the mineable-path guard stops it locally at
+  exit 2, which is separate and intended.
+
+  Four sites, one class:
+
+  * the daemon-strict call now passes the resolved `mode`;
+  * `_forward_mine_to_hub` normalizes too — it posts to a `mempalace serve`
+    hub rather than the daemon, so it is a different consumer and a latent
+    case rather than the reported one;
+  * `_post_daemon_mine_cli` **refuses** `None` instead of substituting its
+    default. Substituting would trade a loud 422 for a silently wrong
+    corpus: a caller meaning "projects" would mine in "convos" and nothing
+    would say so;
+  * ⚠️ `pending drain`'s poster used `request.get("mode", "convos")`, and a
+    `.get` default does **not** fire on a present-but-null key. With the
+    seam now refusing `None`, a queued `"mode": null` would have raised
+    inside `pending_queue.replay`'s loop and taken every remaining request
+    with it. The seam's strictness created that hazard two files away,
+    which is why the fix audited the seam's CALLERS and not only the sites
+    that build its payload.
+
+  The tests assert on what goes **on the wire** — the producer is `cli.py`
+  and the consumer is the daemon's `search_models.MineBody`, in another
+  repository — because a unit test reading a local variable would have
+  passed throughout the outage. A structural test walks the AST and fails
+  if any payload reads `args.mode` raw again.
+
+  *Tests:* 12 (test_cli_mine_mode_payload.py: 5 input shapes against a real stub HTTP daemon recording the body, explicit-mode control, seam refusal x2, AST guard; test_pending_drain_null_mode.py: null/missing/explicit queued mode). 4 mutations, each killing its own tests: revert the call site (6), the hub payload (1), the seam guard (2), the drain fallback (1).
+  *Files:* `mempalace/cli.py`
+
+
 - **check-docs examines every mention of a PR, not just the first, and matches state words as words** (`HEAD` — pending resolution)
   `scripts/check-docs.sh` step 4 did `grep … | head -1` per document, so only
   the FIRST line mentioning a PR number contributed to that document's claimed
