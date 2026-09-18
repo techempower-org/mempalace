@@ -1,0 +1,63 @@
+seq: 151
+id: one-daemon-unreachable-message
+date: '2026-09-17'
+bucket: Changed
+commit: HEAD
+area: CLI
+summary: 'the daemon-unreachable message is written once, not hand-copied at 22 places'
+body: |
+  `palace daemon unreachable at` was written out by hand at **22 places**.
+  Twenty now route through `_fail_daemon`; two remain on purpose.
+
+  They were never 22 copies of one block, and reading them rather than
+  counting them is what found that. There were **four distinct messages**:
+  12 interpolating the exception, 5 with no exception at all, 2 carrying
+  `/cypher returned {status}` wording, and `cmd_wings` going through
+  `_read_family_fail` with a leading blank line, an `  ERROR: ` prefix and
+  no diagnostics clause. Functions holding two occurrences held one of the
+  first kind and one of the second — not two copies of one thing.
+
+  ⭐ The five exception-less sites are the `data is None` case:
+  `_call_daemon_rest` returns `None` on 404/401/403 and **nothing is
+  raised**, so there is nothing to interpolate. Those sites name the
+  failing route in their JSON instead — the only identifying information a
+  404 leaves behind. The five prose sites and the five route-naming JSON
+  payloads are the *same five sites*; that correspondence is design, not
+  drift, and it is why the helper gained `route=` and `**extra` rather
+  than just taking an exception:
+
+      def _fail_daemon(err, want_json, *, route=None, **extra) -> None
+
+  A helper that could not express what the call sites already said would
+  make the CLI report **less** than it did — the defect this wave exists
+  to remove, wearing the costume of a cleanup. Dropping a JSON field is a
+  breaking change to a machine interface and is invisible to a prose diff:
+  a script reading `.status` simply starts getting `null`.
+
+  17 of the 20 sites are byte-identical afterwards on **both** channels.
+  Three changes are declared rather than claimed away: the two `/cypher`
+  sites rearrange their prose while their JSON stays identical; `cmd_wings`
+  normalises on both channels, losing a JSON error that was a pre-rendered
+  sentence embedding the daemon URL; and all twenty gain `_fail_daemon`'s
+  "rejected the call" branch, so a server-side JSON-RPC error no longer
+  prints "unreachable" — a fix of the #499 class, an error named for the
+  layer that noticed rather than the layer that failed.
+
+  `_daemon_tool_or_fail` keeps its own copy and is deliberately **not**
+  consolidated here. It is not a duplicate: it exits `1 if unreachable
+  else 2`, and its docstring says why — "the operator response differs and
+  the sibling commands' single 'unreachable' message is actively wrong for
+  the second". Folding it in while `_fail_daemon` exited 1 for both would
+  have destroyed a deliberate distinction in six commands and shipped it
+  as a cleanup. It converges in the follow-up that makes the codes agree.
+
+  ⚠️ Nothing in the existing suite broke — not one test. Four distinct
+  live messages, one with a different prefix and no diagnostics clause,
+  and the suite was green across every one. The divergences were
+  **untested behaviour**, which is how a 22-site hand-duplication survives:
+  a prose diff says "no change" and a green suite agrees, because neither
+  was watching. The new tests are JSON-first for that reason.
+tests: '9 (test_cli_fail_daemon_one_message.py: helper shapes x4, per-route JSON x3, literal-count probe, cmd_wings normalisation); 3 mutations each killing a specific test'
+fork_pr: 517
+files:
+- mempalace/cli.py
