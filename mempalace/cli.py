@@ -46,6 +46,8 @@ import sys
 import warnings
 from pathlib import Path
 
+from typing import NamedTuple
+
 from .auto_wake import urlopen_with_wake
 from .config import MempalaceConfig
 from .corpus_origin import detect_origin_heuristic, detect_origin_llm
@@ -74,6 +76,22 @@ from .version import __version__
 #   1  no results / search returned empty
 #   2  palace unavailable (daemon unreachable, palace missing, etc.)
 #   64 bad args (argparse default for parse errors)
+#
+# How the daemon-strict read verbs ``window`` / ``source`` (#500, #502)
+# resolve against that contract — written down because the interesting rows
+# are the ones that look alike from the outside:
+#   0   drawers returned
+#   1   the window ran and matched nothing (a real answer, not a failure)
+#   2   daemon lacks /window or /source (404) — names the minimum daemon
+#       version, because a missing route is a deployment fact
+#   2   credentials rejected (401/403) — names PALACE_API_KEY, deliberately
+#       NOT the "deploy a newer daemon" message. ``_get_daemon_rest``
+#       collapses 404/401/403 into None, so reusing it would report a key
+#       mismatch as a version problem: a refusal naming the wrong reason.
+#   2   transport failure, timeout, or 5xx
+#   64  the daemon rejected a well-formed request (400/422: bad ISO bound,
+#       unknown room, corrupt cursor) — carrying the daemon's own message,
+#       since the daemon is the thing that knows which bound failed
 
 
 def _resolve_quiet(args) -> bool:
@@ -349,6 +367,63 @@ def _call_daemon_rest(path: str, params: dict | None = None) -> dict:
                 detail or e.reason or f"HTTP {e.code}", status=e.code, detail=detail
             ) from e
         raise DaemonError(f"daemon REST {path} failed ({e.code}): {e.reason}") from e
+    except (urllib.error.URLError, ConnectionError, OSError) as e:
+        raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
+
+
+class _DaemonHTTPResult(NamedTuple):
+    """One daemon HTTP answer, with the status kept rather than collapsed.
+
+    ``_get_daemon_rest`` returns ``None`` for 404, 401 and 403 alike, which
+    is right for a caller that falls back to MCP but wrong for one that has
+    to tell the user WHY. A missing route means "deploy a newer daemon"; a
+    401 means "your key is wrong". Reporting the second as the first sends
+    the reader after the wrong problem — the defect family
+    ``_resolve_palace_or_refuse`` documents in its own ``_refuse`` helper.
+
+    ``code`` is 0 only when no HTTP exchange happened (transport failure),
+    and that case raises ``DaemonError`` instead of returning.
+    """
+
+    code: int
+    payload: "dict | None"
+    detail: str
+
+
+def _window_daemon_get(path: str, params: dict | None = None) -> _DaemonHTTPResult:
+    """GET a daemon route, preserving the status code and the error detail.
+
+    FastAPI puts its message in the JSON body's ``detail``, not in the HTTP
+    reason phrase, so a 4xx surfaced from ``e.reason`` alone would say
+    "Bad Request" where the daemon said "since must be an ISO date string".
+    The ``window``/``source`` verbs promise the daemon's own message, so the
+    body is read.
+    """
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+
+    url = f"{_daemon_url()}{path}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    headers = {}
+    api_key = os.environ.get("PALACE_API_KEY", "").strip()
+    if api_key:
+        headers["x-api-key"] = api_key
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urlopen_with_wake(req, timeout=_daemon_timeout()) as resp:
+            body = json.loads(resp.read().decode("utf-8", errors="replace"))
+            return _DaemonHTTPResult(code=resp.status, payload=body, detail="")
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            raw = e.read().decode("utf-8", errors="replace")
+            parsed = json.loads(raw)
+            detail = str(parsed.get("detail") or parsed.get("error") or raw)[:400]
+        except Exception:  # noqa: BLE001 - a non-JSON error body is still an error
+            detail = str(e.reason)
+        return _DaemonHTTPResult(code=e.code, payload=None, detail=detail)
     except (urllib.error.URLError, ConnectionError, OSError) as e:
         raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
 
@@ -8063,6 +8138,227 @@ def _call_tool_routed(args, daemon_tool: str, local_fn: str, payload: dict) -> d
         return fn(**payload)
 
 
+#: The daemon release that first serves /window and /source. Named in the
+#:404 refusal, so it has to track palace-daemon's VERSION or the message
+#: becomes a lie. A test in the daemon repo asserts the bump.
+_WINDOW_MIN_DAEMON = "1.10.0"
+
+
+def _window_route_failed(path: str, result, want_json: bool) -> None:
+    """Map a non-200 from /window or /source onto cli.py's exit contract.
+
+    The contract (#44): 0 success, 1 no results, 2 palace unavailable, 64
+    bad args. Resolved here as:
+
+    * **404 -> 2**, naming the route and the minimum daemon version. The
+      route is missing, which is a deployment fact, not a user error.
+    * **401/403 -> 2**, naming *auth*. Deliberately NOT the deploy message:
+      a key mismatch reported as "deploy a newer daemon" is a refusal
+      naming the wrong reason.
+    * **400/422 -> 64**, carrying the daemon's own message. The daemon is
+      the thing that knows which bound failed to parse, so it says so.
+    * **anything else (5xx) -> 2**, palace unavailable.
+    """
+    code = result.code
+    detail = (result.detail or "").strip()
+
+    if code == 404:
+        msg = (
+            f"daemon lacks {path} — deploy palace-daemon >= {_WINDOW_MIN_DAEMON} "
+            f"(current daemon at {_daemon_url()} does not serve this route)"
+        )
+        exit_code, error_key = 2, "route_missing"
+    elif code in (401, 403):
+        msg = (
+            f"palace daemon at {_daemon_url()} rejected the credentials "
+            f"({code}) — check PALACE_API_KEY" + (f": {detail}" if detail else "")
+        )
+        exit_code, error_key = 2, "auth_failed"
+    elif code in (400, 422):
+        msg = detail or f"daemon rejected the request ({code})"
+        exit_code, error_key = 64, "bad_request"
+    else:
+        msg = f"palace daemon at {_daemon_url()} failed ({code})" + (
+            f": {detail}" if detail else ""
+        )
+        exit_code, error_key = 2, "daemon_error"
+
+    if want_json:
+        _emit_json({"error": error_key, "message": msg, "status": code, "route": path})
+    else:
+        print(msg, file=sys.stderr)
+    sys.exit(exit_code)
+
+
+def _window_require_daemon(verb: str, want_json: bool) -> None:
+    """These verbs are daemon-strict; there is no local path to fall back to."""
+    if _daemon_url():
+        return
+    msg = (
+        f"{verb} requires the palace-daemon. Set PALACE_DAEMON_URL "
+        "(the listing is served by the daemon's SQL, not by a local palace)."
+    )
+    if want_json:
+        _emit_json({"error": "daemon_required", "message": msg})
+    else:
+        print(msg, file=sys.stderr)
+    sys.exit(2)
+
+
+def _print_window_drawers(payload: dict, *, show_ordering: bool) -> None:
+    drawers = payload.get("drawers") or []
+    for d in drawers:
+        filed = d.get("filed_at") or "(no filed_at)"
+        room = d.get("room") or "-"
+        print(f"  {filed}  [{d.get('wing', '')}/{room}]  {d.get('drawer_id', '')}")
+        preview = (d.get("content_preview") or "").replace("\n", " ")
+        if preview:
+            print(f"      {preview[:140]}")
+    print(f"\n  {len(drawers)} drawer(s)")
+    if show_ordering and payload.get("ordering"):
+        # Say which time semantics answered. The contract is wall-clock
+        # today and may become normalised instants (#506); a reader should
+        # not have to infer which answer they got.
+        print(f"  ordering: {payload['ordering']}")
+    excluded = payload.get("excluded_no_filed_at") or 0
+    if excluded:
+        print(
+            f"  excluded: {excluded} drawer(s) in this wing have no filed_at and "
+            "cannot appear in a time window"
+        )
+    if payload.get("next_cursor"):
+        print(f"  more: --cursor {payload['next_cursor']}")
+
+
+def cmd_window(args) -> None:
+    """Drawers in filed order between two bounds — unranked, paged.
+
+    #500: ``search --since`` filters a *ranked* search, so inside a window
+    you get whatever scores highest rather than the sequence, and ``list``
+    has no time filter at all (against a 201K-drawer wing a date is ~200
+    pages away). This is the chronological walk.
+
+    Semantics are the palace's existing ones, not new: ``--from`` inclusive,
+    ``--to`` exclusive, wall-clock comparison, and a drawer with no
+    ``filed_at`` excluded while a bound is active — the same contract
+    ``list --since`` and ``search --since`` use. What changed is that the
+    daemon evaluates it in SQL instead of filtering in Python after
+    fetching every row.
+    """
+    want_json = bool(getattr(args, "json", False))
+    _window_require_daemon("window", want_json)
+
+    params: dict = {}
+    if getattr(args, "wing", None):
+        params["wing"] = args.wing
+    if getattr(args, "room", None):
+        params["room"] = args.room
+    if getattr(args, "since", None):
+        params["since"] = args.since
+    if getattr(args, "before", None):
+        params["before"] = args.before
+    if getattr(args, "source_file", None):
+        params["source_file"] = args.source_file
+    if getattr(args, "cursor", None):
+        params["cursor"] = args.cursor
+    params["limit"] = int(getattr(args, "limit", 100) or 100)
+
+    try:
+        result = _window_daemon_get("/window", params)
+    except DaemonError as err:
+        _fail_daemon_unavailable(err, want_json)
+        return
+    if result.code != 200:
+        _window_route_failed("/window", result, want_json)
+        return
+
+    payload = result.payload or {}
+    drawers = payload.get("drawers") or []
+    if want_json:
+        _emit_json(payload)
+    else:
+        _print_window_drawers(payload, show_ordering=True)
+    # 1 means "ran and selected nothing" — a real answer about an empty
+    # window, distinct from 0 (found some) and 2 (could not ask).
+    sys.exit(0 if drawers else 1)
+
+
+def cmd_source(args) -> None:
+    """Every drawer from one source file, in chunk order (#502).
+
+    Search hits carry ``source_file``; the natural next question is "give
+    me the drawers from THAT file, in order", which had no command. Order
+    is chunk order within the file — ``chunk_index`` numerically, so chunk
+    10 follows chunk 2 — then filed time, then id.
+    """
+    want_json = bool(getattr(args, "json", False))
+    _window_require_daemon("source", want_json)
+
+    source_file = (getattr(args, "file", None) or "").strip()
+    if not source_file:
+        # 64 is "bad args", and this one is the CLI's own judgement rather
+        # than the daemon's.
+        msg = "source requires --file <transcript.jsonl>"
+        if want_json:
+            _emit_json({"error": "bad_request", "message": msg})
+        else:
+            print(msg, file=sys.stderr)
+        sys.exit(64)
+
+    params: dict = {"source_file": source_file}
+    if getattr(args, "wing", None):
+        params["wing"] = args.wing
+    params["limit"] = int(getattr(args, "limit", 1000) or 1000)
+
+    try:
+        result = _window_daemon_get("/source", params)
+    except DaemonError as err:
+        _fail_daemon_unavailable(err, want_json)
+        return
+    if result.code != 200:
+        _window_route_failed("/source", result, want_json)
+        return
+
+    payload = result.payload or {}
+    drawers = payload.get("drawers") or []
+    if want_json:
+        _emit_json(payload)
+    else:
+        print(f"  source_file: {payload.get('source_file', source_file)}")
+        _print_window_drawers(payload, show_ordering=False)
+    sys.exit(0 if drawers else 1)
+
+
+def _fail_daemon_unavailable(err, want_json: bool) -> None:
+    """Transport failure on a window/source call -> exit 2.
+
+    **Do not collapse this into ``_fail_daemon``.** That helper exits **1**,
+    and it still does after #498/#499 landed (checked on merged main at
+    ``f7db659c``: that PR's new ``sys.exit(2)`` is inside ``cmd_pending``'s
+    import guard and does not touch ``_fail_daemon``). These two verbs are
+    specified at 2 for a transport failure, because "the daemon is not
+    answering" is *palace unavailable* under the #44 contract, not "no
+    results".
+
+    An earlier version of this docstring said the consolidation would
+    become correct "once #499 lands". It did not, and leaving that sentence
+    in place would have invited a tidy-up that silently changed these verbs
+    from 2 to 1. ``test_a_transport_failure_exits_2`` is what makes the
+    mistake loud rather than silent — if ``_fail_daemon`` ever does move to
+    2, delete this helper and that test still passes.
+    """
+    text = str(err)
+    if want_json:
+        _emit_json({"error": "daemon_unavailable", "message": text})
+    else:
+        print(
+            f"palace daemon unreachable at {_daemon_url()} — "
+            f"see mempalace status for diagnostics ({text})",
+            file=sys.stderr,
+        )
+    sys.exit(2)
+
+
 def _fail_daemon(err, want_json: bool) -> None:
     """Daemon call failed → exit 1 (matches cmd_why / cmd_tags / cmd_graph).
 
@@ -11480,6 +11776,56 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         help="Manage the canonical room set (mempalace_canonical_rooms postgres table)",
     )
     rooms_sub = p_rooms.add_subparsers(dest="rooms_cmd", required=True)
+    # ── window / source: chronological and by-file listings (#500, #502) ──
+    p_window = sub.add_parser(
+        "window",
+        help="Drawers in filed order between two timestamps (unranked, paged)",
+        description=(
+            "Walk a wing chronologically: an unranked listing in filed order. "
+            "Unlike `search --since`, which filters a RANKED search and so returns "
+            "whatever scores highest inside the window, this returns the sequence. "
+            "--from is inclusive, --to exclusive, wall-clock -- the same contract as "
+            "`list --since`, evaluated in SQL instead of after fetching every row. "
+            "Pages with --cursor. Requires palace-daemon >= " + _WINDOW_MIN_DAEMON + "."
+        ),
+    )
+    p_window.add_argument("--wing", help="Wing to walk")
+    p_window.add_argument("--room", help="Restrict to one room")
+    p_window.add_argument("--from", dest="since", help="Inclusive ISO start (e.g. 2026-09-01)")
+    p_window.add_argument("--to", dest="before", help="Exclusive ISO end")
+    p_window.add_argument("--source-file", dest="source_file", help="Restrict to one source file")
+    p_window.add_argument("--limit", type=int, default=100, help="Page size (max 1000)")
+    p_window.add_argument("--cursor", help="Continue from a previous page's cursor")
+    p_window.add_argument(
+        "--format",
+        dest="json",
+        action="store_const",
+        const=True,
+        default=False,
+        help="Machine output (use --format json)",
+    )
+
+    p_source = sub.add_parser(
+        "source",
+        help="Every drawer from one source file, in chunk order",
+        description=(
+            "Search hits carry a source_file; this lists that file's drawers in "
+            "order -- chunk_index numerically (so chunk 10 follows chunk 2), then "
+            "filed time. Requires palace-daemon >= " + _WINDOW_MIN_DAEMON + "."
+        ),
+    )
+    p_source.add_argument("--file", required=False, help="Transcript path or basename")
+    p_source.add_argument("--wing", help="Restrict to one wing")
+    p_source.add_argument("--limit", type=int, default=1000, help="Max drawers (max 1000)")
+    p_source.add_argument(
+        "--format",
+        dest="json",
+        action="store_const",
+        const=True,
+        default=False,
+        help="Machine output (use --format json)",
+    )
+
     rooms_sub.add_parser("list", help="List all canonical rooms with descriptions")
     p_rooms_add = rooms_sub.add_parser("add", help="Add a new canonical room")
     p_rooms_add.add_argument("name", help="Room slug (lowercase snake_case)")
@@ -12804,6 +13150,8 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         "split": cmd_split,
         "search": cmd_search,
         "list": cmd_list,
+        "window": cmd_window,
+        "source": cmd_source,
         "move": cmd_move,
         "bulk-move": cmd_bulk_move,
         "graph": cmd_graph,
