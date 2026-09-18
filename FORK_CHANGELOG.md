@@ -24,6 +24,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **check-docs step 8 — every merged fork PR must carry a fork-changes entry** (`HEAD` — pending resolution)
+  ``check-docs.sh`` verified render parity, sha resolution, sha ancestry and
+  upstream PR states, but never that a merged fork PR documented itself. #517
+  was green on every check with **no entry at all**, and nothing would have
+  surfaced it later — ``--next-seq`` and the renderers are happy with any
+  subset. The checker answered a narrower question than its name, which is
+  #516's twin and the failure-shape index's own class (#505).
+
+  Step 8 lists squash-merge commits since a baseline by the trailing
+  ``(#NNN)`` every squash carries, and requires either a ``fork_pr: NNN``
+  entry under ``docs/fork-changes/`` or a reasoned line in
+  ``docs/fork-changes-no-entry.txt``. The baseline is ``6da87755``, the
+  commit that introduced the per-entry layout **and** the ``fork_pr`` field
+  (#480): before it the field did not exist, so "missing" would be meaningless
+  for the ~137 older entries. It reads ``git log`` only and never the GitHub
+  API — a docs check that needs the network is one that gets skipped.
+
+  Warn-only by default so the residue can be worked; ``--strict`` fails. A
+  bare number in the allowlist is **refused**: an allowlist records WHY, or it
+  is a mute button and the next person cannot tell a deliberate omission from
+  an abandoned one.
+
+  The backlog was enumerated by hand before the step was written — 20 squash
+  commits since the baseline, 19 carrying ``fork_pr``, exactly one missing —
+  and the step reports exactly that set. The one is #495, the docs-tooling
+  sweep (``scripts/maintain-fork-changes.py``) that rewrites landed
+  ``commit: HEAD`` values across existing entries and adds no change of its
+  own: the producer this allowlist exists for, and the pair this check
+  consumes. A test verifies every allowlisted PR is genuinely missing an entry
+  and genuinely in range, so the allowlist cannot drift into a mute button.
+
+  *Tests:* 8 (test_check_docs_entry_coverage — fixture git repos under the project's tmp/)
+  *Files:* `scripts/check-entry-coverage.sh`, `scripts/check-docs.sh`, `docs/fork-changes-no-entry.txt`
+
+
 - **30 failure-shape records as drawers, a recall harness, and a section 5 that runs** (`HEAD` — pending resolution)
   The #503 spec described a slice and it was never built: `docs/failure-shapes/`
   had 0 files, `scripts/failure_shape_recall.py` did not exist, and the falsifier

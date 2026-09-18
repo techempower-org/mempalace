@@ -17,6 +17,10 @@
 #   7. Every "N tools" / "N MCP tools" claim in our docs matches
 #      len(mempalace.mcp_server.TOOLS). Competitor counts (README
 #      landscape table, ECOSYSTEM.md, llms-full.txt) are excluded.
+#   8. Every squash-merged fork PR since the baseline has a docs/fork-changes
+#      entry (fork_pr:) or a reasoned line in docs/fork-changes-no-entry.txt
+#      (#519). Warn-only unless --strict; delegates to
+#      scripts/check-entry-coverage.sh, which is also runnable on its own.
 #
 # Exit codes:
 #   0 — clean
@@ -26,6 +30,7 @@
 # Usage:
 #   scripts/check-docs.sh                  # interactive run
 #   scripts/check-docs.sh --quiet          # only print failures
+#   scripts/check-docs.sh --strict         # step 8 fails instead of warning
 #   STRICT_PR_STATE=1 scripts/check-docs.sh  # warn → error on PR-state drift
 
 set -uo pipefail
@@ -38,7 +43,13 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 cd "$REPO_ROOT"
 
 quiet=0
-[ "${1:-}" = "--quiet" ] && quiet=1
+strict=0
+for _arg in "$@"; do
+    case "$_arg" in
+        --quiet)  quiet=1 ;;
+        --strict) strict=1 ;;
+    esac
+done
 
 step()  { (( quiet )) || printf '\n\033[1m▸ %s\033[0m\n' "$1"; }
 ok()    { (( quiet )) || printf '  \033[32m✓\033[0m %s\n' "$1"; }
@@ -54,7 +65,7 @@ failures=0
 # re-derive it. The count is reported here for whoever is looking; it is not a
 # gate, because there is no longer a literal that can go stale. A literal that
 # nothing can contradict is the only kind worth keeping.
-step "1/7  test count (derived)"
+step "1/8  test count (derived)"
 readme_count=$(grep -oE '[0-9]+ tests pass on `main`' README.md | grep -oE '^[0-9]+' || echo "")
 if false; then
     :
@@ -101,7 +112,7 @@ else
 fi
 
 # ── 2. commit hash references ────────────────────────────────────────────
-step "2/7  commit hashes referenced in docs resolve"
+step "2/8  commit hashes referenced in docs resolve"
 docs=(README.md CLAUDE.md FORK_CHANGELOG.md)
 # Strip cross-repo URLs first so we only check hashes that should resolve
 # in *this* fork. Pattern: anything inside (https://github.com/<other>/<repo>/commit/HASH)
@@ -204,7 +215,7 @@ else
 fi
 
 # ── 3. FORK_CHANGELOG.md is up-to-date with the canonical entries ────────
-step "3/7  FORK_CHANGELOG.md regenerates clean"
+step "3/8  FORK_CHANGELOG.md regenerates clean"
 render_bin="$REPO_ROOT/scripts/render-docs.py"
 if [ -x "$render_bin" ]; then
     py="$REPO_ROOT/.venv/bin/python"
@@ -221,7 +232,7 @@ else
 fi
 
 # ── 4. upstream PR states ────────────────────────────────────────────────
-step "4/7  upstream PR states match doc claims"
+step "4/8  upstream PR states match doc claims"
 if ! command -v gh >/dev/null 2>&1; then
     warn "gh not on PATH — skipping PR state check"
 elif ! gh auth status >/dev/null 2>&1; then
@@ -334,7 +345,7 @@ else
 fi
 
 # ── 5. llms-full.txt regenerates clean from its sources ─────────────────
-step "5/7  llms-full.txt regenerates clean"
+step "5/8  llms-full.txt regenerates clean"
 llms_bin="$REPO_ROOT/scripts/render-llms-full.py"
 if [ -x "$llms_bin" ]; then
     py="$REPO_ROOT/.venv/bin/python"
@@ -351,7 +362,7 @@ else
 fi
 
 # ── 6. Python API reference regenerates clean from source docstrings ────
-step "6/7  python-api/ regenerates clean"
+step "6/8  python-api/ regenerates clean"
 api_bin="$REPO_ROOT/scripts/render-api-docs.py"
 if [ -x "$api_bin" ]; then
     py="$REPO_ROOT/.venv/bin/python"
@@ -368,7 +379,7 @@ else
 fi
 
 # ── 7. MCP tool count claims match mcp_server.TOOLS ─────────────────────
-step "7/7  MCP tool count in docs matches mcp_server.TOOLS"
+step "7/8  MCP tool count in docs matches mcp_server.TOOLS"
 py="$REPO_ROOT/.venv/bin/python"
 [ -x "$py" ] || py="$(command -v python3 2>/dev/null || true)"
 if [ -z "$py" ]; then
@@ -428,6 +439,25 @@ fi
 # meaningful sync property — every fork-only YAML commit appears in the
 # rendered FORK_CHANGELOG.md by construction, so a separate CLAUDE.md
 # check would be redundant.
+
+# ── 8. every merged fork PR documented ───────────────────────────────────
+# check-docs verified render parity, sha resolution, sha ancestry and upstream
+# PR states — but never that a merged fork PR documented itself, so #517 was
+# green with no entry at all (#519). Delegated to a standalone script so it can
+# run on its own (a pre-push hook, the sweep) and so its tests can drive the
+# REAL script over throwaway repos.
+step "8/8  every merged fork PR has a fork-changes entry"
+_cov_args=()
+(( quiet ))  && _cov_args+=(--quiet)
+(( strict )) && _cov_args+=(--strict)
+if [ -x "$REPO_ROOT/scripts/check-entry-coverage.sh" ]; then
+    if ! "$REPO_ROOT/scripts/check-entry-coverage.sh" "${_cov_args[@]+"${_cov_args[@]}"}"; then
+        fail "merged fork PRs are missing docs/fork-changes entries (see above)"
+    fi
+else
+    warn "scripts/check-entry-coverage.sh not found — step skipped"
+fi
+
 
 # ── summary ──────────────────────────────────────────────────────────────
 if (( failures == 0 )); then
