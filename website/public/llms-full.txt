@@ -309,6 +309,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| check-docs examines every mention of a PR, not just the first, and matches state words as words | — | `HEAD` — pending resolution |
 | a daemon outage exits 2 (palace unavailable), not 1 (no results) | — | `HEAD` — pending resolution |
 | check-docs must not match a PR number against a commit-sha prefix | — | `HEAD` — pending resolution |
 | the daemon-unreachable message is written once, not hand-copied at 22 places | — | `HEAD` — pending resolution |
