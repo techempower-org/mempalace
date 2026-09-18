@@ -110,3 +110,40 @@ class TestTheScopeClaimStaysTrue:
         assert returners == {"cmd_sync"}, (
             f"the #508 guard assumes cmd_sync is the only non-None returner; now {returners}"
         )
+
+
+class TestSyncSuccessStaysZero:
+    """The specific regression the naive one-liner would have caused.
+
+    `cmd_sync` is the only dispatch handler returning non-None, and it returns
+    a `SyncReport`. `sys.exit(<non-int>)` exits **1** after printing repr() to
+    stderr, so `sys.exit(dispatch[...](args))` would report a SUCCESSFUL sync
+    as a failure. Asserted against `sync` by name rather than a stand-in, so
+    the guard cannot be weakened without this going red.
+    """
+
+    def test_sync_returning_a_report_still_exits_0(self, monkeypatch, capsys):
+        import sys
+
+        from mempalace import cli
+
+        class SyncReport:
+            added = 3
+            removed = 0
+
+            def __repr__(self):
+                return "SyncReport(added=3, removed=0)"
+
+        seen = {}
+
+        def fake_sync(args):
+            seen["called"] = True
+            return SyncReport()
+
+        monkeypatch.setattr(sys, "argv", ["mempalace", "sync"])
+        monkeypatch.setattr(cli, "cmd_sync", fake_sync)
+        cli.main()  # must NOT raise SystemExit
+        assert seen.get("called"), "the test did not reach cmd_sync"
+        assert "SyncReport" not in capsys.readouterr().err, (
+            "the report leaked to stderr — that is what sys.exit(<non-int>) does"
+        )

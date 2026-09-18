@@ -191,6 +191,15 @@ def _emit_json(payload: dict) -> None:
 _DAEMON_TIMEOUT_DEFAULT = 120  # seconds; tune via PALACE_MCP_TIMEOUT
 
 
+class _DoctorHandled(Exception):
+    """Internal: `cmd_doctor` already recorded this check, stop the happy path.
+
+    A doctor never raises to the caller; this only unwinds to its own handler
+    so one branch can report and the rest can be skipped without an
+    `if/else` ladder around every subsequent line.
+    """
+
+
 class DaemonError(RuntimeError):
     """Raised when a daemon HTTP call fails or returns a JSON-RPC error."""
 
@@ -5716,6 +5725,24 @@ def cmd_doctor(args):
         try:
             data = _call_daemon_rest("/status/fast")
             ms = int((_time.monotonic() - t0) * 1000)
+            if data is None:
+                # 404: the route is missing on this daemon. Before #518 this
+                # fell straight into `data.get(...)`, and the AttributeError
+                # was caught by the blanket handler below and rendered as
+                # "unreachable @ <url>: 'NoneType' object has no attribute
+                # 'get'" — a Python error shown to an operator as an outage.
+                # #518 moved the 401/403 half of that onto DaemonAuthError;
+                # this is the other half, which the same change RELOCATED
+                # from 401 to 404 rather than removing.
+                add(
+                    "daemon",
+                    False,
+                    "reachable @ {} but /status/fast is missing — older daemon ({}ms)".format(
+                        _daemon_url(), ms
+                    ),
+                    "error",
+                )
+                raise _DoctorHandled
             total_drawers = data.get("total_drawers")
             wing_counts = data.get("wings", {}) or {}
             n_wings = len(wing_counts)
@@ -5725,6 +5752,20 @@ def cmd_doctor(args):
                 "reachable @ {} — {} drawers, {} wings ({}ms)".format(
                     _daemon_url(), total_drawers, n_wings, ms
                 ),
+            )
+        except _DoctorHandled:
+            pass
+        except DaemonAuthError as e:
+            # A refused credential is not an outage (#518). Saying
+            # "unreachable" here sends the operator to check whether the
+            # daemon is running when the daemon is up and answering.
+            add(
+                "daemon",
+                False,
+                "reachable @ {} but refused the credential ({}) — check PALACE_API_KEY".format(
+                    _daemon_url(), e.status
+                ),
+                "error",
             )
         except Exception as e:  # noqa: BLE001 — a doctor never raises
             add("daemon", False, "unreachable @ {}: {}".format(_daemon_url(), e), "error")

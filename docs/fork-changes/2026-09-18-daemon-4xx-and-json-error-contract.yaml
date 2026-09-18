@@ -41,8 +41,33 @@ body: |
   in the header contract.
 
   `_window_route_failed`'s 401/403 moves 2 -> 64. #512 chose 2 there
-  deliberately, arguing an auth failure must not carry the *deploy* message —
-  an argument about the message, which is unchanged.
+  deliberately. Its docstring, verbatim:
+
+      * **401/403 -> 2**, naming *auth*. Deliberately NOT the deploy message:
+        a key mismatch reported as "deploy a newer daemon" is a refusal
+        naming the wrong reason.
+
+  That argument is about the MESSAGE and it still stands — an auth failure
+  must not be reported as "deploy a newer daemon". Option C preserves it
+  twice over: the prose in `error` still names the credential, and
+  `code: auth_failed` distinguishes it from `code: route_missing` without a
+  reader parsing English. Only the exit code moves, because a refused
+  credential is "the daemon answered and rejected a well-formed request",
+  which the #44 contract numbers 64.
+
+  `cmd_doctor` is fixed here too, and it is the sharpest illustration of why
+  the transport had to carry the status. Before: a 401 reached `data.get(...)`
+  on a `None`, and the AttributeError was swallowed by the blanket handler and
+  rendered as `unreachable @ <url>: 'NoneType' object has no attribute 'get'`
+  — a Python error shown to an operator as an outage. Measured during this
+  change: making 401/403 raise **relocated** that leak to 404 rather than
+  removing it, because 404 still returns `None` and the `.get` still ran. Both
+  halves are now named: "refused the credential (401) — check PALACE_API_KEY"
+  and "/status/fast is missing — older daemon".
+
+  Out of scope and named as such: the 31 client-input `{error, hint}` /
+  `source: "cli"` sites. Those are `_fail_client`'s domain; attaching a daemon
+  `code` and `source: "daemon"` to an argument-parsing error would be wrong.
 
   `_window_daemon_get` is deliberately not folded into the shared
   transport: it returns a result for every non-2xx while

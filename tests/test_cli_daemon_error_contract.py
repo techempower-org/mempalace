@@ -180,3 +180,52 @@ class TestTheJsonShapeIsOneShape:
         `code` would break the readers #512 created."""
         src = CLI.read_text()
         assert '"message"' in src, "the window family's deprecated `message` key is gone"
+
+
+class TestDoctorNamesTheCauseInsteadOfLeakingIt:
+    """`doctor` never raises, which is why it hid this for so long.
+
+    Before #518 a 401 reached ``data.get(...)`` on a ``None`` and the
+    AttributeError was caught by the blanket handler and rendered as
+    ``unreachable @ <url>: 'NoneType' object has no attribute 'get'`` — a
+    Python error shown to an operator as an outage.
+
+    Measured during this change: making 401/403 raise **relocated** that leak
+    to 404 rather than removing it, because 404 still returns ``None`` and the
+    ``.get`` still ran. Both halves are covered here.
+    """
+
+    def _daemon_line(self, capsys, code, monkeypatch):
+        from mempalace import cli
+
+        monkeypatch.setattr(cli, "_daemon_url", lambda: "http://127.0.0.1:9")
+        import argparse
+
+        with patch("urllib.request.urlopen", side_effect=_http_error(code)):
+            with pytest.raises(SystemExit):
+                cli.cmd_doctor(argparse.Namespace(json=True))
+        payload = json.loads(capsys.readouterr().out)
+        return next(c for c in payload["checks"] if c["check"] == "daemon")
+
+    @pytest.mark.parametrize("code", [401, 403])
+    def test_a_refused_credential_is_not_called_unreachable(self, capsys, code, monkeypatch):
+        check = self._daemon_line(capsys, code, monkeypatch)
+        assert check["ok"] is False
+        assert "unreachable" not in check["detail"].lower(), check["detail"]
+        assert "PALACE_API_KEY" in check["detail"]
+        assert str(code) in check["detail"]
+
+    def test_a_missing_route_says_older_daemon_not_nonetype(self, capsys, monkeypatch):
+        check = self._daemon_line(capsys, 404, monkeypatch)
+        assert check["ok"] is False
+        assert "NoneType" not in check["detail"], (
+            f"the AttributeError is leaking into the operator's line: {check['detail']!r}"
+        )
+        assert "older daemon" in check["detail"]
+
+    @pytest.mark.parametrize("code", [401, 403, 404])
+    def test_no_status_leaks_a_python_exception_string(self, capsys, code, monkeypatch):
+        """The general form of the defect, not just the two known strings."""
+        check = self._daemon_line(capsys, code, monkeypatch)
+        for leak in ("object has no attribute", "Traceback", "NoneType"):
+            assert leak not in check["detail"], f"{leak!r} in {check['detail']!r}"
