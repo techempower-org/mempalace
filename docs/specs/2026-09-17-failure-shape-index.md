@@ -190,8 +190,9 @@ Four of these were produced **by this document or by fixing it**, and that is th
 > observed**, which is what a modal value on a shape means — not a claim that the
 > mechanism can only fail that way.
 
-> ⚠️ Four of the 2g-c6 eight are not individually described in #503, so the corpus is
-> **33 on record, 29 citable**; any retrieval measurement must state which set it used.
+> ⚠️ Four of the 2g-c6 eight are not individually described in #503, so the **seed**
+> corpus is **33 on record, 29 citable**; any retrieval measurement must state which
+> set it used (the shipped set is 31 files — §5).
 > One further candidate is **unadjudicated**: Oracle's §27.4 `grep -c 'failure-shape'`
 > → 0 against rendered text reading "failure SHAPES" (different case, space not hyphen).
 > It is arguably the `keyed-on terms` regime of §2 rather than this class; it is left
@@ -304,15 +305,17 @@ where the caller's string and the card's string have no lexical overlap by desig
 **Do not ship an index first.** The slice measures the retrieval gap on a labelled
 corpus — 2g's own method applied to the palace.
 
-**Shipped here:** `docs/failure-shapes/` — **31** records, one file per record, fields
-per §1 in front matter so each mines as one drawer into wing `memorypalace`; and
+**Shipped here:** `docs/failure-shapes/` — **31** records, one `<slug>.md` file per
+record (Markdown with the §1 fields as YAML front matter, so each mines as one drawer
+into wing `memorypalace`; the `slug` field must equal the filename stem, and
+`--check-set-only` below enforces it); and
 `scripts/failure_shape_recall.py`, which issues each trigger against
 `mempalace search --json` and reports **recall@3** and first-hit rank. Reads only — no
 index, no CLI verb, no ranking change.
 
 ### Why 31 files and not 33
 
-The corpus counts **33 on record**. Four of 2g-c6's eight are counted but never
+The **seed** corpus counts **33 on record**. Four of 2g-c6's eight are counted but never
 described — #503 gives their total, not their mechanisms — so they have no `asked`, no
 `answered`, and cannot be written without inventing them. §25.6 holds **two** distinct
 mechanisms that the section-unit count merged into one.
