@@ -290,6 +290,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| check-docs must not match a PR number against a commit-sha prefix | — | `HEAD` — pending resolution |
 | the daemon-unreachable message is written once, not hand-copied at 22 places | — | `HEAD` — pending resolution |
 | `mempalace window` walks a wing chronologically; `mempalace source` lists one file's drawers in order | — | `HEAD` — pending resolution |
 | diary read/agents work without a configured identity; the hook keys entries on the harness name | — | `HEAD` — pending resolution |

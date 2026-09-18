@@ -37,23 +37,66 @@ A record therefore has a different shape from a drawer. Minimum fields:
 | `triggers[]` | arrival phrasings — what you would SAY or DO just before making it |
 | `instances[]` | measured occurrences: date, lane, instrument, one-line evidence |
 | `remedy` | the predicate to choose instead, stated as a check |
+| `direction` | `false-confidence` \| `false-alarm` — **which way this instrument fails** |
 
 `asked`/`answered` is load-bearing: it is the only field that distinguishes this
 class from "a bug happened". If a proposed card cannot fill both, it is not a
 failure shape.
 
-### Seed corpus — 25 measured instances, 21 individually citable
+`direction` is load-bearing for **retrieval**, not for classification. The corpus
+is overwhelmingly `false-confidence` — a green check that measured the wrong thing
+— so an index built without the field will answer an agent arriving with *"my check
+says the fix broke it"* using cards about distrusting green, which is the opposite
+of what they need. Two records below are `false-alarm` as observed — `harness-indicts-shipping`
+and `own-vocabulary-grep`; the rest are `false-confidence` as observed. Read those
+as modal values, not partitions: see the (mechanism, question) note below.
 
-**Oracle PART 25 (six, 2026-09-11):**
+> ⚠️ **Records are cited by `shape` slug, never by ordinal.** §2's rule against
+> citing by line number applies to this document too: the corpus grew from 25 to 33
+> between two reviews, and every ordinal moved. The slugs below are the identifiers;
+> the counts are a derivation, not a naming scheme.
 
-| asked | instrument | actually answered |
-|---|---|---|
-| does the defect exist? | a read of a live uncommitted worktree | did it exist *at read time*? (fixed 2 min later) |
-| what did this branch do? | `git diff main..branch` | tree-vs-tree — peer's additions render as this branch's deletions |
-| is the file present after merge? | one hardcoded path | is it at *that* path? (a rename falsifies it; blob identical) |
-| is it under the char limit? | a byte count | how many bytes? (23,309 B vs 22,936 chars, UTF-8 emoji) |
-| did the merge take both sides? | "it merged" | did a command exit 0? (`rev-list --parents` shows the real answer) |
-| are the links there? | `r'...([a-z\\-]+)\\.md'` in a quoted heredoc | is there a literal backslash? (matched nothing; reported "no links" about a landed fix) |
+### Seed corpus — 33 on record, 29 individually citable
+
+> 🔴 **The first published count (25/21) was wrong in both directions, and the way it
+> was wrong is itself a record in this corpus.** It was taken from the *closing tally
+> line* of Oracle PART 25 rather than from that report's section headers. The line
+> under-counted; reading it instead of the source then dropped §25.1 and §25.10 and
+> admitted two §25.14 near-misses. ⇒ **Derive a corpus count from the sources, never
+> from a summary of them** — and state the derivation, as below, so the next reader can
+> check it without re-reading everything.
+
+| source | unit counted | on record | citable |
+|---|---|---|---|
+| Oracle PART 25 (`oracle-pr-review-2.md:4260-4700`) | **sections** holding a qualifying mechanism — §25.1, §25.6, §25.8, §25.9, §25.10, §25.12, §25.13, §25.15 | 8 | 8 |
+| This wave — `instruments-and-liveness` §4 (5) + COMMON-DRAIN cards (6) | distinct mechanisms | 11 | 11 |
+| 2g-c6's night (#503) | reported errors | 8 | 4 |
+| Added since | `bare-path-receipt`, `tally-line`, `sha-prefix-match`, `harness-indicts-shipping`, `self-quoting-retraction`, `own-vocabulary-grep` | 6 | 6 |
+| **Total** | | **33** | **29** |
+
+⚠️ **Name the unit.** §25.6 and §25.9 each contain *two* sub-errors, so PART 25 is 8
+*sections* and ≥10 *sub-instances*. The table counts sections. Excluded by Oracle's own
+adjudication of their report: two §25.14 items (a post-merge verification procedure, not
+instrument errors that occurred). Four of the 2g-c6 eight are not individually described
+in #503, hence 8 on record / 4 citable.
+
+**Oracle PART 25 (eight sections, 2026-09-11):**
+
+| § | asked | instrument | actually answered |
+|---|---|---|---|
+| 25.1 | is every section still present? | a heading-presence check | does this exact heading *string* appear? (a retitled heading with a byte-identical body read as MISSING — a mis-specified invariant, 3 false reds) |
+| 25.6 | is the directory absent? | `ls … \| sed … \|\| echo ABSENT` | did the **last** command in the pipeline fail? (a fallback behind a pipe can never fire) |
+| 25.6 | which files are new? | `git status --porcelain` | which **top-level entries** are new? (it collapses untracked dirs: 2 shown, 15 under `-uall`) |
+| 25.8 | does the defect exist? | a read of a live uncommitted worktree | did it exist *at read time*? (fixed 2 min later) |
+| 25.9 | did the rules survive the split? | a marker-grep over rule lines | how many lines carry a marker glyph? (363 candidates; wrong instrument for survival) |
+| 25.10 | does this anchor resolve? | an anchor extractor | does the **truncated prefix** resolve? (the regex split at an escaped backtick, so `A BARE FILENAME IN \"` was the needle) |
+| 25.12 | what did this branch do? | `git diff main..branch` | tree-vs-tree — the peer's additions render as this branch's deletions (5 false) |
+| 25.13 | is the file present after the merge? | one hardcoded path | is it at *that* path? (a peer's rename falsifies it; blob `f46b601d` identical both sides) |
+| 25.15 | are the links there? | `r'…([a-z\\-]+)\\.md'` in a quoted heredoc | is there a literal backslash? (matched nothing; reported "no links" about a fix that had landed) |
+
+> Excluded on Oracle's own re-reading: two §25.14 items (byte-vs-char count and merge-report
+> scrutiny). Both are real lessons, but §25.14 is a post-merge **verification procedure** — the
+> errors did not occur, so neither fills `asked`/`answered` about an instrument that ran.
 
 **This wave, mempalace (eleven, 2026-09-11 → 09-17):**
 
@@ -75,8 +118,84 @@ failure shape.
 formatting · a regex that measured spacing · `pgrep` matching its own wrapper · a
 frequency table that cannot represent a zero.
 
-> ⚠️ Four of the 2g-c6 eight are not individually described in #503. The corpus is
-> **25 on record, 21 citable**; any retrieval measurement must state which it used.
+**Added since first publication (six, 2026-09-17):**
+
+| slug | asked | instrument | actually answered | direction |
+|---|---|---|---|---|
+| `bare-path-receipt` | why did the palace search fail? | the #497 hook's receipt under a bare `PATH` | did the command exit non-zero? — it emits `✗ no answer in 2s (5ms)`, **two numbers in one receipt that contradict each other** | false-confidence |
+| `tally-line` | how many failure shapes are in Oracle PART 25? | that report's closing tally line | what number did the author *state* in the summary? | false-confidence |
+| `sha-prefix-match` | does a doc claim PR #459 is OPEN? | `check-docs.sh`'s PR-state step | does the token "open" appear on a line containing the string `459`? — `/459` matched the **commit sha** `459efab`, and "open" came from "**open**-and-refuse sequence" | false-confidence |
+| `harness-indicts-shipping` | does the matcher fix break the check? | the two-way control written to prove it | *(nothing — the harness was broken)*: `\|` used as a field delimiter in strings containing `\|`, so both arms reported BLIND | **false-alarm** |
+| `self-quoting-retraction` | does the fix remove the warning? | `check-docs.sh` after the fix, on the tree that **documents** the fix | does any line pair the number with a state word? — the changelog entry describing the defect re-supplied both, so the warning returned on a correct fix | false-confidence |
+| `own-vocabulary-grep` | did the README row render? | `grep -c 'failure-shape'` | does the **lowercase-hyphenated literal** appear? — the rendered text is "failure SHAPES" (different case, a space not a hyphen), so a present-and-correct row read as missing | **false-alarm** |
+
+Four of these were produced **by this document or by fixing it**, and that is the finding:
+
+- `tally-line` is the spec's own definition reproduced against the report that seeded
+  it, by its author, in the same week. ⭐ **The failure survives being written down by
+  the person who named it.** Oracle asked for it to be recorded, and reads it as
+  corroboration of the thesis rather than a mark against the spec. It is also the
+  upstream cause of the 25/21 miscount corrected above.
+- `sha-prefix-match` was found by this spec's own lens within an hour of publication,
+  in `scripts/check-docs.sh`, with the surrounding six checks green.
+- `harness-indicts-shipping` came out of *fixing* `sha-prefix-match`, and it is the
+  first `false-alarm` on record. A broken control reported that the fix broke the
+  check; taken at face value it would have discarded a correct change.
+  ⭐ **The reusable catch is not "check your harness" but: when an instrument indicts
+  the SHIPPING behaviour, that is the implausible arm — check the instrument before
+  the subject.** The old pattern is *known* to warn on #459; an arm reporting that it
+  does not contradicts a measurement already in hand, and a contradiction with a
+  measurement you already hold is the cheapest signal that the instrument moved rather
+  than the world.
+- `self-quoting-retraction` closed the loop: the changelog entry *documenting*
+  `sha-prefix-match` re-supplied the number and the state word the checker matches on,
+  so a correct fix still warned. 2g already cards this shape — *a retraction quotes its
+  target, so `grep -c "<the false claim>"` can never reach zero* — and it is filed here
+  as a recurrence, not a discovery. Remedy: keep the **real** state adjacent to the
+  reference, so a checker reading the line learns the truth rather than half of it.
+- `own-vocabulary-grep` carries **two** instances, one review apart, by the same reader:
+  §27.4 — `grep -c 'failure-shape'` → 0 against rendered text reading *"failure SHAPES"*
+  (different case, a space not a hyphen), briefly read as a missing render; and PART 28 —
+  a grep of `tests/` for the literal `1.10.0` → 0, concluded *"the claimed version test
+  does not exist"*, when `test_version_was_bumped_for_the_new_routes` asserts
+  `[major, minor] >= [1, 10]`, **a floor rather than a pin**.
+  ⭐ **Searching for the value instead of the property**, twice in two reviews.
+
+> ### Discriminator — this class vs. §2's keyed-on-terms regime
+> Both produce a zero from a reader aimed at the searcher's own vocabulary, so they cannot
+> be told apart by **how the zero was produced**. They are told apart by **what the zero is
+> consumed as**:
+>
+> | | §2 keyed-on-terms | `own-vocabulary-grep` |
+> |---|---|---|
+> | the zero is | **known to be a miss** — you are hunting a card you believe exists | **mistaken for a fact** — it becomes "the row did not render", "the test does not exist" |
+> | what follows | try another phrasing | a verdict, a bug report, a CHANGES |
+> | remedy | an arrival-phrasing index (§2) | derive the needle from the artefact, never from memory |
+>
+> ⇒ The same failed search is a retrieval problem in one regime and a **false finding** in
+> the other. Only the second is a failure shape, and the direction is `false-alarm`: it
+> indicts correct work.
+>
+> `direction` is a property of the (mechanism, question) pair, not of either alone — the
+> same broken instrument points one way when you are establishing absence and the other
+> when you are establishing presence. It is therefore not derivable from any other field
+> at read time and must be recorded with the instance that exhibited it. Where a shape's
+> instances agree it may be carried on the shape as the modal direction; where they can
+> differ it belongs on `instances[]`.
+>
+> ⚠️ `sha-prefix-match` is **already mixed in principle**: it is `false-alarm` inside
+> `check-docs` (it indicted a document that never mentioned #459), and `false-confidence`
+> against the question *"does this doc reference #459?"*, where the same match would
+> affirm a reference that is not there. Its row below records the direction **as
+> observed**, which is what a modal value on a shape means — not a claim that the
+> mechanism can only fail that way.
+
+> ⚠️ Four of the 2g-c6 eight are not individually described in #503, so the corpus is
+> **33 on record, 29 citable**; any retrieval measurement must state which set it used.
+> One further candidate is **unadjudicated**: Oracle's §27.4 `grep -c 'failure-shape'`
+> → 0 against rendered text reading "failure SHAPES" (different case, space not hyphen).
+> It is arguably the `keyed-on terms` regime of §2 rather than this class; it is left
+> out of the count until someone rules, and is recorded here so the omission is visible.
 
 ---
 

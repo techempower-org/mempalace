@@ -241,8 +241,13 @@ else
         # We don't try to parse exhaustively; just flag when a doc says
         # MERGED but gh says OPEN, or vice versa.
         doc_says_merged=0; doc_says_open=0; doc_says_closed=0
+        # `/pull/$n`, never a bare `/$n`: a PR number is also a valid commit-sha
+        # prefix, so `/459` matches `.../commit/459efab`. That put PR #459 on a
+        # README line reading "one OPEN-and-refuse sequence" and reported drift
+        # against a doc that never mentions #459 at all. 12 numbers in these docs
+        # currently prefix a referenced sha. Do not "simplify" this back.
         for d in "${docs[@]}"; do
-            line=$(grep -E "(#$n|/$n)" "$d" 2>/dev/null | head -1 | tr A-Z a-z)
+            line=$(grep -E "(#$n|/pull/$n)" "$d" 2>/dev/null | head -1 | tr A-Z a-z)
             [[ "$line" == *"merged"* ]] && doc_says_merged=1
             [[ "$line" == *"open"*    ]] && doc_says_open=1
             [[ "$line" == *"closed"*  ]] && doc_says_closed=1
@@ -252,7 +257,7 @@ else
         # same line, not the one we're checking. Only check lines that
         # mention this PR alone.
         for d in "${docs[@]}"; do
-            line=$(grep -E "(#$n[^0-9]|/$n[^0-9])" "$d" 2>/dev/null | head -1)
+            line=$(grep -E "(#$n[^0-9]|/pull/$n[^0-9])" "$d" 2>/dev/null | head -1)
             other_prs=$(echo "$line" | grep -oE '#[0-9]{2,5}' | grep -v "^#$n$" | wc -l)
             if (( other_prs > 0 )); then
                 doc_says_merged=0; doc_says_open=0; doc_says_closed=0
