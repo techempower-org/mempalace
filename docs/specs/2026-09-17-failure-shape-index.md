@@ -47,11 +47,12 @@ failure shape.
 is overwhelmingly `false-confidence` — a green check that measured the wrong thing
 — so an index built without the field will answer an agent arriving with *"my check
 says the fix broke it"* using cards about distrusting green, which is the opposite
-of what they need. Two records below are `false-alarm` — `harness-indicts-shipping` and
-`own-vocabulary-grep`; everything else on record is `false-confidence`.
+of what they need. Two records below are `false-alarm` as observed — `harness-indicts-shipping`
+and `own-vocabulary-grep`; the rest are `false-confidence` as observed. Read those
+as modal values, not partitions: see the (mechanism, question) note below.
 
 > ⚠️ **Records are cited by `shape` slug, never by ordinal.** §2's rule against
-> citing by line number applies to this document too: the corpus grew from 25 to 31
+> citing by line number applies to this document too: the corpus grew from 25 to 33
 > between two reviews, and every ordinal moved. The slugs below are the identifiers;
 > the counts are a derivation, not a naming scheme.
 
@@ -173,8 +174,21 @@ Four of these were produced **by this document or by fixing it**, and that is th
 >
 > ⇒ The same failed search is a retrieval problem in one regime and a **false finding** in
 > the other. Only the second is a failure shape, and the direction is `false-alarm`: it
-> indicts correct work. This is why `direction` cannot be inferred from the mechanism —
-> it is a property of the **consumer**, which is exactly the thing retrieval keys on.
+> indicts correct work.
+>
+> `direction` is a property of the (mechanism, question) pair, not of either alone — the
+> same broken instrument points one way when you are establishing absence and the other
+> when you are establishing presence. It is therefore not derivable from any other field
+> at read time and must be recorded with the instance that exhibited it. Where a shape's
+> instances agree it may be carried on the shape as the modal direction; where they can
+> differ it belongs on `instances[]`.
+>
+> ⚠️ `sha-prefix-match` is **already mixed in principle**: it is `false-alarm` inside
+> `check-docs` (it indicted a document that never mentioned #459), and `false-confidence`
+> against the question *"does this doc reference #459?"*, where the same match would
+> affirm a reference that is not there. Its row below records the direction **as
+> observed**, which is what a modal value on a shape means — not a claim that the
+> mechanism can only fail that way.
 
 > ⚠️ Four of the 2g-c6 eight are not individually described in #503, so the corpus is
 > **33 on record, 29 citable**; any retrieval measurement must state which set it used.
