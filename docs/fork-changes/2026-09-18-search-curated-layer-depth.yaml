@@ -50,4 +50,5 @@ body: |
   document within depth 30 on the bm25 route it takes, and correctly reports
   ``curated_first_rank: null`` rather than inventing one.
 tests: "15 new (test_search_depth: depth floor, conditional trigger, curated_first_rank pre-reorder + null, reservation last-slot/marking/edge cases, prose mark); 3 #477 tests updated to the new contract"
+fork_pr: 534
 files: [mempalace/cli.py]
