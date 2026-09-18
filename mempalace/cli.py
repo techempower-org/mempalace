@@ -3365,30 +3365,14 @@ def cmd_list(args):
         # graceful 401/403 + unreachable handling added in 850e08c. On
         # JSON output, emit a structured error so machine callers see
         # the same shape as other failure paths.
-        if want_json:
-            _emit_json({"error": str(e), "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                f"see mempalace status for diagnostics ({e})",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(e, want_json)
 
     if data is None:
         # _call_daemon_rest returns None on 404/401/403 — endpoint
         # missing on an older daemon, or auth mismatch. Same exit code
         # as the unreachable case so scripts can treat "no daemon list"
         # uniformly without parsing the message.
-        if want_json:
-            _emit_json({"error": "daemon /list unavailable", "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                "see mempalace status for diagnostics",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(None, want_json, route="/list")
 
     # Daemon /list mirrors mempalace_list_drawers' shape: error key when
     # the underlying palace is unreachable from inside the daemon.
@@ -3487,29 +3471,13 @@ def cmd_move(args):
     try:
         data = _patch_daemon_rest(f"/memory/{drawer_id}", body)
     except DaemonError as e:
-        if want_json:
-            _emit_json({"error": str(e), "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                f"see mempalace status for diagnostics ({e})",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(e, want_json)
 
     if data is None:
         # _patch_daemon_rest returns None on 404/401/403 — route missing on
         # an older daemon, or auth mismatch. Exit 1 matches the unreachable
         # case so scripts treat "no daemon move" uniformly.
-        if want_json:
-            _emit_json({"error": "daemon PATCH /memory unavailable", "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                "see mempalace status for diagnostics",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(None, want_json, route="PATCH /memory")
 
     # mempalace_update_drawer returns success=False on a not-found drawer or
     # an inner sanitize/validation failure — daemon reachable, move failed.
@@ -3608,26 +3576,10 @@ def _gather_bulk_move_matches(wing, room, want_json):
             # A refusal is not an outage (#499).
             _exit_daemon_request_error(_req_err, want_json=want_json)
         except DaemonError as e:
-            if want_json:
-                _emit_json({"error": str(e), "source": "daemon"})
-            else:
-                print(
-                    f"palace daemon unreachable at {_daemon_url()} — "
-                    f"see mempalace status for diagnostics ({e})",
-                    file=sys.stderr,
-                )
-            sys.exit(1)
+            _fail_daemon(e, want_json)
 
         if data is None:
-            if want_json:
-                _emit_json({"error": "daemon /list unavailable", "source": "daemon"})
-            else:
-                print(
-                    f"palace daemon unreachable at {_daemon_url()} — "
-                    "see mempalace status for diagnostics",
-                    file=sys.stderr,
-                )
-            sys.exit(1)
+            _fail_daemon(None, want_json, route="/list")
 
         drawers = data.get("drawers") or []
         if "error" in data and not drawers:
@@ -4064,29 +4016,13 @@ def cmd_graph(args):
         # Match cmd_list / cmd_status daemon-down fallback. JSON callers
         # get a structured error on stdout; humans get the standard
         # "daemon unreachable" line on stderr.
-        if want_json:
-            _emit_json({"error": str(e), "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                f"see mempalace status for diagnostics ({e})",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(e, want_json)
 
     if data is None:
         # _call_daemon_rest returns None on 404/401/403 — endpoint
         # missing on an older daemon, or auth mismatch. Treat the same
         # as unreachable so scripts get one failure shape.
-        if want_json:
-            _emit_json({"error": "daemon /graph unavailable", "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                "see mempalace status for diagnostics",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(None, want_json, route="/graph")
 
     # Daemon may surface an inner error envelope (palace unreachable
     # from inside the daemon) — match cmd_list's exit-2 contract.
@@ -4303,15 +4239,7 @@ def cmd_cypher(args):
         # Match cmd_graph / cmd_list daemon-down fallback. JSON callers
         # get a structured error on stdout; humans get the standard
         # "daemon unreachable" line on stderr.
-        if want_json:
-            _emit_json({"error": str(e), "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                f"see mempalace status for diagnostics ({e})",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(e, want_json)
 
     if status == 403:
         # Server-enforced read-only: SQLSTATE 25006 surfaces as HTTP 403.
@@ -4331,21 +4259,11 @@ def cmd_cypher(args):
         # 401/404/503 etc — endpoint missing on an older daemon, auth
         # mismatch, or non-postgres backend. Treat the same as
         # unreachable so scripts get one failure shape.
-        if want_json:
-            _emit_json(
-                {
-                    "error": f"daemon /cypher returned {status}",
-                    "source": "daemon",
-                    "status": status,
-                }
-            )
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                f"/cypher returned {status} (see mempalace status for diagnostics)",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(
+            f"daemon /cypher returned {status}",
+            want_json,
+            status=status,
+        )
 
     # Daemon may surface an inner error envelope — match cmd_graph's exit-2.
     if data is not None and "error" in data and "rows" not in data and "data" not in data:
@@ -6219,26 +6137,10 @@ def cmd_stats(args):
         # A refusal is not an outage (#499).
         _exit_daemon_request_error(_req_err, want_json=want_json)
     except DaemonError as e:
-        if want_json:
-            _emit_json({"error": str(e), "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                f"see mempalace status for diagnostics ({e})",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(e, want_json)
 
     if data is None:
-        if want_json:
-            _emit_json({"error": "daemon /stats unavailable", "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                "see mempalace status for diagnostics",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(None, want_json, route="/stats")
 
     if "error" in data and not (data.get("kg") or data.get("graph") or data.get("status")):
         if want_json:
@@ -6377,15 +6279,7 @@ def cmd_tags(args):
     try:
         data = _call_daemon_tool("mempalace_list_tags", arguments)
     except DaemonError as e:
-        if want_json:
-            _emit_json({"error": str(e), "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                f"see mempalace status for diagnostics ({e})",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(e, want_json)
 
     if isinstance(data, dict) and "error" in data and not data.get("tags"):
         if want_json:
@@ -6566,36 +6460,18 @@ def cmd_overlap(args):
     try:
         data, status = _post_cypher(body)
     except DaemonError as e:
-        if want_json:
-            _emit_json({"error": str(e), "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                f"see mempalace status for diagnostics ({e})",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(e, want_json)
 
     if status is not None:
         # Any non-2xx from /cypher — older daemon (404), auth (401/403),
         # or 503 if not on postgres backend. Same shape as cmd_cypher's
         # fallthrough — exit 1, scripts treat all daemon-side failures
         # uniformly.
-        if want_json:
-            _emit_json(
-                {
-                    "error": f"daemon /cypher returned {status}",
-                    "source": "daemon",
-                    "status": status,
-                }
-            )
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                f"/cypher returned {status} (see mempalace status for diagnostics)",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(
+            f"daemon /cypher returned {status}",
+            want_json,
+            status=status,
+        )
 
     if data is not None and "error" in data and "rows" not in data and "data" not in data:
         if want_json:
@@ -6824,15 +6700,7 @@ def cmd_why(args):
     try:
         drawer = _call_daemon_tool("mempalace_get_drawer", {"drawer_id": drawer_id})
     except DaemonError as e:
-        if want_json:
-            _emit_json({"error": str(e), "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                f"see mempalace status for diagnostics ({e})",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(e, want_json)
 
     if isinstance(drawer, dict) and "error" in drawer and "drawer_id" not in drawer:
         if want_json:
@@ -6869,15 +6737,7 @@ def cmd_why(args):
         try:
             search_payload = _call_daemon_tool("mempalace_search", search_args)
         except DaemonError as e:
-            if want_json:
-                _emit_json({"error": str(e), "source": "daemon"})
-            else:
-                print(
-                    f"palace daemon unreachable at {_daemon_url()} — "
-                    f"see mempalace status for diagnostics ({e})",
-                    file=sys.stderr,
-                )
-            sys.exit(1)
+            _fail_daemon(e, want_json)
         if (
             isinstance(search_payload, dict)
             and "error" in search_payload
@@ -7109,15 +6969,7 @@ def cmd_tunnels(args):
     try:
         data = _call_daemon_tool("mempalace_list_tunnels", arguments)
     except DaemonError as e:
-        if want_json:
-            _emit_json({"error": str(e), "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                f"see mempalace status for diagnostics ({e})",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(e, want_json)
 
     if isinstance(data, dict) and "error" in data and not (data.get("tunnels") or data.get("data")):
         if want_json:
@@ -7351,15 +7203,7 @@ def _drawer_call_or_exit(tool: str, arguments: dict, args, want_json: bool, fall
     try:
         data = _drawer_call(tool, arguments, args)
     except DaemonError as e:
-        if want_json:
-            _emit_json({"error": str(e), "source": "daemon"})
-        else:
-            print(
-                f"palace daemon unreachable at {_daemon_url()} — "
-                f"see mempalace status for diagnostics ({e})",
-                file=sys.stderr,
-            )
-        sys.exit(1)
+        _fail_daemon(e, want_json)
 
     if not isinstance(data, dict):
         data = {"result": data}
@@ -8370,7 +8214,7 @@ def _fail_daemon_unavailable(err, want_json: bool) -> None:
     sys.exit(2)
 
 
-def _fail_daemon(err, want_json: bool) -> None:
+def _fail_daemon(err, want_json: bool, *, route: str | None = None, **extra) -> None:
     """Daemon call failed → exit 1 (matches cmd_why / cmd_tags / cmd_graph).
 
     ``DaemonError`` covers two different situations and the distinction
@@ -8381,19 +8225,43 @@ def _fail_daemon(err, want_json: bool) -> None:
     "unreachable" sends the reader after the wrong problem, so keep the
     sibling commands' wording for transport and say what actually
     happened otherwise.
+
+    ``route`` and ``extra`` exist because the twenty call sites this
+    replaced did not all say the same thing, and a helper that cannot
+    express what they said would make the CLI report LESS than it did.
+    Specifically:
+
+    * ``err=None`` is the 404/401/403 case — ``_call_daemon_rest`` returns
+      ``None`` and **nothing was raised**, so there is no exception to
+      interpolate. The prose drops the parenthetical rather than printing
+      "(None)", and ``route`` carries the only identifying information
+      those sites ever had.
+    * ``route`` preserves the per-route JSON error ("daemon /list
+      unavailable") that five sites emitted. Without it a script loses
+      which route failed.
+    * ``extra`` carries structured fields the site already published —
+      today ``status`` from the two ``/cypher`` sites. Dropping a JSON
+      field is a breaking change to a machine interface and is invisible
+      to a prose diff (#476).
     """
-    text = str(err)
+    text = str(err) if err is not None else ""
     if want_json:
-        _emit_json({"error": text, "source": "daemon"})
+        payload = {
+            "error": f"daemon {route} unavailable" if err is None and route else text,
+            "source": "daemon",
+        }
+        payload.update(extra)
+        _emit_json(payload)
     elif text.startswith("daemon error"):
         print(
             f"palace daemon at {_daemon_url()} rejected the call — {text}",
             file=sys.stderr,
         )
     else:
+        detail = f" ({err})" if err is not None else ""
         print(
             f"palace daemon unreachable at {_daemon_url()} — "
-            f"see mempalace status for diagnostics ({err})",
+            f"see mempalace status for diagnostics{detail}",
             file=sys.stderr,
         )
     sys.exit(1)
@@ -10407,10 +10275,12 @@ def cmd_wings(args):
             # A refusal is not an outage (#499).
             _exit_daemon_request_error(_req_err, want_json=want_json)
         except DaemonError as e:
-            _read_family_fail(
-                f"palace daemon unreachable at {_daemon_url()} ({e})", want_json, 1, "daemon"
-            )
-            return
+            # Normalised onto the shared helper (#476). This site had
+            # drifted furthest: a leading blank line, an "  ERROR: "
+            # prefix, no "see mempalace status" clause, and a JSON error
+            # holding a pre-rendered sentence rather than the exception.
+            # All four are now the same as the other nineteen.
+            _fail_daemon(e, want_json)
         if isinstance(fast, dict) and "wings" in fast:
             data = {"wings": fast.get("wings") or {}}
         else:
