@@ -42,6 +42,31 @@ Examples:
 
 Raised when a daemon HTTP call fails or returns a JSON-RPC error.
 
+### `class DaemonRequestError(DaemonError)`
+
+The daemon answered and REFUSED the request — a 4xx, not an outage.
+
+A subclass so every existing `except DaemonError` keeps working; call
+sites that can tell the operator something useful catch this first.
+
+The distinction is the whole of #499: one exception type meant a client
+could not tell "the palace is down" from "your argument is wrong", and it
+guessed the former. `mempalace list --room diary` reported "palace daemon
+unreachable … see mempalace status" while the daemon was up and had
+answered with, verbatim:
+
+    &#123;"detail": &#123;"error": "room 'diary' is not in the canonical set",
+                "valid_rooms": [...]}}
+
+The message the operator needed had already arrived. `detail` carries it
+forward so the client stops substituting a guess for it.
+
+#### `__init__`
+
+```python
+def __init__(self, message: str, *, status: int, detail = None)
+```
+
 ### `class UnknownSourceAdapterError(ValueError)`
 
 Raised when an explicit ``--source`` name is absent from the registry.
@@ -312,23 +337,49 @@ delete a drawer we can't date.
 def cmd_rename_wing(args)
 ```
 
+### `cmd_pending`
+
+```python
+def cmd_pending(args)
+```
+
+Dispatch the ``pending`` verb group.
+
 ### `cmd_replay`
 
 ```python
 def cmd_replay(args)
 ```
 
-Drain ``~/.mempalace/pending/*.jsonl`` by re-issuing each request to the daemon.
+Deprecated alias for ``pending drain`` — warns, then defers.
 
-Pending requests accumulate when the Stop / PreCompact hooks fire while
-the daemon (or its backend) is unreachable — see the 2026-05-21
-power-resilience design. Drain semantics:
+Kept because scripts and a cron entry call it. The name is the bug
+(#498): "replay" reads as replaying history, while it posts mine jobs.
+It inherits the ``--yes`` guard rather than routing around it, so the
+alias is not a back door to the old behaviour.
 
-* Each line is one ``&#123;"dir", "wing", "mode", "ts"}`` mine request.
-* On 2xx daemon response the line is consumed; on failure the line
-  stays in the file for the next attempt.
-* Duplicate ``(dir, wing, mode)`` tuples are deduped before transmit
-  so a long outage doesn't replay the same target N times.
+### `cmd_pending_drain`
+
+```python
+def cmd_pending_drain(args)
+```
+
+Re-post every queued mine request to the daemon — after saying so.
+
+``~/.mempalace/pending/*.jsonl`` accumulates mine requests whenever the
+Stop / PreCompact hooks fire while the daemon or its backend is
+unreachable (the 2026-05-21 power-resilience design). Draining it
+re-posts each one.
+
+**Defaults to a plan.** The verb this replaced, ``replay``, took no
+arguments, printed no description, and posted everything immediately: a
+2026-09-17 session reading it as "replay history" queued twelve mines
+against production (#498). Nothing is posted without ``--yes``.
+
+The plan comes from :func:`pending_queue.peek`, which reproduces the
+drain's own filtering rather than counting lines, so the number printed
+is the number that would be posted. A preview that over-counted would be
+the same defect this command was filed for.
 
 ### `cmd_migrate_wings`
 

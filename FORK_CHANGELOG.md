@@ -67,6 +67,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `docs/specs/2026-09-17-failure-shape-index.md`
 
 
+### Fixed
+
+
+- **`pending drain` plans before it posts; a daemon 4xx reads as a request error, not an outage** (`HEAD` — pending resolution)
+  Two commands whose **report disagreed with what happened**. Neither
+  crashed; both answered confidently and wrongly.
+
+  `mempalace replay` took no arguments, printed no description, and
+  re-posted every request in `~/.mempalace/pending/*.jsonl` to the daemon as
+  mine jobs. A session reading the name as "replay history" queued twelve
+  mines against production. It is now `mempalace pending drain`, it says
+  what it drains, and **nothing is posted without `--yes`**.
+
+  The risk in that fix is the preview itself. `replay` de-duplicates per
+  file, skips unparseable lines, and DROPS legacy whole-directory requests
+  without posting them — so a plan counting raw lines would promise twelve
+  and post nine, which is the same defect in a new coat. The plan therefore
+  comes from `pending_queue.peek()`, which reproduces the drain's own filter
+  chain and is tested against `replay` directly: `planned == posted`, not
+  "resembles". `peek` cannot be "`replay` with a no-op poster", because
+  `replay` claims each file by RENAMING it before reading a line — a dry run
+  that is not dry. `replay` survives as a warning alias, inheriting the
+  guard rather than routing around it.
+
+  Separately, `list --wing 2g --room diary` printed *"palace daemon
+  unreachable … see mempalace status for diagnostics"* while the daemon was
+  up, answering, and explaining itself:
+
+      GET /list?wing=2g&room=diary  ->  400
+      {"detail": {"error": "room 'diary' is not in the canonical set", ...}}
+
+  Every 4xx shared a bucket with a refused connection, so the error was
+  named for the layer that NOTICED rather than the layer that FAILED, and it
+  sent the operator to check daemon health instead of their own argument.
+  The message they needed was already on the wire; the client discarded it
+  and substituted a guess. So the fix is not a better message — it is to
+  stop throwing away the one that arrived.
+
+  `DaemonRequestError` subclasses `DaemonError`, so existing handlers keep
+  working and the new `except` clauses are additive; 404/401/403 still fall
+  through to `None`, because a missing route on an older daemon is a
+  fallback signal, not a user error. Exit **64** per the contract `cli.py`
+  has carried since #44 — not 2 ("palace unavailable"), which is what it
+  printed.
+
+      before  exit=1   palace daemon unreachable at http://familiar:8085 …
+      after   exit=64  daemon rejected the request (400): room 'diary' is
+                       not in the canonical set (valid: architecture, …)
+
+  What this does NOT fix: `diary` is a room that **exists** — 12,216 drawers
+  in the `2g` wing alone, 79,753 across eight non-canonical rooms — and
+  `/list` refuses to show any of them. `validate_room_or_raise` checks
+  canonicality, and its own docstring says that check exists as typo
+  protection for *search*; applied to a list filter it makes real data
+  unreachable. That is daemon-side and raised there. This change only
+  ensures the client relays the refusal instead of misattributing it.
+
+  Both commands also switch from `return` to `sys.exit`: `main` discards a
+  handler's return value, so a wholly failed drain printed `failed=1` and
+  exited **0**. Reproduced against `origin/main` with the real binary; the
+  structural cause is filed as #508.
+
+  *Tests:* 24 (test_cli_pending_drain.py x15: peek read-only, planned==posted, --yes guard, alias, --help + dispatch probe; test_cli_daemon_4xx.py x9: 4xx vs outage, plain-text bodies, 404/401/403 fallthrough, exit 64, JSON envelope; plus 5 superseded cmd_replay assertions migrated to cmd_pending_drain)
+  *Files:* `mempalace/cli.py`, `mempalace/pending_queue.py`
+
+
 ## [2026-09-11]
 
 
