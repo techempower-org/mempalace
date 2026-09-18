@@ -1,4 +1,4 @@
-seq: 150
+seq: 154
 id: check-docs-pr-matcher
 date: '2026-09-17'
 bucket: Fixed
@@ -49,7 +49,17 @@ body: |
   the corpus is almost entirely false-confidence, so an index without the field
   answers *"my check says the fix broke it"* with cards about distrusting green.
   The seed count is re-derived from sources rather than from a summary line,
-  which is what produced the original 25/21 figure — 31 on record, 27 citable.
+  which is what produced the original 25/21 figure — 33 on record, 29 citable,
+  with the derivation shown per source and the unit named (Oracle PART 25 is
+  eight *sections*; two of them hold two sub-errors each).
+
+  One of the six new records, `own-vocabulary-grep`, carries a discriminator the
+  spec previously lacked: a zero produced by searching your own vocabulary is a
+  retrieval problem when you know it is a miss, and a **false finding** when it is
+  consumed as a fact ("the row did not render", "the test does not exist"). The
+  same failed search sits in either regime, so `direction` is a property of the
+  consumer rather than of the mechanism — which is precisely what retrieval keys
+  on.
 tests: 'none (shell script + docs); both controls reproducible via scratch/refuted-claims-provenance/nebula-505b-matcher-control.sh'
 files:
 - scripts/check-docs.sh

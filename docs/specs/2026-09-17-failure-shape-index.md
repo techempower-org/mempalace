@@ -47,14 +47,15 @@ failure shape.
 is overwhelmingly `false-confidence` — a green check that measured the wrong thing
 — so an index built without the field will answer an agent arriving with *"my check
 says the fix broke it"* using cards about distrusting green, which is the opposite
-of what they need. Only `harness-indicts-shipping` below is `false-alarm`.
+of what they need. Two records below are `false-alarm` — `harness-indicts-shipping` and
+`own-vocabulary-grep`; everything else on record is `false-confidence`.
 
 > ⚠️ **Records are cited by `shape` slug, never by ordinal.** §2's rule against
 > citing by line number applies to this document too: the corpus grew from 25 to 31
 > between two reviews, and every ordinal moved. The slugs below are the identifiers;
 > the counts are a derivation, not a naming scheme.
 
-### Seed corpus — 32 on record, 28 individually citable
+### Seed corpus — 33 on record, 29 individually citable
 
 > 🔴 **The first published count (25/21) was wrong in both directions, and the way it
 > was wrong is itself a record in this corpus.** It was taken from the *closing tally
@@ -69,8 +70,8 @@ of what they need. Only `harness-indicts-shipping` below is `false-alarm`.
 | Oracle PART 25 (`oracle-pr-review-2.md:4260-4700`) | **sections** holding a qualifying mechanism — §25.1, §25.6, §25.8, §25.9, §25.10, §25.12, §25.13, §25.15 | 8 | 8 |
 | This wave — `instruments-and-liveness` §4 (5) + COMMON-DRAIN cards (6) | distinct mechanisms | 11 | 11 |
 | 2g-c6's night (#503) | reported errors | 8 | 4 |
-| Added since | `bare-path-receipt`, `tally-line`, `sha-prefix-match`, `harness-indicts-shipping`, `self-quoting-retraction` | 5 | 5 |
-| **Total** | | **32** | **28** |
+| Added since | `bare-path-receipt`, `tally-line`, `sha-prefix-match`, `harness-indicts-shipping`, `self-quoting-retraction`, `own-vocabulary-grep` | 6 | 6 |
+| **Total** | | **33** | **29** |
 
 ⚠️ **Name the unit.** §25.6 and §25.9 each contain *two* sub-errors, so PART 25 is 8
 *sections* and ≥10 *sub-instances*. The table counts sections. Excluded by Oracle's own
@@ -116,7 +117,7 @@ in #503, hence 8 on record / 4 citable.
 formatting · a regex that measured spacing · `pgrep` matching its own wrapper · a
 frequency table that cannot represent a zero.
 
-**Added since first publication (five, 2026-09-17):**
+**Added since first publication (six, 2026-09-17):**
 
 | slug | asked | instrument | actually answered | direction |
 |---|---|---|---|---|
@@ -125,6 +126,7 @@ frequency table that cannot represent a zero.
 | `sha-prefix-match` | does a doc claim PR #459 is OPEN? | `check-docs.sh`'s PR-state step | does the token "open" appear on a line containing the string `459`? — `/459` matched the **commit sha** `459efab`, and "open" came from "**open**-and-refuse sequence" | false-confidence |
 | `harness-indicts-shipping` | does the matcher fix break the check? | the two-way control written to prove it | *(nothing — the harness was broken)*: `\|` used as a field delimiter in strings containing `\|`, so both arms reported BLIND | **false-alarm** |
 | `self-quoting-retraction` | does the fix remove the warning? | `check-docs.sh` after the fix, on the tree that **documents** the fix | does any line pair the number with a state word? — the changelog entry describing the defect re-supplied both, so the warning returned on a correct fix | false-confidence |
+| `own-vocabulary-grep` | did the README row render? | `grep -c 'failure-shape'` | does the **lowercase-hyphenated literal** appear? — the rendered text is "failure SHAPES" (different case, a space not a hyphen), so a present-and-correct row read as missing | **false-alarm** |
 
 Four of these were produced **by this document or by fixing it**, and that is the finding:
 
@@ -150,9 +152,32 @@ Four of these were produced **by this document or by fixing it**, and that is th
   target, so `grep -c "<the false claim>"` can never reach zero* — and it is filed here
   as a recurrence, not a discovery. Remedy: keep the **real** state adjacent to the
   reference, so a checker reading the line learns the truth rather than half of it.
+- `own-vocabulary-grep` carries **two** instances, one review apart, by the same reader:
+  §27.4 — `grep -c 'failure-shape'` → 0 against rendered text reading *"failure SHAPES"*
+  (different case, a space not a hyphen), briefly read as a missing render; and PART 28 —
+  a grep of `tests/` for the literal `1.10.0` → 0, concluded *"the claimed version test
+  does not exist"*, when `test_version_was_bumped_for_the_new_routes` asserts
+  `[major, minor] >= [1, 10]`, **a floor rather than a pin**.
+  ⭐ **Searching for the value instead of the property**, twice in two reviews.
+
+> ### Discriminator — this class vs. §2's keyed-on-terms regime
+> Both produce a zero from a reader aimed at the searcher's own vocabulary, so they cannot
+> be told apart by **how the zero was produced**. They are told apart by **what the zero is
+> consumed as**:
+>
+> | | §2 keyed-on-terms | `own-vocabulary-grep` |
+> |---|---|---|
+> | the zero is | **known to be a miss** — you are hunting a card you believe exists | **mistaken for a fact** — it becomes "the row did not render", "the test does not exist" |
+> | what follows | try another phrasing | a verdict, a bug report, a CHANGES |
+> | remedy | an arrival-phrasing index (§2) | derive the needle from the artefact, never from memory |
+>
+> ⇒ The same failed search is a retrieval problem in one regime and a **false finding** in
+> the other. Only the second is a failure shape, and the direction is `false-alarm`: it
+> indicts correct work. This is why `direction` cannot be inferred from the mechanism —
+> it is a property of the **consumer**, which is exactly the thing retrieval keys on.
 
 > ⚠️ Four of the 2g-c6 eight are not individually described in #503, so the corpus is
-> **32 on record, 28 citable**; any retrieval measurement must state which set it used.
+> **33 on record, 29 citable**; any retrieval measurement must state which set it used.
 > One further candidate is **unadjudicated**: Oracle's §27.4 `grep -c 'failure-shape'`
 > → 0 against rendered text reading "failure SHAPES" (different case, space not hyphen).
 > It is arguably the `keyed-on terms` regime of §2 rather than this class; it is left
