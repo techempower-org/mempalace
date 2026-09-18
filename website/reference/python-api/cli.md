@@ -67,6 +67,23 @@ forward so the client stops substituting a guess for it.
 def __init__(self, message: str, *, status: int, detail = None)
 ```
 
+### `class DaemonAuthError(DaemonRequestError)`
+
+The daemon answered and refused the CREDENTIAL — 401 or 403 (#518).
+
+A subclass of ``DaemonRequestError`` because it is the same event class: the
+daemon is up, it understood the request, and it declined. Under the #44
+contract as restated by #476/#523 that is 64 ("the daemon answered and
+rejected a well-formed request"), not 2 ("the operation could not run").
+Reporting a wrong ``PALACE_API_KEY`` as *palace unavailable* sends the
+operator to check whether the daemon is running when the fix is one line of
+config — the same misattribution #499 removed for 400.
+
+404 deliberately does NOT raise this. A missing route means "this daemon
+cannot serve the verb", which is unavailability for that verb and stays 2;
+it also stays ``None`` from ``_call_daemon_rest`` so the MCP fallback that
+six call sites depend on is untouched.
+
 ### `class UnknownSourceAdapterError(ValueError)`
 
 Raised when an explicit ``--source`` name is absent from the registry.
