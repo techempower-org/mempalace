@@ -135,6 +135,44 @@ class TestEveryRouteStillNamesItselfInJson:
         )
         assert payload["source"] == "daemon"
 
+    def test_cmd_move_names_its_route(self):
+        """Not a parametrize row: cmd_move needs a drawer_id, and its route
+        string is `PATCH /memory` rather than a bare path."""
+        ns = argparse.Namespace(
+            drawer_id="drawer_abc123",
+            wing="smol",
+            room=None,
+            json=True,
+            quiet=False,
+            palace=None,
+            format="json",
+        )
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=True),
+            patch("mempalace.cli._daemon_url", return_value="http://d:8085"),
+            # cmd_move goes through _patch_daemon_rest, not _call_daemon_rest —
+            # patching the wrong seam let a real request through and the
+            # assertion caught it.
+            patch("mempalace.cli._patch_daemon_rest", return_value=None),
+        ):
+            code, payload = _run_json(cli.cmd_move, ns)
+        assert code == 1
+        assert payload["error"] == "daemon PATCH /memory unavailable"
+
+    def test_gather_bulk_move_matches_names_its_route(self):
+        """Not a cmd_* at all — it takes (wing, room, want_json) positionally,
+        which is why it was the site a parametrised table could not reach."""
+        with (
+            patch("mempalace.cli._daemon_strict", return_value=True),
+            patch("mempalace.cli._daemon_url", return_value="http://d:8085"),
+            patch("mempalace.cli._call_daemon_rest", return_value=None),
+        ):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), pytest.raises(SystemExit) as exc:
+                cli._gather_bulk_move_matches("2g", None, True)
+        assert exc.value.code == 1
+        assert json.loads(out.getvalue())["error"] == "daemon /list unavailable"
+
 
 # ── the consolidation itself ───────────────────────────────────────────
 
