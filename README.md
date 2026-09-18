@@ -290,6 +290,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| --limit 3 reaches the curated layer — conditional deep fetch plus one reserved, marked slot | — | `HEAD` — pending resolution |
 | check-docs step 8 — every merged fork PR must carry a fork-changes entry | — | `HEAD` — pending resolution |
 | 30 failure-shape records as drawers, a recall harness, and a section 5 that runs | — | `HEAD` — pending resolution |
 | daemon-strict `mempalace mine` sent `mode: null` and every mine 422'd | — | `HEAD` — pending resolution |
