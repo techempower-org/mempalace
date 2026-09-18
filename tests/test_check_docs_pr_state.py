@@ -193,6 +193,66 @@ class TestNoNewFalsePositives:
         root = _fixture_repo(tmp_path, {"README.md": readme}, {1377: "MERGED"})
         assert "#1377" not in _step4(_run(root))
 
+    def test_a_state_word_without_a_claim_is_not_a_claim(self, tmp_path):
+        """ "open-and-refuse sequence" asserts nothing about any PR.
+
+        Measured on this repo: the changelog heading "purge / prune / mined
+        share one open-and-refuse sequence" was read as a claim that #459 is
+        OPEN. A word boundary does not help — "open" IS a whole word here.
+        """
+        readme = "No reference here.\nPR #1377 gave purge and prune one open-and-refuse sequence.\n"
+        root = _fixture_repo(tmp_path, {"README.md": readme}, {1377: "MERGED"})
+        assert "#1377" not in _step4(_run(root))
+
+    def test_open_the_drawers_is_not_a_claim(self, tmp_path):
+        """nebula's case on #516: a bare "open" from "open the drawers",
+        spared in the real changelog only because another PR happens to share
+        the line and trips the commentary skip. Incidental protection, not
+        principled — so it is asserted here with the PR alone on the line."""
+        readme = (
+            "No reference here.\nThe local precheck then open the drawers* sequence, from #1377.\n"
+        )
+        root = _fixture_repo(tmp_path, {"README.md": readme}, {1377: "MERGED"})
+        assert "#1377" not in _step4(_run(root))
+
+    def test_a_commit_hash_is_not_a_pr_reference(self, tmp_path):
+        """`/459efab` is a commit URL, not `/pull/459`.
+
+        The right boundary alone does not exclude it — `/459` is followed by
+        `e`, a non-digit. Only matching the `/pull/` form does. Measured: this
+        is how #459 was picked up off a line about a commit.
+        """
+        readme = (
+            "Tracking #459 here with no claim.\n"
+            "See [`459efab`](https://github.com/o/r/commit/459efab) — it is"
+            " still open for review.\n"
+        )
+        root = _fixture_repo(tmp_path, {"README.md": readme}, {459: "MERGED"})
+        assert "PR #459 is" not in _step4(_run(root))
+
+    def test_a_pull_url_still_counts(self, tmp_path):
+        """The mirror: narrowing to /pull/ must not stop real links matching.
+
+        The bare `#459` is required for the PR to be considered at all — the
+        number list is harvested only from `#NNNN`, so a PR referenced purely
+        by URL is never checked. That is pre-existing and out of scope here;
+        noted so this test is not mistaken for coverage of it.
+        """
+        readme = (
+            "Tracking #459 here with no claim.\n"
+            "See https://github.com/o/r/pull/459 — it is still open.\n"
+        )
+        root = _fixture_repo(tmp_path, {"README.md": readme}, {459: "MERGED"})
+        assert "PR #459 is" in _step4(_run(root))
+
+    def test_a_parenthesised_marker_is_a_claim(self, tmp_path):
+        """Real claims in this repo are mostly "(OPEN)" — they must survive."""
+        readme = (
+            "No reference here.\n*Upstream:* [PR #1377](https://github.com/o/r/pull/1377) (OPEN)\n"
+        )
+        root = _fixture_repo(tmp_path, {"README.md": readme}, {1377: "MERGED"})
+        assert "#1377" in _step4(_run(root))
+
     def test_a_longer_number_does_not_match_a_shorter_one(self, tmp_path):
         """`#101` must not inherit the claim on a line about `#1018`.
 

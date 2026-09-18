@@ -12,13 +12,19 @@ body: |
   all mentions agree?"*, and a drifted claim appearing after a correct one was
   invisible.
 
-  Reproduced on the real repo before the fix: appending
-  `PR #1377 is still open upstream.` to the end of README.md, with #1377
-  MERGED upstream, left check-docs reporting `✓ all 245 PR references match
-  upstream state`. The appended line was confirmed to be inside the
-  instrument's own match set first — a control that is present but never looked
-  at produces "did not fire" for the wrong reason, which is indistinguishable
-  from "no drift".
+  Reproduced on the real repo before the fix: a stale open-state line for
+  #1377 (MERGED upstream), appended to the end of README.md, left check-docs
+  reporting `✓ all 245 PR references match upstream state`. The appended line
+  was confirmed to be inside the instrument's own match set first — a control
+  that is present but never looked at produces "did not fire" for the wrong
+  reason, which is indistinguishable from "no drift".
+
+  The control sentence is deliberately NOT quoted verbatim here. Quoting it
+  would re-supply a parseable claim about #1377 and make this very entry trip
+  the checker it documents — the `self-quoting-retraction` shape recorded in
+  the #503 spec, which is how the matcher fix in #511 went green, then warned
+  again once its own changelog entry landed. Verified: this file now reads as
+  a MERGED claim for #1377, which is what #1377 actually is.
 
   Three defects, one scan:
 

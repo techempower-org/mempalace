@@ -264,17 +264,32 @@ else
                 other_prs=$(printf '%s' "$line" | grep -oE '#[0-9]{2,5}' \
                     | grep -vc "^#$n$" || true)
                 (( other_prs > 0 )) && continue
-                # Whole words, not substrings. "opencode" and "reopened"
-                # both contain "open", and the substring test read them as a
-                # claim that the PR is OPEN — latent before #516 because only
-                # one line per doc was ever examined, and amplified the moment
-                # every line is. Measured on this repo: #108 and #110 became
-                # findings purely because their lines say "opencode".
+                # A state WORD is not a state CLAIM. "opencode",
+                # "openai-compat" and "reopened" merely contain "open"; so do
+                # the phrases "open-and-refuse sequence" and "open the
+                # drawers", which assert nothing about any PR. Requiring a
+                # claim shape — a parenthesised marker like "(OPEN)", or a
+                # copula such as "is/was/stays/remains/now [still] open" —
+                # keeps every real claim in this repo while dropping all of
+                # those. Measured against all 13 cases found here.
+                #
+                # This is the same defect as the one above seen from the other
+                # end: `head -1` decided WHICH lines are read, this decides
+                # WHAT counts as a claim on a line. Fixing only the first
+                # trades a false negative for false positives across exactly
+                # the documents that describe PR states.
                 low=$(printf '%s' "$line" | tr A-Z a-z)
-                printf '%s' "$low" | grep -qE '\bmerged\b' && doc_says_merged=1
-                printf '%s' "$low" | grep -qE '\bopen\b'   && doc_says_open=1
-                printf '%s' "$low" | grep -qE '\bclosed\b' && doc_says_closed=1
-            done < <(grep -E "(#$n([^0-9]|\$)|/$n([^0-9]|\$))" "$d" 2>/dev/null || true)
+                for st in merged open closed; do
+                    printf '%s' "$low" | grep -qE \
+                        "(\($st\b|\b(is|was|are|were|still|stays|stayed|remains|remained|now)[[:space:]]+(still[[:space:]]+)?$st\b)" \
+                        || continue
+                    case "$st" in
+                        merged) doc_says_merged=1 ;;
+                        open)   doc_says_open=1 ;;
+                        closed) doc_says_closed=1 ;;
+                    esac
+                done
+            done < <(grep -E "(#$n([^0-9]|\$)|/pull/$n([^0-9]|\$))" "$d" 2>/dev/null || true)
         done
         # If both states appear, it's commentary too.
         if (( doc_says_merged )) && (( doc_says_open )); then
