@@ -46,3 +46,4 @@ body: |
   `rate` and the AGE graph each have a role with no new route.
 files:
 - docs/specs/2026-09-17-failure-shape-index.md
+fork_pr: 505
