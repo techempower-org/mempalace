@@ -1357,7 +1357,10 @@ class TestCmdSearchProvenance:
 
     def test_table_header_warns_when_nothing_curated_matched(self, capsys):
         out = self._run("table", capsys).out
-        assert "! all 2 hits are session-transcript copies" in out
+        # #526 replaced the all-transcript/diary split with a DEPTH statement:
+        # "matched" was a claim about the store. The split is carried per hit by
+        # the ⟨transcript⟩ / ⟨diary⟩ tags now.
+        assert "! no curated document in the top 2" in out
 
     def test_compact_output_tags_transcript_hits(self, capsys):
         out = self._run("compact", capsys).out
@@ -1628,9 +1631,11 @@ class TestCmdSearchProvenance:
             except SystemExit:
                 pass
         out = capsys.readouterr().out
-        assert "no curated document matched" in out, (
-            "a widened window that still found nothing curated must keep saying so"
+        assert "no curated document in the top 2" in out, (
+            "a widened window that still found nothing curated must keep saying so — "
+            "and must say it about the DEPTH, never about the store (#526)"
         )
+        assert "no curated document matched" not in out, "the exact sentence #526 was filed about"
 
     def test_widen_tolerates_a_failed_second_call(self):
         """The extra fetch is an optimisation; losing it must not lose the search."""
@@ -1704,7 +1709,7 @@ class TestCmdSearchProvenance:
                 pass
 
         out = capsys.readouterr().out
-        assert "! none of the 2 hits came from a curated document" in out
+        assert "! no curated document in the top 2" in out
         assert "all 2 hits are session-transcript copies" not in out
 
     def test_quiet_suppresses_the_header_but_keeps_per_hit_notes(self, capsys):
