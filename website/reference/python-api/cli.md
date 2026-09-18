@@ -585,10 +585,17 @@ def cmd_diary(args)
 ``mempalace diary write|read`` — the agent diary at the CLI (#354).
 
 ``write`` wraps ``mempalace_diary_write``; ``read`` wraps
-``mempalace_diary_read``. Both require an agent name (``--agent`` or
-``MEMPALACE_AGENT_NAME``) because the diary is per-agent in the tool
-contract. ``read``'s ``--topic`` / ``--since`` filters are applied
-client-side — the tool has no such parameters.
+``mempalace_diary_read``; ``agents`` wraps ``mempalace_diary_agents``.
+``read``'s ``--topic`` / ``--since`` filters are applied client-side —
+the tool has no such parameters.
+
+Only ``write`` needs an agent name (#501). A read does not: the hook
+writes ``agent_name=&lt;harness>`` (``claude-code`` / ``codex`` /
+``gemini-cli``) and never consults ``identity.txt`` or
+``MEMPALACE_AGENT_NAME``, so requiring one on read meant entries
+plainly visible in ``list --wing W`` answered "No diary entries" to
+every name a reader could guess. ``agents`` exists to discover the
+names that do work.
 
 ### `cmd_kg`
 

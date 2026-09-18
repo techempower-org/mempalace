@@ -1,0 +1,50 @@
+seq: 149
+id: diary-read-without-identity
+date: 2026-09-17
+bucket: Fixed
+commit: HEAD
+area: CLI
+summary: "diary read/agents work without a configured identity; the hook keys entries on the harness name"
+body: |
+  `diary read` refused without `--agent`/`MEMPALACE_AGENT_NAME`, and
+  answered "No diary entries" to every name a reader could guess, while
+  `list --wing 2g` plainly showed diary-room drawers (AUTO-SAVE,
+  COMPACTION).
+
+  Measured against the production daemon by read-only MCP calls:
+  `diary_read(agent_name="claude-code", wing="2g")` returned the three
+  AUTO-SAVE entries; `team-lead` and `2g-c6` returned zero. The hook's
+  diary path never consults `identity.txt` or `MEMPALACE_AGENT_NAME` —
+  `clients/hook.py` passes `agent_name=harness`, its own `--harness`
+  flag (`claude-code` / `codex` / `gemini-cli`), which
+  `tool_diary_write` lowercases into the `agent` metadata key. The
+  writer is the harness; the reader was being asked for an identity that
+  plays no part in the write, so no configured identity would ever have
+  matched.
+
+  `agent_name` is now optional on `tool_diary_read`: omitted, it keys on
+  the drawers (room=diary, optionally one wing, newest first, `--limit`
+  and `--since` honoured) and every row carries its own `agent` and
+  `wing`, so a mixed listing can tell the reader which `--agent` to ask
+  for next. New `tool_diary_agents` / `mempalace diary agents [--wing W]`
+  enumerates the agent names present with a count and newest timestamp
+  each — because the name is the harness, enumeration is the only
+  reliable way to learn it. The L0 identity banner now says the identity
+  affects writes only and that reads need none, naming both commands.
+  Only `write` still requires an agent name.
+
+  Scans are bounded and the payload carries `truncated`/`scanned`, so a
+  capped count reports as a lower bound rather than a total; the cap
+  exists because the daemon runs at its 2 GB cgroup ceiling
+  (palace-daemon#256), making an unbounded metadata sweep a memory hazard
+  rather than merely slow.
+
+  A real-CLI probe refuted the first graceful-degradation guard: a daemon
+  predating this change rejects an omitted `agent_name` at schema
+  validation (`-32602: Missing required parameter`), which arrives as a
+  DaemonError rather than the tool-error envelope the guard watched, so it
+  would never have fired. Both shapes are handled, and the rewrite is
+  conditional on our having omitted the agent.
+
+  Tool surface 49 -> 50.
+fork_pr: 510

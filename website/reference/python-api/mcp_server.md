@@ -494,7 +494,7 @@ that diary reads are case-insensitive (see #1243). "Claude",
 ### `tool_diary_read`
 
 ```python
-def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = '')
+def tool_diary_read(agent_name: str = '', last_n: int = 10, wing: str = '')
 ```
 
 Read an agent's recent diary entries. Returns the last N entries
@@ -506,10 +506,47 @@ written to. Diary writes from hooks land in project-derived wings
 (``wing_&lt;project>``), so requiring a specific wing on read would
 silo those entries from agent-initiated reads.
 
+``agent_name`` is OPTIONAL (#501). Omit it (or pass a blank string) to
+read the diary room itself rather than one agent's slice — every
+agent's entries, newest first, each row tagged with its own ``agent``.
+This exists because the reader frequently cannot know the name to ask
+for: the Stop/PreCompact hook writes ``agent_name=&lt;harness>`` (hook.py's
+``--harness`` flag — ``claude-code`` / ``codex`` / ``gemini-cli``) and
+never consults ``identity.txt`` or ``MEMPALACE_AGENT_NAME``, so entries
+plainly visible in ``list --wing W`` answered "No diary entries yet."
+to every name a human would guess. Use ``tool_diary_agents`` to
+enumerate the names actually present.
+
 Note: ``agent_name`` is normalized to lowercase before filtering so
 that reads are case-insensitive (see #1243). Entries written under
 pre-fix mixed-case agent names will not match the lowercase filter;
 use ``mempalace repair`` to migrate legacy data if needed.
+
+### `tool_diary_agents`
+
+```python
+def tool_diary_agents(wing: str = '')
+```
+
+List the agent names that have diary entries, with a count each.
+
+The companion to an identity-less ``tool_diary_read`` (#501): the read
+path keys on drawers, but choosing an ``agent_name`` still requires
+knowing which ones exist. Hook-written entries are keyed on the
+*harness* name rather than any configured identity, so the only
+reliable way to learn the name is to ask what is present.
+
+Scoped to one wing when ``wing`` is given, otherwise palace-wide.
+Rows are sorted by entry count, descending, so the busiest writer is
+first. Each row carries ``latest`` (the newest ``filed_at`` seen for
+that agent) so a reader can tell an active writer from a dormant one.
+
+Counts are a LOWER BOUND when ``truncated`` is true — the scan is
+capped at ``_DIARY_SCAN_LIMIT`` because the daemon runs near a 2 GB
+cgroup ceiling (palace-daemon#256) and an unbounded metadata sweep is
+a memory hazard. Reporting a capped number as a total would be a
+report that disagrees with reality, so the flag is part of the
+contract rather than a detail.
 
 ### `tool_hook_settings`
 
