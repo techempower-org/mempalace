@@ -18,7 +18,7 @@ instances:
 
 **Asked:** is this entry resolved?
 
-**Instrument:** ``merge-base --is-ancestor HEAD HEAD``
+**Instrument:** `merge-base --is-ancestor HEAD HEAD`
 
 **Actually answered:** is the tip its own ancestor? (trivially yes)
 

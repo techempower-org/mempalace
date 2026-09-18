@@ -19,7 +19,7 @@ instances:
 
 **Asked:** does a doc claim PR #459 is OPEN?
 
-**Instrument:** ``check-docs.sh`'s PR-state step`
+**Instrument:** `check-docs.sh`'s PR-state step
 
 **Actually answered:** does the token "open" appear on a line containing the string `459`? — `/459` matched the **commit sha** `459efab`, and "open" came from "**open**-and-refuse sequence"
 

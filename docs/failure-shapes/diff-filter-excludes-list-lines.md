@@ -18,7 +18,7 @@ instances:
 
 **Asked:** how many lines changed?
 
-**Instrument:** `diff filter `^[+-][^+-]``
+**Instrument:** diff filter `^[+-][^+-]`
 
 **Actually answered:** …excluding every markdown list line (all start `+- `) → "0 changed"
 

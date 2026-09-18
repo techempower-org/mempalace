@@ -18,7 +18,7 @@ instances:
 
 **Asked:** is the phrase present?
 
-**Instrument:** ``grep -c 'CHANNEL LIST'``
+**Instrument:** `grep -c 'CHANNEL LIST'`
 
 **Actually answered:** is it present *on one line*? (hard-wrapped → 0 on correct text)
 

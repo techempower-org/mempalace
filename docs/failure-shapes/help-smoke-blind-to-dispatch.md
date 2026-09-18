@@ -18,7 +18,7 @@ instances:
 
 **Asked:** is the command wired?
 
-**Instrument:** ``--help` smoke`
+**Instrument:** `--help` smoke
 
 **Actually answered:** does the parser build? (exits before dispatch is read)
 

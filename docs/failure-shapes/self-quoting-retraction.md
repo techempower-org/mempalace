@@ -19,7 +19,7 @@ instances:
 
 **Asked:** does the fix remove the warning?
 
-**Instrument:** ``check-docs.sh` after the fix, on the tree that **documents** the fix`
+**Instrument:** `check-docs.sh` after the fix, on the tree that **documents** the fix
 
 **Actually answered:** does any line pair the number with a state word? — the changelog entry describing the defect re-supplied both, so the warning returned on a correct fix
 

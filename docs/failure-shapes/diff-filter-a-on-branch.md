@@ -18,7 +18,7 @@ instances:
 
 **Asked:** what added this file on main?
 
-**Instrument:** ``git log --diff-filter=A` on a branch`
+**Instrument:** `git log --diff-filter=A` on a branch
 
 **Actually answered:** what added it *here*? (squash orphans it)
 

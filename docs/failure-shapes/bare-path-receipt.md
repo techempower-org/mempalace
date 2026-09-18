@@ -19,7 +19,7 @@ instances:
 
 **Asked:** why did the palace search fail?
 
-**Instrument:** `the #497 hook's receipt under a bare `PATH``
+**Instrument:** the #497 hook's receipt under a bare `PATH`
 
 **Actually answered:** did the command exit non-zero? — it emits `✗ no answer in 2s (5ms)`, **two numbers in one receipt that contradict each other**
 

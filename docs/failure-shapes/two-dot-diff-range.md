@@ -18,7 +18,7 @@ instances:
 
 **Asked:** what did this branch do?
 
-**Instrument:** ``git diff main..branch``
+**Instrument:** `git diff main..branch`
 
 **Actually answered:** tree-vs-tree — the peer's additions render as this branch's deletions (5 false)
 

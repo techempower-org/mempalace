@@ -18,7 +18,7 @@ instances:
 
 **Asked:** are the links there?
 
-**Instrument:** ``r'…([a-z\\-]+)\\.md'` in a quoted heredoc`
+**Instrument:** `r'…([a-z\\-]+)\\.md'` in a quoted heredoc
 
 **Actually answered:** is there a literal backslash? (matched nothing; reported "no links" about a fix that had landed)
 

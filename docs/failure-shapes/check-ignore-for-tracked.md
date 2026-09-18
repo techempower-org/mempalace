@@ -18,7 +18,7 @@ instances:
 
 **Asked:** is this file tracked?
 
-**Instrument:** ``git check-ignore``
+**Instrument:** `git check-ignore`
 
 **Actually answered:** would it be ignored? (deleted 5 tracked files under an ignored dir)
 

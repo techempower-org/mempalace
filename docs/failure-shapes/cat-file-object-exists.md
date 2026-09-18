@@ -18,7 +18,7 @@ instances:
 
 **Asked:** is this sha on main?
 
-**Instrument:** ``git cat-file -e``
+**Instrument:** `git cat-file -e`
 
 **Actually answered:** does this object exist anywhere?
 

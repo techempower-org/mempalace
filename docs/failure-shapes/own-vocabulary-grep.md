@@ -19,7 +19,7 @@ instances:
 
 **Asked:** did the README row render?
 
-**Instrument:** ``grep -c 'failure-shape'``
+**Instrument:** `grep -c 'failure-shape'`
 
 **Actually answered:** does the **lowercase-hyphenated literal** appear? — the rendered text is "failure SHAPES" (different case, a space not a hyphen), so a present-and-correct row read as missing
 

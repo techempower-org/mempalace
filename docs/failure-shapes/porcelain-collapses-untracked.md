@@ -18,7 +18,7 @@ instances:
 
 **Asked:** which files are new?
 
-**Instrument:** ``git status --porcelain``
+**Instrument:** `git status --porcelain`
 
 **Actually answered:** which **top-level entries** are new? (it collapses untracked dirs: 2 shown, 15 under `-uall`)
 

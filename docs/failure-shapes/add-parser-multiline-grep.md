@@ -18,7 +18,7 @@ instances:
 
 **Asked:** is the command registered?
 
-**Instrument:** `a grep for `add_parser(``
+**Instrument:** a grep for `add_parser(`
 
 **Actually answered:** is it registered *on one line*? (multi-line call → false 0)
 

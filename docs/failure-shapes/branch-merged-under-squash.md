@@ -18,7 +18,7 @@ instances:
 
 **Asked:** is the branch merged?
 
-**Instrument:** ``git branch --merged``
+**Instrument:** `git branch --merged`
 
 **Actually answered:** is it an *ancestor*? (a squash merge is not)
 

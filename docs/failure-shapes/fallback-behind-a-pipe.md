@@ -18,7 +18,7 @@ instances:
 
 **Asked:** is the directory absent?
 
-**Instrument:** ``ls … | sed … || echo ABSENT``
+**Instrument:** `ls … | sed … || echo ABSENT`
 
 **Actually answered:** did the **last** command in the pipeline fail? (a fallback behind a pipe can never fire)
 
