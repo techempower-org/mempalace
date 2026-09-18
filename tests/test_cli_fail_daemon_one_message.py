@@ -178,8 +178,8 @@ class TestEveryRouteStillNamesItselfInJson:
 
 
 class TestTheMessageIsWrittenOnce:
-    def test_only_the_two_helpers_still_carry_the_literal(self):
-        """22 hand-written occurrences → 2.
+    def test_only_the_named_helpers_still_carry_the_literal(self):
+        """22 hand-written occurrences → 3.
 
         Three writers remain, each for a stated reason:
 
