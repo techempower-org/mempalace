@@ -42,6 +42,7 @@ BRANCHABLE_CODES = {
     "route_missing",
     "daemon_unavailable",
     "daemon_required",
+    "daemon_busy",
 }
 
 

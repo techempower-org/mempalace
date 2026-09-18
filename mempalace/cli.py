@@ -106,7 +106,7 @@ from .version import __version__
 #   error   the prose — what went wrong, in English
 #   code    a branchable key: daemon_unreachable | daemon_error |
 #           bad_request | auth_failed | read_only | route_missing |
-#           daemon_unavailable | daemon_required
+#           daemon_unavailable | daemon_required | daemon_busy
 #   source  "daemon" (or "cli" for a client-input error)
 #   status  the HTTP status, when an HTTP exchange produced the failure
 #
@@ -201,6 +201,25 @@ class _DoctorHandled(Exception):
 
 class DaemonError(RuntimeError):
     """Raised when a daemon HTTP call fails or returns a JSON-RPC error."""
+
+
+class DaemonBusyError(DaemonError):
+    """The daemon answered that it is BUSY — JSON-RPC ``-32003``, or a message
+    saying so — and the request was not run (#526, PR 4).
+
+    A subclass so every ``except DaemonError`` keeps working. Its own class
+    because the reader's next move differs: an outage means check the daemon,
+    a refusal means fix the request, busy means retry shortly — and because it
+    was measured being rendered as **0 hits, exit 1**: the REST transports
+    returned the 200 error body verbatim and ``.get("results") or []`` turned
+    a saturated daemon into an empty corpus. Rendered by ``_fail_daemon`` as
+    ``code: "daemon_busy"``, exit 2.
+    """
+
+    def __init__(self, message: str, *, detail: str = "", route: str | None = None):
+        super().__init__(message)
+        self.detail = detail or message
+        self.route = route
 
 
 class DaemonRequestError(DaemonError):
@@ -303,6 +322,41 @@ def _daemon_timeout() -> int:
         return _DAEMON_TIMEOUT_DEFAULT
 
 
+def _raise_if_daemon_error_object(body, route: str):
+    """Turn a 200 body that is an ERROR OBJECT into an exception; pass results through.
+
+    Keyed on the PAYLOAD, never on which transport produced it: a dict with an
+    ``error`` and neither ``results`` nor ``result`` is a daemon that answered
+    "I did not run this". Before this, ``_call_daemon_rest`` and
+    ``_post_daemon_rest`` returned such a body verbatim and the search helpers
+    read ``.get("results") or []`` — so a saturated daemon (JSON-RPC ``-32003``,
+    "daemon busy: 8 MCP tool call(s) in flight") rendered as **0 hits, exit 1**,
+    and #526's depth banner would then have said no curated document was in the
+    top N. A statement about the store that was really about the daemon.
+
+    ``-32003`` or a message containing "busy" → :class:`DaemonBusyError`.
+    Anything else → ``DaemonError`` with the ``"daemon error"`` prefix
+    ``_fail_daemon`` keys its reachable/unreachable line on. A body that carries
+    ``results`` beside an ``error`` is a result — the caller's own
+    ``"error" in data`` handling still runs on it.
+    """
+    if not isinstance(body, dict) or "error" not in body:
+        return body
+    if "results" in body or "result" in body:
+        return body
+    err = body["error"]
+    if isinstance(err, dict):
+        code = err.get("code")
+        message = str(err.get("message") or err.get("error") or err)
+    else:
+        code = None
+        message = str(err)
+    if code == -32003 or "busy" in message.lower():
+        raise DaemonBusyError(f"daemon busy on {route}: {message}", detail=message, route=route)
+    code_str = f" {code}" if code is not None else ""
+    raise DaemonError(f"daemon error{code_str} on {route}: {message}")
+
+
 def _call_daemon_tool(name: str, arguments: dict) -> dict:
     """JSON-RPC ``tools/call`` against the daemon's ``/mcp`` endpoint.
 
@@ -340,6 +394,7 @@ def _call_daemon_tool(name: str, arguments: dict) -> dict:
         raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
     if "error" in envelope:
         err = envelope["error"]
+        _raise_if_daemon_error_object(envelope, f"/mcp {name}")  # busy → DaemonBusyError
         raise DaemonError(f"daemon error {err.get('code')}: {err.get('message')}")
     content = (envelope.get("result") or {}).get("content") or []
     if not content:
@@ -437,7 +492,7 @@ def _call_daemon_rest(path: str, params: dict | None = None) -> dict:
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
         with urlopen_with_wake(req, timeout=10) as resp:
-            return json.loads(resp.read().decode("utf-8", errors="replace"))
+            body = json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
         if e.code == 404:
             # Route missing on an older daemon. Still None, deliberately: six
@@ -471,6 +526,7 @@ def _call_daemon_rest(path: str, params: dict | None = None) -> dict:
         raise DaemonError(f"daemon REST {path} failed ({e.code}): {e.reason}") from e
     except (urllib.error.URLError, ConnectionError, OSError) as e:
         raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
+    return _raise_if_daemon_error_object(body, path)
 
 
 class _DaemonHTTPResult(NamedTuple):
@@ -563,13 +619,14 @@ def _post_daemon_rest(path: str, body: dict) -> dict:
     )
     try:
         with urlopen_with_wake(req, timeout=_daemon_timeout()) as resp:
-            return json.loads(resp.read().decode("utf-8", errors="replace"))
+            answer = json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return None
         raise DaemonError(f"daemon REST {path} failed ({e.code}): {e.reason}") from e
     except (urllib.error.URLError, ConnectionError, OSError) as e:
         raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
+    return _raise_if_daemon_error_object(answer, path)
 
 
 def _patch_daemon_rest(path: str, body: dict) -> dict:
@@ -3025,7 +3082,9 @@ def _first_curated_rank(hits) -> int | None:
     return None
 
 
-def _deep_fetch_when_nothing_curated(hits: list, n_results: int, fetch, *, short: bool = False):
+def _deep_fetch_when_nothing_curated(
+    hits: list, n_results: int, fetch, *, short: bool = False, warnings=None
+):
     """``(hits_to_rank, curated_first_rank)`` — one deeper fetch when needed.
 
     Fires when the shallow result contains no curated document at all, or when
@@ -3034,7 +3093,11 @@ def _deep_fetch_when_nothing_curated(hits: list, n_results: int, fetch, *, short
     it is ONE extra call, only when a shallow list has shown it is needed. The
     deeper list is annotated and collapsed before return so the caller can rank
     it. A failed or unhelpful second call degrades to the shallow hits: the
-    extra fetch is an optimisation, never a dependency.
+    extra fetch is an optimisation, never a dependency — but never a SILENT one.
+    When the deeper call fails the daemon's own words are appended to
+    ``warnings`` (the list the search header prints), so ``curated_first_rank:
+    null`` is read as "the depth was not checked", not as "nothing curated
+    exists" (#526, PR 4).
     """
     if not short and not no_curated_source(hits):
         return hits, _first_curated_rank(hits)
@@ -3043,7 +3106,9 @@ def _deep_fetch_when_nothing_curated(hits: list, n_results: int, fetch, *, short
         return hits, _first_curated_rank(hits)
     try:
         deeper = fetch(depth)
-    except DaemonError:
+    except DaemonError as e:
+        if warnings is not None:
+            warnings.append(f"deeper fetch unavailable: {getattr(e, 'detail', None) or e}")
         return hits, _first_curated_rank(hits)
     if not isinstance(deeper, list) or len(deeper) <= len(hits):
         return hits, _first_curated_rank(hits)
@@ -3115,20 +3180,25 @@ def _daemon_search_fast(query: str, n_results: int, wing: str = None) -> dict | 
     # curated_first_rank and the truncation all see one list (#526 PR 3).
     shallow_n = len(hits)
     collapse_identical_text(hits)
+    warnings: list = []
     hits, curated_rank = _deep_fetch_when_nothing_curated(
         hits,
         n_results,
         lambda limit: _fast_hits(query, limit, wing),
         short=len(hits) < min(n_results, shallow_n),
+        warnings=warnings,
     )
     curated_hit = hits[curated_rank - 1] if curated_rank else None
     prefer_curated(hits)
-    return {
+    data = {
         "results": _truncate_reserving_curated(hits, n_results, curated_hit, curated_rank),
         "query": query,
         "source": "bm25-fast",
         "curated_first_rank": curated_rank,
     }
+    if warnings:
+        data["warnings"] = warnings
+    return data
 
 
 def _daemon_search_hybrid(
@@ -3155,9 +3225,16 @@ def _daemon_search_hybrid(
             wider = _post_daemon_rest("/search/hybrid", wider_body)
             return (wider or {}).get("results")
 
+        warnings: list = list(data.get("warnings") or [])
         hits, curated_rank = _deep_fetch_when_nothing_curated(
-            hits, n_results, _refetch, short=len(hits) < min(n_results, shallow_n)
+            hits,
+            n_results,
+            _refetch,
+            short=len(hits) < min(n_results, shallow_n),
+            warnings=warnings,
         )
+        if warnings:
+            data["warnings"] = warnings
         curated_hit = hits[curated_rank - 1] if curated_rank else None
         prefer_curated(hits)
         data["results"] = _truncate_reserving_curated(hits, n_results, curated_hit, curated_rank)
@@ -3349,8 +3426,14 @@ def _daemon_search_auto(args, n_results: int, tags):
         return data
     try:
         fb = _daemon_search_hybrid(args.query, n_results, wing=args.wing, room=args.room)
-    except DaemonError:
+    except DaemonError as e:
+        # The fallback is an optimisation; losing it must not lose the search.
+        # But a reader of bm25's short list must know hybrid was not consulted,
+        # in the daemon's own words (#526, PR 4).
         fb = None
+        data["warnings"] = list(data.get("warnings") or []) + [
+            f"hybrid fallback unavailable: {getattr(e, 'detail', None) or e}"
+        ]
     fb_hits = (fb.get("results") or []) if fb else []
     if fb_hits and len(fb_hits) > len(bm25_hits):
         fb["source"] = "hybrid (auto-fallback from bm25-fast)"
@@ -3398,11 +3481,11 @@ def cmd_search(args):
                 collapse_identical_text(results)
                 prefer_curated(results)
         except DaemonError as e:
-            if want_json:
-                _emit_json({"error": str(e), "source": "daemon", "query": args.query})
-            else:
-                print(f"\n  ERROR: {e}", file=sys.stderr)
-            sys.exit(2)
+            # One renderer (#536's contract): `code` is branchable, `error` is
+            # prose, and busy is its own key. Before this the search verb emitted
+            # `error`+`source` with no `code` — the one search-shaped site #536
+            # did not reach.
+            _fail_daemon(e, want_json, route=f"search/{search_mode}", query=args.query)
         if want_json:
             data.setdefault("query", args.query)
             _emit_json(data)
@@ -8945,6 +9028,29 @@ def _fail_daemon(
     # clauses — the "fixed one of two paths, read as success" shape.
     if isinstance(err, DaemonRequestError):
         _exit_daemon_request_error(err, want_json=want_json)
+
+    if isinstance(err, DaemonBusyError):
+        # A dict LITERAL on purpose: the contract test walks literals only, so
+        # this is how `daemon_busy` in the header is shown to be emitted (#526).
+        if want_json:
+            payload = {
+                "error": text,
+                "code": "daemon_busy",
+                "source": "daemon",
+                "detail": err.detail,
+            }
+            if err.route:
+                payload["route"] = err.route
+            if tool is not None:
+                payload["tool"] = tool
+            payload.update(extra)
+            _emit_json(payload)
+        else:
+            print(
+                f"palace daemon at {_daemon_url()} is busy — {err.detail}; retry shortly",
+                file=sys.stderr,
+            )
+        sys.exit(2)
 
     # Same predicate the tool helper used, kept verbatim so the JSON
     # `reachable` flag means exactly what it meant before the message moved.
