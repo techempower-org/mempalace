@@ -304,26 +304,27 @@ where the caller's string and the card's string have no lexical overlap by desig
 **Do not ship an index first.** The slice measures the retrieval gap on a labelled
 corpus — 2g's own method applied to the palace.
 
-**Shipped here:** `docs/failure-shapes/` — **30** records, one file per record, fields
+**Shipped here:** `docs/failure-shapes/` — **31** records, one file per record, fields
 per §1 in front matter so each mines as one drawer into wing `memorypalace`; and
 `scripts/failure_shape_recall.py`, which issues each trigger against
 `mempalace search --json` and reports **recall@3** and first-hit rank. Reads only — no
 index, no CLI verb, no ranking change.
 
-### Why 30 files and not 33
+### Why 31 files and not 33
 
 The corpus counts **33 on record**. Four of 2g-c6's eight are counted but never
 described — #503 gives their total, not their mechanisms — so they have no `asked`, no
 `answered`, and cannot be written without inventing them. §25.6 holds **two** distinct
 mechanisms that the section-unit count merged into one.
 
-    33 counted  −  4 counted-but-undescribed  +  1 (§25.6 split)  =  30 describable
+    33 counted  −  4 undescribed  +  1 (§25.6 split)  +  1 (added by review)  =  31
 
-⚠️ **The gap is stated, not reconciled.** The recall denominator is 30; the four
+⚠️ **The gap is stated, not reconciled.** The recall denominator is 31; the four
 undescribed instances are real, and are retrievable by nothing. That is a fact about
 the corpus rather than a rounding error. (`29 citable` in the derivation table counts
 PART 25 as 8 sections; this counts its 9 rows, because a file needs one `asked` /
-`answered` pair.)
+`answered` pair. §1's *33 on record / 29 citable* is the count **as of publication**;
+`docstring-asserts-an-unimplemented-control` was added afterwards, by review.)
 
 ### Partitions — scored separately, never pooled
 
@@ -336,7 +337,7 @@ already works and is not needed.
 |---|---|---|
 | **A · 2g-sourced** | 4 | this author, for records sourced from the 2g-c6 report — 2g-sourced but not 2g-written, so scored apart from B |
 | **B-blind · independent** | 6 | `oracle-issue-audit`, blind — written without reading `asked` / `answered` |
-| **B-TBD · independent** | 20 | a fresh lane that has never read this spec, given `ls docs/failure-shapes/` and the incident sources only |
+| **B-TBD · independent** | 21 | a fresh lane that has never read this spec, given `ls docs/failure-shapes/` and the incident sources only |
 
 The harness prints **no aggregate**. Pooling A with B would report an author's recall as
 a reader's, and B-blind is the only partition that currently answers the question the
@@ -356,6 +357,7 @@ pending and are never scored; a partial table is the expected state.
 | `cat-file-object-exists` | B-TBD · independent | TBD(fresh-lane) |
 | `check-ignore-for-tracked` | B-TBD · independent | TBD(fresh-lane) |
 | `count-measured-formatting` | A · 2g-sourced | the diff is huge so the change must be substantial |
+| `docstring-asserts-an-unimplemented-control` | B-TBD · independent | TBD(fresh-lane) |
 | `diff-filter-a-on-branch` | B-TBD · independent | TBD(fresh-lane) |
 | `diff-filter-excludes-list-lines` | B-TBD · independent | TBD(fresh-lane) |
 | `escaped-backslash-in-heredoc` | B-TBD · independent | TBD(fresh-lane) |

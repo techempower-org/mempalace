@@ -30,18 +30,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   table's columns were `outcome | reading` — interpretations with no queries
   behind them.
 
-  **30 records, not 33.** The corpus counts 33 instances, but four of 2g-c6's
+  **31 records, not 33.** The corpus counts 33 instances, but four of 2g-c6's
   eight are counted and never described: #503 gives their total, not their
   mechanisms, so they have no `asked`, no `answered`, and cannot be written
   without inventing them. §25.6 holds two distinct mechanisms that the
   section-unit count merged into one.
 
-      33 counted  −  4 counted-but-undescribed  +  1 (§25.6 split)  =  30
+      33 counted  −  4 undescribed  +  1 (§25.6 split)  +  1 (added by review)  =  31
 
   The gap is stated in the spec rather than reconciled. Those four are real and
   are retrievable by nothing, which is a fact about the corpus, not a rounding
   error — and a count-based acceptance check would have passed at 33 files with
   four invented ones.
+
+  The 31st arrived from review: `docstring-asserts-an-unimplemented-control`,
+  accepted by `oracle-issue-audit` with two instances — this PR's rename control
+  (a docstring asserting "a renamed file must fail" over code comparing slug sets,
+  which are invariant under rename) and PART 26.5 (`_fail_daemon`'s docstring
+  naming three commands that call it zero times, scoping #499 to 4 verbs when 16
+  were affected). Its instrument is prose adjacent to code, trusted because
+  proximity reads as authority. Partition B-TBD accordingly, not blind: Oracle
+  authored one of its instances.
 
   Each record carries `slug`, `shape`, `asked`, `instrument`, `answered`,
   `control_passed`, `direction`, `direction_basis`, `provenance` and
