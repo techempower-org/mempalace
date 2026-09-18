@@ -8,5 +8,11 @@
 # What belongs here: docs-tooling sweeps that only rewrite existing entries,
 # CI-only changes, and reverts. What does NOT: anything a reader of
 # FORK_CHANGELOG.md would want to know happened.
+#
+# THE SWEEP IS A RULE, NOT A COINCIDENCE. scripts/maintain-fork-changes.py
+# step 1 resolves `commit: HEAD` from an entry's `fork_pr:`, so the sweep
+# CONSUMES entries and produces none of its own. It also runs LAST in a wave,
+# after every other PR, which means every sweep PR that ever lands belongs
+# here — this is not a judgement call to re-make each time.
 
-495  docs-tooling sweep; resolves landed `commit: HEAD` values to squash shas across EXISTING entries and adds no change of its own (the producer this allowlist exists for — see scripts/maintain-fork-changes.py)
+495  docs-tooling sweep; scripts/maintain-fork-changes.py step 1 resolves `commit: HEAD` from an entry's `fork_pr:`, so the sweep CONSUMES entries across EXISTING files and adds no change of its own; resolves landed `commit: HEAD` values to squash shas across EXISTING entries and adds no change of its own (the producer this allowlist exists for — see scripts/maintain-fork-changes.py)

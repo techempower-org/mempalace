@@ -201,6 +201,42 @@ def test_an_allowlist_line_without_a_reason_is_refused(fixture_repo):
     assert "105" in r.stdout + r.stderr
 
 
+def test_an_unresolved_commit_head_entry_counts_as_present(fixture_repo):
+    """A `commit: HEAD` entry is PRESENT. This step checks existence only.
+
+    The sweep (scripts/maintain-fork-changes.py step 1) resolves `commit: HEAD`
+    from an entry's `fork_pr:` and deliberately runs LAST in a wave, after
+    every other PR. So this check will always land while unresolved
+    placeholders exist — it must never require a resolved sha. Whether a sha
+    is real and is an ancestor is the strict ancestry check's job, and
+    conflating the two would make a correct entry look missing for the whole
+    window between a PR merging and the sweep running.
+    """
+    repo, baseline = fixture_repo
+    _squash(repo, "feat: landed but not yet swept", 106)
+    _entry(repo, "unswept", 106)  # written with commit: HEAD
+    assert "commit: HEAD" in (repo / "docs" / "fork-changes" / "unswept.yaml").read_text(), (
+        "control: the fixture entry really is an unresolved placeholder"
+    )
+
+    r = _run(repo, baseline, "--strict")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "106" not in r.stderr
+
+
+def test_the_step_never_reads_the_commit_field():
+    """Structural guard for the rule above: no `commit:` logic in the script.
+
+    A future edit that starts requiring a resolved sha would break the sweep
+    ordering silently, so the coupling is asserted rather than trusted to a
+    comment.
+    """
+    src = SCRIPT.read_text()
+    body = "\n".join(line for line in src.splitlines() if not line.lstrip().startswith("#"))
+    assert "commit:" not in body, "the step must check existence only, never resolution"
+
+
 # ---------------------------------------------------------------------------
 # producer / consumer, on the REAL repo
 # ---------------------------------------------------------------------------
