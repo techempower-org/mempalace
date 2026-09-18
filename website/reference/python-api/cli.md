@@ -345,6 +345,16 @@ def cmd_pending(args)
 
 Dispatch the ``pending`` verb group.
 
+A verb group named without an action is a usage error, the same class
+as argparse's own "invalid choice" — so it exits 2, not 64. 64 means
+exactly one thing: the daemon answered and rejected a well-formed
+request. This guard never reaches the daemon.
+
+It goes through ``_fail_client`` rather than printing and exiting
+inline, because a hand-rolled ``print(..., file=sys.stderr)`` gives a
+``--json`` caller prose and no document at all — the wave's recurring
+shape, a report that disagrees with the promised contract.
+
 ### `cmd_replay`
 
 ```python
