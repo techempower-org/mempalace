@@ -18,6 +18,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-09-17]
+
+
+### Added
+
+
+- **design spec for indexing failure SHAPES, keyed on the action about to be taken** (`HEAD` — pending resolution)
+  A design spec only — `docs/specs/2026-09-17-failure-shape-index.md`, no code.
+
+  The 2g-c6 session reported eight errors in one night with a single shape: an
+  instrument returning a **true** answer to a **narrower** question than the one
+  asked, with a **passing** positive control. The memorypalace wave of 2026-09-11
+  recorded eleven more and Oracle PART 25 six, so the spec opens with a seed corpus
+  of 25 measured instances (21 individually citable — four of the 2g-c6 eight are
+  not described in #503, and the spec says so rather than rounding the number up).
+
+  The class matters because the corpus's standing remedy cannot see it. "Get a
+  positive control before trusting a zero" assumes a failing control is available;
+  here the control passes, because it proves the reader works rather than that the
+  reader was aimed at the question asked. Every instance in the seed corpus was
+  green at the moment it was wrong.
+
+  Two things shape the design. First, 2g's `docs/LAWS-INDEX.md` measured why a
+  correct corpus goes unread: n=11 arrival phrasings, 10 returning zero against
+  cards that exist, while the terms that do work are the ones you only know if you
+  already know the card. Retrieval succeeded exactly where it was not needed.
+  Second, #497's pre-mutation hook already builds a short **action sentence** at the
+  moment of a mutation and searches on it — so the query key exists and is produced
+  at the right time; what is missing is anything on the answering side that a verb
+  phrase can match. A failure-shape record would be the first record type in the
+  palace whose key is a trigger rather than a subject.
+
+  The spec deliberately does not propose shipping an index first. Its minimal slice
+  is a labelled corpus plus a recall harness that interleaves baseline and candidate
+  per query (#477 measured a card moving rank 13 → 1 on an unmodified tree inside
+  30 minutes, so two-halves measurement is invalid here). Four falsifiers are
+  written down, including the one most likely to produce a false success: triggers
+  authored by the same lane that wrote the cards would reproduce 2g's
+  "keyed-on terms work" regime and report it as a win, so the held-out phrasings
+  have to come from a lane that did not write the corpus.
+
+  Builds on what already exists rather than proposing new surfaces: `source_kind`
+  (#452) classifies a curated shape card for free, #477's curated-above-transcript
+  ordering already puts it on the right side of the ranking, and `why`, `tunnels`,
+  `rate` and the AGE graph each have a role with no new route.
+
+  *Files:* `docs/specs/2026-09-17-failure-shape-index.md`
+
+
 ## [2026-09-11]
 
 

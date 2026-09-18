@@ -290,6 +290,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| design spec for indexing failure SHAPES, keyed on the action about to be taken | — | `HEAD` — pending resolution |
 | purge / prune / mined share one open-and-refuse sequence and one exit-code contract | — | [`459efab`](https://github.com/techempower-org/mempalace/commit/459efab) |
 | Entry shas resolve from the commit that added the entry file; strict check rejects an unresolved placeholder on main | — | [`b9d168a`](https://github.com/techempower-org/mempalace/commit/b9d168a) |
 | KG write-through commits once per batch instead of once per drawer | — | [`41f1251`](https://github.com/techempower-org/mempalace/commit/41f1251) |
