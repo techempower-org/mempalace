@@ -8129,6 +8129,7 @@ def _tool_failed(data) -> bool:
 
 _DIARY_DEFAULT_LIMIT = 10
 _DIARY_MAX_LIMIT = 100  # tool_diary_read clamps last_n to 100
+_DIARY_ACTIONS = ("write", "read", "agents")
 
 
 def _resolve_agent_name(args):
@@ -8281,49 +8282,90 @@ def cmd_diary(args):
 
     agent = _resolve_agent_name(args)
 
-    if action == "agents":
-        payload = {}
-        if getattr(args, "wing", None):
-            payload["wing"] = args.wing
-        try:
-            data = _call_tool_routed(args, "mempalace_diary_agents", "tool_diary_agents", payload)
-        except DaemonError as e:
-            _fail_daemon(e, want_json)
-        if _tool_failed(data):
-            _fail_tool(data, want_json)
-        if want_json:
-            _emit_json(data)
-            return
+    # Structural dispatch (#501). This function previously had NO
+    # sub-dispatch: `write` returned and EVERYTHING else fell through to the
+    # read path, so a verb registered in argparse but unhandled here ran a
+    # read, printed a plausible listing and exited 0. Measured before the
+    # fix: action "bogus-verb" called mempalace_diary_read and exited 0. A
+    # table cannot fall through, and an unknown verb is a usage error.
+    handler = {
+        "agents": lambda: _diary_agents(args, want_json),
+        "write": lambda: _diary_write(args, agent, want_json),
+        "read": lambda: _diary_read(args, agent, want_json),
+    }.get(action)
+    if handler is None:
+        # Exit 2, not 64. A verb argparse rejects (`diary bogus`) and a verb it
+        # accepts but this table does not handle are the same mistake from the
+        # user's side, and argparse's own parse-error code is 2 — so 64 here
+        # would split one user error across two codes on the accident of
+        # whether the subparser happens to be registered. 64 is reserved for
+        # "the daemon rejected a well-formed request" (#514).
+        # `_fail_client` rather than a bare print: it is the established
+        # client-error path and it emits a JSON document under --json, which a
+        # hand-rolled stderr print does not.
+        _fail_client(
+            f"mempalace diary: choose an action ({', '.join(_DIARY_ACTIONS)}). "
+            "See `mempalace diary --help`.",
+            want_json,
+        )
+    handler()
+
+
+def _diary_agents(args, want_json: bool) -> None:
+    """``diary agents`` — which agent names have diary entries (#501)."""
+    payload = {}
+    if getattr(args, "wing", None):
+        payload["wing"] = args.wing
+    try:
+        data = _call_tool_routed(args, "mempalace_diary_agents", "tool_diary_agents", payload)
+    except DaemonError as e:
+        _fail_daemon(e, want_json)
+    if _tool_failed(data):
+        _fail_tool(data, want_json)
+    found = bool((data or {}).get("agents"))
+    if want_json:
+        _emit_json(data)
+    else:
         _print_diary_agents(data or {})
-        return
+    # Contract #44: 1 is "the operation ran and selected nothing". The message
+    # prints either way — the code is for the caller's script.
+    if not found:
+        sys.exit(1)
 
-    if action == "write":
-        if not agent:
-            _fail_client(
-                "diary write requires an agent name — pass --agent NAME or set "
-                "MEMPALACE_AGENT_NAME",
-                want_json,
-            )
-        payload = {"agent_name": agent, "entry": _read_diary_entry(args, want_json)}
-        if getattr(args, "topic", None):
-            payload["topic"] = args.topic
-        if getattr(args, "wing", None):
-            payload["wing"] = args.wing
-        if getattr(args, "session_id", None):
-            payload["session_id"] = args.session_id
-        try:
-            data = _call_tool_routed(args, "mempalace_diary_write", "tool_diary_write", payload)
-        except DaemonError as e:
-            _fail_daemon(e, want_json)
-        if _tool_failed(data):
-            _fail_tool(data, want_json)
-        if want_json:
-            _emit_json(data)
-            return
-        _print_diary_write(data or {})
-        return
 
-    # read
+def _diary_write(args, agent, want_json: bool) -> None:
+    """``diary write`` — the one action that genuinely needs an identity.
+
+    The agent guard lives HERE and nowhere else. Before #501 it ran ahead of
+    the action branch, so every verb demanded an identity that only this one
+    uses.
+    """
+    if not agent:
+        _fail_client(
+            "diary write requires an agent name — pass --agent NAME or set MEMPALACE_AGENT_NAME",
+            want_json,
+        )
+    payload = {"agent_name": agent, "entry": _read_diary_entry(args, want_json)}
+    if getattr(args, "topic", None):
+        payload["topic"] = args.topic
+    if getattr(args, "wing", None):
+        payload["wing"] = args.wing
+    if getattr(args, "session_id", None):
+        payload["session_id"] = args.session_id
+    try:
+        data = _call_tool_routed(args, "mempalace_diary_write", "tool_diary_write", payload)
+    except DaemonError as e:
+        _fail_daemon(e, want_json)
+    if _tool_failed(data):
+        _fail_tool(data, want_json)
+    if want_json:
+        _emit_json(data)
+        return
+    _print_diary_write(data or {})
+
+
+def _diary_read(args, agent, want_json: bool) -> None:
+    """``diary read`` — keyed on drawers; ``agent`` may be ``None`` (#501)."""
     topic = getattr(args, "topic", None)
     since = getattr(args, "since", None)
     limit = max(1, min(int(getattr(args, "limit", None) or _DIARY_DEFAULT_LIMIT), _DIARY_MAX_LIMIT))
@@ -8389,13 +8431,17 @@ def cmd_diary(args):
         if since:
             out["since_filter"] = since
         _emit_json(out)
-        return
-    _print_diary_entries(
-        data.get("agent") or agent,
-        entries,
-        total=data.get("total"),
-        wing=data.get("wing") or getattr(args, "wing", None),
-    )
+    else:
+        _print_diary_entries(
+            data.get("agent") or agent,
+            entries,
+            total=data.get("total"),
+            wing=data.get("wing") or getattr(args, "wing", None),
+        )
+    # Counted AFTER the client-side --topic/--since narrowing: a page that
+    # arrived full but filtered to nothing still selected nothing.
+    if not entries:
+        sys.exit(1)
 
 
 # ── mempalace kg (#357) ───────────────────────────────────────────────

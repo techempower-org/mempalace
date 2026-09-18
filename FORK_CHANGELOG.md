@@ -70,6 +70,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **diary read/agents work without a configured identity; the hook keys entries on the harness name** (`HEAD` — pending resolution)
+  `diary read` refused without `--agent`/`MEMPALACE_AGENT_NAME`, and
+  answered "No diary entries" to every name a reader could guess, while
+  `list --wing 2g` plainly showed diary-room drawers (AUTO-SAVE,
+  COMPACTION).
+
+  Measured against the production daemon by read-only MCP calls:
+  `diary_read(agent_name="claude-code", wing="2g")` returned the three
+  AUTO-SAVE entries; `team-lead` and `2g-c6` returned zero. The hook's
+  diary path never consults `identity.txt` or `MEMPALACE_AGENT_NAME` —
+  `clients/hook.py` passes `agent_name=harness`, its own `--harness`
+  flag (`claude-code` / `codex` / `gemini-cli`), which
+  `tool_diary_write` lowercases into the `agent` metadata key. The
+  writer is the harness; the reader was being asked for an identity that
+  plays no part in the write, so no configured identity would ever have
+  matched.
+
+  `agent_name` is now optional on `tool_diary_read`: omitted, it keys on
+  the drawers (room=diary, optionally one wing, newest first, `--limit`
+  and `--since` honoured) and every row carries its own `agent` and
+  `wing`, so a mixed listing can tell the reader which `--agent` to ask
+  for next. New `tool_diary_agents` / `mempalace diary agents [--wing W]`
+  enumerates the agent names present with a count and newest timestamp
+  each — because the name is the harness, enumeration is the only
+  reliable way to learn it. The L0 identity banner now says the identity
+  affects writes only and that reads need none, naming both commands.
+  Only `write` still requires an agent name.
+
+  Scans are bounded and the payload carries `truncated`/`scanned`, so a
+  capped count reports as a lower bound rather than a total; the cap
+  exists because the daemon runs at its 2 GB cgroup ceiling
+  (palace-daemon#256), making an unbounded metadata sweep a memory hazard
+  rather than merely slow.
+
+  A real-CLI probe refuted the first graceful-degradation guard: a daemon
+  predating this change rejects an omitted `agent_name` at schema
+  validation (`-32602: Missing required parameter`), which arrives as a
+  DaemonError rather than the tool-error envelope the guard watched, so it
+  would never have fired. Both shapes are handled, and the rewrite is
+  conditional on our having omitted the agent.
+
+  `cmd_diary` now dispatches on the action through a table. It previously
+  had no sub-dispatch at all — `write` returned and every other action fell
+  through to the read path, so a verb registered in argparse but unhandled
+  ran a read, printed a plausible listing and exited 0. Measured before the
+  fix: action "bogus-verb" called `mempalace_diary_read` and exited 0. An
+  unknown or missing action is now a usage error (exit 2, via `_fail_client`,
+  matching argparse's own parse-error code so the same user mistake does not
+  split across two codes on whether the subparser happens to be registered),
+  and the three action bodies are separate helpers so the dispatch is
+  structural rather than a fall-through chain.
+
+  Exit codes follow the #44 header contract: a read or `agents` that ran and
+  selected nothing exits 1 (the message still prints; the code is for the
+  caller's script), counted after the client-side `--topic`/`--since`
+  narrowing. `diary read` on an empty diary previously exited 0.
+
+  Tool surface 49 -> 50.
+
+
 - **`pending drain` plans before it posts; a daemon 4xx reads as a request error, not an outage** (`HEAD` — pending resolution)
   Two commands whose **report disagreed with what happened**. Neither
   crashed; both answered confidently and wrongly.

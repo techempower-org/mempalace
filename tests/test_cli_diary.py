@@ -91,6 +91,16 @@ _ENTRIES = [
 _READ_OK = {"agent": "morpheus", "entries": _ENTRIES, "total": 3, "showing": 3}
 
 
+# `_fail_daemon`'s exit code, in one place so the rebase that changes it is a
+# one-line edit rather than a hunt. Contract #44 wants 2 for "palace
+# unavailable"; the diary family (and cmd_why / cmd_tags / cmd_graph) have
+# always used 1. VERIFIED 2026-09-17: #509 does NOT move it — its two exit(64)s
+# are a daemon *4xx refusal* helper and cmd_pending's unknown-action guard, and
+# `_fail_daemon` is untouched by that PR. So this stays 1 until someone owns
+# that cross-cutting change.
+_DAEMON_FAIL_EXIT = 1
+
+
 def _daemon(payload):
     """Patch the daemon path on and return the MagicMock standing in for it."""
     fake = MagicMock(return_value=payload)
@@ -324,13 +334,17 @@ class TestDiaryRead:
         assert "landed the walk command" in out
         assert out.index("2026-08-20T12:00:00") < out.index("2026-08-18T08:00:00")
 
-    def test_empty_diary_message(self, capsys):
+    def test_empty_diary_message_and_exit_1(self, capsys):
+        """Was exit 0. Contract #44 reserves 1 for "ran, selected nothing",
+        and an empty read is exactly that."""
         from mempalace import cli
 
         strict, call, _ = _daemon({"agent": "morpheus", "entries": []})
         with strict, call:
-            cli.cmd_diary(_read_args())
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_read_args())
 
+        assert exc.value.code == 1
         assert "No diary entries" in capsys.readouterr().out
 
     def test_topic_filter_is_client_side_over_a_full_page(self, capsys):
@@ -627,7 +641,7 @@ class TestDiaryReadWithoutIdentity:
             with pytest.raises(SystemExit) as exc:
                 cli.cmd_diary(_read_args(agent="morpheus"))
 
-        assert exc.value.code == 1
+        assert exc.value.code == _DAEMON_FAIL_EXIT
         assert "predates" not in capsys.readouterr().err
 
     def test_old_daemon_envelope_rejection_is_explained(self, capsys):
@@ -681,13 +695,17 @@ class TestDiaryAgents:
 
         assert fake.call_args[0][1] == {}
 
-    def test_empty_result_says_so_and_exits_zero(self, capsys):
+    def test_empty_result_says_so_and_exits_1(self, capsys):
+        """Contract #44: the operation ran and selected nothing -> 1.
+        The message still prints first; the code is for scripts."""
         from mempalace import cli
 
         strict, call, _ = _daemon({"wing": None, "agents": [], "scanned": 0, "truncated": False})
         with strict, call:
-            cli.cmd_diary(_agents_args())
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_agents_args())
 
+        assert exc.value.code == 1
         assert "No diary" in capsys.readouterr().out
 
     def test_truncated_scan_is_reported_as_a_lower_bound(self, capsys):
@@ -743,7 +761,7 @@ class TestDiaryAgents:
             with pytest.raises(SystemExit) as exc:
                 cli.cmd_diary(_agents_args())
 
-        assert exc.value.code == 1
+        assert exc.value.code == _DAEMON_FAIL_EXIT
 
     def test_local_path_calls_the_tool_function(self, tmp_path):
         from mempalace import cli
@@ -794,3 +812,116 @@ class TestDiaryAgentsWiring:
 
         assert fake.call_args[0][0] == "mempalace_diary_agents"
         assert "claude-code" in capsys.readouterr().out
+
+
+class TestDiaryActionDispatch:
+    """`cmd_diary` had NO sub-dispatch: `write` returned and EVERYTHING else
+    fell through to read. A verb registered in argparse but unhandled would
+    therefore run a read, print a plausible listing and exit 0 — passing any
+    check that only looks for a crash. Measured before the fix: action
+    "bogus-verb" called mempalace_diary_read and exited 0.
+    """
+
+    def test_unknown_action_exits_2(self, capsys):
+        from mempalace import cli
+
+        strict, call, fake = _daemon(_READ_NO_AGENT_OK)
+        with strict, call:
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_read_args(diary_action="bogus-verb", agent=None))
+
+        assert exc.value.code == 2
+        assert "choose an action" in capsys.readouterr().err
+
+    def test_unknown_action_does_not_silently_read(self):
+        """The exit code alone is not the point — it must not have READ."""
+        from mempalace import cli
+
+        strict, call, fake = _daemon(_READ_NO_AGENT_OK)
+        with strict, call:
+            with pytest.raises(SystemExit):
+                cli.cmd_diary(_read_args(diary_action="bogus-verb", agent=None))
+
+        fake.assert_not_called()
+
+    def test_missing_action_exits_2(self, capsys):
+        from mempalace import cli
+
+        strict, call, fake = _daemon(_READ_NO_AGENT_OK)
+        with strict, call:
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_read_args(diary_action=None, agent=None))
+
+        assert exc.value.code == 2
+        fake.assert_not_called()
+
+    def test_unknown_action_under_json_emits_a_json_error(self, capsys):
+        """`_fail_client` rather than a bare print: a --json caller must get a
+        document, not prose on stderr."""
+        from mempalace import cli
+
+        strict, call, fake = _daemon(_READ_NO_AGENT_OK)
+        with strict, call:
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_read_args(diary_action="bogus-verb", agent=None, json=True))
+
+        assert exc.value.code == 2
+        assert json.loads(capsys.readouterr().out)["source"] == "cli"
+        fake.assert_not_called()
+
+    def test_each_known_action_still_dispatches(self):
+        """The guard must not have swallowed the real verbs."""
+        from mempalace import cli
+
+        for args, payload, tool in (
+            (_read_args(agent="morpheus"), _READ_OK, "mempalace_diary_read"),
+            (_agents_args(), _AGENTS_OK, "mempalace_diary_agents"),
+            (_write_args(), _WRITE_OK, "mempalace_diary_write"),
+        ):
+            strict, call, fake = _daemon(payload)
+            with strict, call:
+                cli.cmd_diary(args)
+            assert fake.call_args[0][0] == tool, args.diary_action
+
+
+class TestDiaryReadNoResultsExitCode:
+    def test_read_with_no_entries_exits_1(self, capsys):
+        from mempalace import cli
+
+        strict, call, _ = _daemon(dict(_READ_NO_AGENT_OK, entries=[], total=0, showing=0))
+        with strict, call, patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_read_args(agent=None, wing="2g"))
+
+        assert exc.value.code == 1
+        assert "No diary entries" in capsys.readouterr().out
+
+    def test_read_filtered_to_nothing_exits_1(self, capsys):
+        """`--since` that excludes everything is still "ran, selected nothing"."""
+        from mempalace import cli
+
+        strict, call, _ = _daemon(_READ_NO_AGENT_OK)
+        with strict, call, patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_read_args(agent=None, wing="2g", since="2099-01-01"))
+
+        assert exc.value.code == 1
+
+    def test_read_with_entries_exits_0(self):
+        """The mirror — a non-empty read must NOT exit non-zero."""
+        from mempalace import cli
+
+        strict, call, _ = _daemon(_READ_NO_AGENT_OK)
+        with strict, call, patch.dict("os.environ", {}, clear=True):
+            cli.cmd_diary(_read_args(agent=None, wing="2g"))
+
+    def test_json_empty_read_still_emits_then_exits_1(self, capsys):
+        from mempalace import cli
+
+        strict, call, _ = _daemon(dict(_READ_NO_AGENT_OK, entries=[], total=0, showing=0))
+        with strict, call, patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(SystemExit) as exc:
+                cli.cmd_diary(_read_args(agent=None, wing="2g", json=True))
+
+        assert exc.value.code == 1
+        assert json.loads(capsys.readouterr().out)["entries"] == []
