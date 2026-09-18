@@ -1572,7 +1572,13 @@ class TestCmdSearchProvenance:
         assert m.call_count == 1
 
     def test_widens_once_when_nothing_curated_matched(self):
-        """The broken case pays exactly one extra call, at 2x the limit."""
+        """The broken case pays exactly one extra call, at the depth FLOOR.
+
+        Contract changed by #526: this widened to ``min(n*2, 40)``, which is 6 at
+        ``--limit 3`` — and in a wing with ~941K transcript drawers the curated
+        layer begins at rank 14-27, so the widen fired and landed short. The
+        depth is now an absolute floor, ``max(limit, 30)``.
+        """
         from mempalace import cli
 
         narrow = self._fast_payload_n([self._t(i, UNRELATED) for i in range(2)])
@@ -1585,7 +1591,7 @@ class TestCmdSearchProvenance:
             cli._daemon_search_fast("q", 2, wing="2g")
         assert m.call_count == 2
         assert m.call_args_list[0].args[1]["limit"] == 2
-        assert m.call_args_list[1].args[1]["limit"] == 4
+        assert m.call_args_list[1].args[1]["limit"] == 30
 
     def test_widen_surfaces_a_curated_near_duplicate_inside_the_limit(self):
         """The point of widening: the card sits outside the first window, is a
@@ -1639,8 +1645,10 @@ class TestCmdSearchProvenance:
             data = cli._daemon_search_fast("q", 2, wing="2g")
         assert len(data["results"]) == 2
 
-    def test_no_widen_when_the_limit_already_exceeds_the_cap(self):
-        """At a large limit the widened window would not be wider — skip it."""
+    def test_no_second_call_when_the_shallow_result_is_already_that_deep(self):
+        """Replaces the old ``_WIDEN_CAP`` test, which #526 removed along with the
+        cap. The invariant that survives: never pay a second fetch that cannot
+        return anything new — on wing 2g that call measured 19-22 s (#533)."""
         from mempalace import cli
 
         payload = self._fast_payload_n([self._t(i, UNRELATED) for i in range(3)])
@@ -1649,8 +1657,9 @@ class TestCmdSearchProvenance:
             patch.dict("os.environ", env, clear=True),
             patch("mempalace.cli._call_daemon_rest", return_value=payload) as m,
         ):
-            cli._daemon_search_fast("q", 40, wing="2g")
-        assert m.call_count == 1
+            cli._daemon_search_fast("q", 3, wing="2g")
+        assert m.call_count == 2, "3 hits at limit 3 is not yet at the depth floor"
+        assert m.call_args_list[1].args[1]["limit"] == 30
 
     def test_compact_tag_marks_diary_hits(self):
         """The table renderer gets a diary note; compact must not be the one
