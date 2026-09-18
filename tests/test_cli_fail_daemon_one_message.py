@@ -1,4 +1,4 @@
-"""One daemon-unreachable message, and no call site reports less than it did (#476).
+"""One daemon-unreachable message, and no call site reports less than it did (#523).
 
 The string ``palace daemon unreachable at`` was written out by hand at 22 places.
 They were never 22 copies of one block — there were four distinct messages:
@@ -128,7 +128,7 @@ class TestEveryRouteStillNamesItselfInJson:
             patch("mempalace.cli._call_daemon_rest", return_value=None),
         ):
             code, payload = _run_json(getattr(cli, fn_name), ns)
-        assert code == 1
+        assert code == 2
         assert payload["error"] == expected, (
             "the route name is the only identifying information a 404 leaves; "
             "losing it makes the JSON say less than it did"
@@ -156,7 +156,7 @@ class TestEveryRouteStillNamesItselfInJson:
             patch("mempalace.cli._patch_daemon_rest", return_value=None),
         ):
             code, payload = _run_json(cli.cmd_move, ns)
-        assert code == 1
+        assert code == 2
         assert payload["error"] == "daemon PATCH /memory unavailable"
 
     def test_gather_bulk_move_matches_names_its_route(self):
@@ -170,7 +170,7 @@ class TestEveryRouteStillNamesItselfInJson:
             out = io.StringIO()
             with contextlib.redirect_stdout(out), pytest.raises(SystemExit) as exc:
                 cli._gather_bulk_move_matches("2g", None, True)
-        assert exc.value.code == 1
+        assert exc.value.code == 2
         assert json.loads(out.getvalue())["error"] == "daemon /list unavailable"
 
 
@@ -179,31 +179,37 @@ class TestEveryRouteStillNamesItselfInJson:
 
 class TestTheMessageIsWrittenOnce:
     def test_only_the_named_helpers_still_carry_the_literal(self):
-        """22 hand-written occurrences → 3.
+        """22 hand-written occurrences → 2.
 
         Three writers remain, each for a stated reason:
 
         * `_fail_daemon` — the one that stays.
-        * `_daemon_tool_or_fail` — keeps its own deliberately: it exits 1 for a
-          transport failure and 2 for a JSON-RPC error from a daemon that
-          answered, a distinction `_fail_daemon` does not yet make. Folding it in
-          would have destroyed that; it converges in the exit-code PR, in the
-          other direction.
-        * `_fail_daemon_unavailable` (#512) — exists only because `_fail_daemon`
-          exits 1 while /window and /source are specified at 2. Its own docstring
-          says "if `_fail_daemon` ever does move to 2, delete this helper", which
-          is the exit-code PR's job, not this one's.
+        * `_daemon_tool_or_fail` — its MESSAGE moved here; the wrapper REMAINS,
+          with its six callers and its `DaemonRequestError` → 64 branch. It kept
+          a copy for as long as it exited `1 if unreachable else 2` while the
+          shared helper exited 1 for both. The two converge now — transport
+          1 → 2, JSON-RPC unchanged at 2 — and the distinction survives in the
+          prose and the `reachable` flag.
+        * `_fail_daemon_unavailable` (#512) — kept, and NOT for the reason its
+          own docstring gave. That said to delete it "if `_fail_daemon` ever
+          does move to 2"; #523 moved it and the cited test still passes,
+          because it asserts only the exit code. The JSON shapes differ:
+          window/source use `{"error": <key>, "message": <prose>}` across the
+          family so a client can branch on `error`, while `_fail_daemon` puts
+          the prose *in* `error`. Folding would change two verbs' machine
+          output and pass every test. Pinned now by
+          `test_transport_failure_json_keeps_the_window_family_shape`.
 
-        So 22 hand-written occurrences become 3 named ones, and the count is
+        So 22 hand-written occurrences become 2 named ones, and the count is
         asserted rather than grepped so a new copy has to argue for itself here.
         """
         import inspect
 
         src = inspect.getsource(cli)
-        assert src.count("palace daemon unreachable at") == 3
+        assert src.count("palace daemon unreachable at") == 2
 
     def test_cmd_wings_no_longer_has_its_own_shape(self):
-        """The one declared prose change (#476).
+        """The one declared prose change (#523).
 
         Before: a leading blank line, "  ERROR: palace daemon unreachable at <url>
         (<e>)", and no diagnostics clause. After: the same line as the other 19.
@@ -220,6 +226,6 @@ class TestTheMessageIsWrittenOnce:
             patch("mempalace.cli._daemon_url", return_value="http://d:8085"),
         ):
             code, err = _run_prose(cli.cmd_wings, ns)
-        assert code == 1
+        assert code == 2
         assert "ERROR:" not in err, "the ERROR: prefix was the drift"
         assert "see mempalace status for diagnostics" in err

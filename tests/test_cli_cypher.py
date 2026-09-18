@@ -255,7 +255,7 @@ class TestCypherEmpty:
 
 
 class TestCypherDaemonDown:
-    def test_daemon_error_exits_1_with_stderr(self, capsys):
+    def test_daemon_error_exits_2_with_stderr(self, capsys):
         """Network failure → DaemonError → human-readable stderr + exit 1."""
         from mempalace import cli
 
@@ -266,7 +266,7 @@ class TestCypherDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_cypher(_make_args())
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         err = capsys.readouterr().err
         assert "palace daemon unreachable" in err
         assert "connection refused" in err
@@ -283,7 +283,7 @@ class TestCypherDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_cypher(_make_args(format="json"))
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert "error" in payload
@@ -316,7 +316,7 @@ class TestCypherDaemonDown:
         assert payload["status"] == 403
         assert "read-only" in payload["error"]
 
-    def test_404_exits_1_endpoint_missing(self, capsys):
+    def test_404_exits_2_endpoint_missing(self, capsys):
         """Older daemon without /cypher → 404 → same shape as unreachable."""
         from mempalace import cli
 
@@ -324,12 +324,12 @@ class TestCypherDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_cypher(_make_args())
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         err = capsys.readouterr().err
         assert "404" in err
         assert "unreachable" in err
 
-    def test_401_auth_failure_exits_1(self):
+    def test_401_auth_failure_exits_2(self):
         """Missing/bad x-api-key → 401 → exit 1."""
         from mempalace import cli
 
@@ -337,9 +337,9 @@ class TestCypherDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_cypher(_make_args())
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
 
-    def test_503_non_postgres_exits_1_with_status(self, capsys):
+    def test_503_non_postgres_exits_2_with_status(self, capsys):
         """Daemon on non-postgres backend → 503; same failure shape."""
         from mempalace import cli
 
@@ -347,7 +347,7 @@ class TestCypherDaemonDown:
             with pytest.raises(SystemExit) as ex:
                 cli.cmd_cypher(_make_args(format="json"))
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert payload["status"] == 503

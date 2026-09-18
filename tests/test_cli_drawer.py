@@ -788,7 +788,7 @@ class TestDrawerRouting:
 class TestDrawerFailureModes:
     """Daemon unreachable → exit 1, matching cmd_list / cmd_move / cmd_tunnels."""
 
-    def test_daemon_unreachable_exits_1(self, capsys):
+    def test_daemon_unreachable_exits_2(self, capsys):
         import urllib.error
 
         from mempalace import cli
@@ -801,7 +801,7 @@ class TestDrawerFailureModes:
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_drawer(_args("get"))
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         assert "palace daemon unreachable" in capsys.readouterr().err
 
     def test_daemon_unreachable_json_shape(self, capsys):
@@ -817,7 +817,7 @@ class TestDrawerFailureModes:
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_drawer(_args("get", format="json"))
 
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         payload = json.loads(capsys.readouterr().out)
         assert payload["source"] == "daemon"
         assert "error" in payload

@@ -240,7 +240,7 @@ class TestTunnelsFailureModes:
         err = capsys.readouterr().err
         assert "PALACE_DAEMON_URL" in err
 
-    def test_unreachable_exits_1(self, capsys):
+    def test_unreachable_exits_2(self, capsys):
         from mempalace import cli
 
         def boom(req, timeout=None):
@@ -250,7 +250,7 @@ class TestTunnelsFailureModes:
             with patch("urllib.request.urlopen", side_effect=boom):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_tunnels(_args())
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         err = capsys.readouterr().err
         assert "daemon" in err.lower()
 

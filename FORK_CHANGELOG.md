@@ -131,6 +131,86 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
+- **a daemon outage exits 2 (palace unavailable), not 1 (no results)** (`HEAD` — pending resolution)
+  ⚠️ **Issue-number correction.** This work and its predecessor were labelled
+  `#476` from a plan note; `#476` is actually "maintain-fork-changes.py:
+  positional #NN resolver writes wrong shas" and is unrelated. The real issue
+  is **#523**. The predecessor's squash subject says `#476` and cannot be
+  rewritten — its entry and the changelog were never affected.
+
+  `_fail_daemon` exited **1** — "no results" — for every daemon outage. It
+  still does on main; this is the first change that moves it. A command
+  reporting "no results" when the daemon is down sends the reader looking
+  for missing data instead of a missing daemon: the defect family this
+  wave exists to remove, sitting in the exit status after being fixed in
+  the prose.
+
+  The contract, restated in the header and now pinned by tests rather than
+  only asserted in a comment:
+
+      0   success
+      1   no results — the operation RAN and selected nothing
+      2   the operation could not run: palace unavailable, or a usage error
+      64  the daemon answered and REJECTED a well-formed request (a 4xx)
+
+  **1 vs 2 is the load-bearing line.** 1 means the palace was reachable and
+  had nothing to say; 2 means the question never got asked.
+
+  `_daemon_tool_or_fail`'s **message** is consolidated into `_fail_daemon`;
+  **the wrapper remains**, with its six callers and its
+  `DaemonRequestError` → 64 branch. It kept a copy for as long as it exited
+  `1 if unreachable else 2` while the shared helper exited 1 for both —
+  merging then would have forced one exit code onto two situations in six
+  commands, as a "cleanup". The two now **converge**: transport moves
+  1 → 2, JSON-RPC unchanged at 2, the distinction surviving in the prose
+  and the `reachable` JSON flag.
+
+  ⭐ `_fail_daemon_unavailable` is **not** folded, and the reason is the
+  useful part. Its docstring said to delete it "if `_fail_daemon` ever does
+  move to 2"; this moves it, and the cited test still passes — because it
+  asserts only the exit code. The JSON shapes differ: `window`/`source` use
+  `{"error": <key>, "message": <prose>}` across the family so a client can
+  branch on `error`, while `_fail_daemon` puts the prose *in* `error`.
+  Folding would have changed two verbs' machine output and every test would
+  have stayed green, because nothing asserted the shape. **A retirement
+  condition written in exit-code terms is satisfiable without being
+  sufficient.** Its docstring now records the real condition — agree on a
+  JSON shape — and a new test pins the family shape so the next attempt
+  fails loudly. Convergence is tracked separately.
+
+  `cmd_pending`'s unknown-action guard moves 64 → 2 and routes through
+  `_fail_client`, so 64 means exactly one thing and a `--json` caller gets
+  a document instead of prose on stderr.
+
+  The header claimed 64 was "argparse default for parse errors". argparse
+  exits **2**, and nothing subclasses `ArgumentParser` or overrides
+  `error()`, so that row described a behaviour the CLI never had. It
+  survived for years because the contract lived in prose nothing executed,
+  so two tests now make it falsifiable: one asserts the header says what
+  the code does, the other asserts the *absence* of an `ArgumentParser`
+  subclass.
+
+  ⚠️ The test worklist was derived by **execution**, not grep — flip the
+  helper, run the suite, classify every failure — because two careful greps
+  were 3-4× short. A test named `test_daemon_unreachable_exits_1` asserts
+  only the exit code and never quotes the message, so no text search finds
+  it. The counts, by unit, because they are not the same thing: **19 files**
+  pin this behaviour (the invariant), **49 tests** fail when the helper is
+  flipped back, and the change moved 43 assertions plus one constant
+  covering two more. 42 was the derivation-time figure, invalidated twice
+  within the hour. **A derived list is a snapshot too**, and a number that
+  migrates between units stops being a measurement.
+
+  All 45 are outage expectations. Zero no-results assertions appear — not
+  "none found" but *cannot* appear: `_fail_daemon` is only reachable from
+  daemon-failure branches. The ~31 files asserting 1 for genuine no-results
+  are untouched and still pass; flipping those would re-create the wave's
+  defect inside its own fix.
+
+  *Tests:* 45 updated across 19 files (execution-derived), 32 renamed off `_exits_1`; 8 new in TestTheContractItself incl. argparse-exits-2, the ArgumentParser-subclass absence probe and the header-vs-code probe; 1 new window/source JSON-shape guard
+  *Files:* `mempalace/cli.py`
+
+
 - **the daemon-unreachable message is written once, not hand-copied at 22 places** (`HEAD` — pending resolution)
   `palace daemon unreachable at` was written out by hand at **22 places**.
   Twenty now route through `_fail_daemon`; two remain on purpose.

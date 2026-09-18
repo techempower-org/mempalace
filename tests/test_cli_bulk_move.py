@@ -345,7 +345,7 @@ class TestBulkMovePagination:
 
 
 class TestBulkMoveListFailure:
-    def test_daemon_error_during_list_exits_1(self, capsys):
+    def test_daemon_error_during_list_exits_2(self, capsys):
         from mempalace import cli
 
         def boom(path, params=None):
@@ -355,17 +355,17 @@ class TestBulkMoveListFailure:
             with patch("mempalace.cli._call_daemon_rest", side_effect=boom):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_bulk_move(_args(wing="old", to_wing="new"))
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         assert "daemon" in capsys.readouterr().err.lower()
 
-    def test_list_none_exits_1(self, capsys):
+    def test_list_none_exits_2(self, capsys):
         from mempalace import cli
 
         with patch.dict("os.environ", _env(), clear=True):
             with patch("mempalace.cli._call_daemon_rest", return_value=None):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_bulk_move(_args(wing="old", to_wing="new"))
-        assert ex.value.code == 1
+        assert ex.value.code == 2
 
     def test_inner_error_envelope_during_list_exits_2(self, capsys):
         from mempalace import cli

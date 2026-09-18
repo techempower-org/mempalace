@@ -374,7 +374,7 @@ class TestWhyFailureModes:
         err = capsys.readouterr().err
         assert "PALACE_DAEMON_URL" in err
 
-    def test_get_drawer_unreachable_exits_1(self, capsys):
+    def test_get_drawer_unreachable_exits_2(self, capsys):
         from mempalace import cli
 
         def boom(req, timeout=None):
@@ -384,7 +384,7 @@ class TestWhyFailureModes:
             with patch("urllib.request.urlopen", side_effect=boom):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_why(_args())
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         err = capsys.readouterr().err
         assert "daemon" in err.lower()
 
@@ -402,7 +402,7 @@ class TestWhyFailureModes:
         err = capsys.readouterr().err
         assert "Drawer not found" in err
 
-    def test_search_unreachable_exits_1(self, capsys):
+    def test_search_unreachable_exits_2(self, capsys):
         """If /mcp succeeds for get_drawer/cypher but blows up on
         mempalace_search, the report can't complete — exit 1."""
         from mempalace import cli
@@ -427,7 +427,7 @@ class TestWhyFailureModes:
             with patch("urllib.request.urlopen", side_effect=fake_urlopen):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_why(_args())
-        assert ex.value.code == 1
+        assert ex.value.code == 2
         assert call_count["n"] >= 1
 
 

@@ -146,7 +146,7 @@ class TestRate:
         assert exc.value.code == 2
         assert "Drawer not found" in capsys.readouterr().err
 
-    def test_daemon_unreachable_exits_1(self, capsys):
+    def test_daemon_unreachable_exits_2(self, capsys):
         from mempalace import cli
 
         with (
@@ -156,7 +156,7 @@ class TestRate:
             with pytest.raises(SystemExit) as exc:
                 cli.cmd_rate(_args())
 
-        assert exc.value.code == 1
+        assert exc.value.code == 2
         assert "daemon unreachable" in capsys.readouterr().err
 
     def test_local_path_calls_tool_function(self):

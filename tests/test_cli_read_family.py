@@ -180,7 +180,7 @@ class TestWingsDaemonPath:
         assert "rooms" not in payload
         assert "total_drawers" not in payload
 
-    def test_unreachable_daemon_exits_1(self, capsys):
+    def test_unreachable_daemon_exits_2(self, capsys):
         from mempalace import cli
 
         with patch.dict("os.environ", _env(), clear=True):
@@ -190,7 +190,7 @@ class TestWingsDaemonPath:
             ):
                 with pytest.raises(SystemExit) as exc:
                     cli.cmd_wings(_args(json=True))
-        assert exc.value.code == 1
+        assert exc.value.code == 2
         assert json.loads(capsys.readouterr().out)["source"] == "daemon"
 
 

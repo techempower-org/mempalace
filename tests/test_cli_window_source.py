@@ -250,6 +250,36 @@ def test_a_transport_failure_exits_2(daemon):
     assert _run(cli.cmd_window, _args()) == 2
 
 
+def test_transport_failure_json_keeps_the_window_family_shape(daemon, capsys):
+    """The shape, not just the code — because the code alone invites a bad fold.
+
+    `_fail_daemon_unavailable` exists only because `_fail_daemon` exited 1
+    while these verbs are specified at 2. Its docstring said to delete it
+    "if `_fail_daemon` ever does move to 2", and #523 moved it — and
+    `test_a_transport_failure_exits_2` still passes, because it asserts only
+    the exit code.
+
+    ⭐ The JSON is where they differ, and nothing was watching it:
+
+        window/source family   {"error": <key>, "message": <prose>, …}
+        _fail_daemon           {"error": <prose>, "source": "daemon"}
+
+    A client branching on `error` gets a stable key from one and an
+    unstructured sentence from the other. So this pins the family shape: a
+    fold onto `_fail_daemon` now fails loudly here instead of passing green
+    and quietly changing two verbs' machine output.
+    """
+    import json
+
+    daemon(0, raise_transport=True)
+    assert _run(cli.cmd_window, _args(json=True)) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "daemon_unavailable", (
+        "`error` must stay a branchable KEY for this family, not prose"
+    )
+    assert "message" in payload, "the prose belongs in `message`"
+
+
 def test_without_a_daemon_url_it_refuses_with_2(monkeypatch, capsys):
     """Daemon-strict: these verbs have no local path at all."""
     monkeypatch.delenv("PALACE_DAEMON_URL", raising=False)

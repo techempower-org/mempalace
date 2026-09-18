@@ -186,7 +186,7 @@ class TestWalkOutput:
         assert exc.value.code == 2
         assert "requires MEMPALACE_BACKEND=postgres" in capsys.readouterr().err
 
-    def test_daemon_unreachable_exits_1(self, capsys):
+    def test_daemon_unreachable_exits_2(self, capsys):
         from mempalace import cli
 
         with (
@@ -196,7 +196,7 @@ class TestWalkOutput:
             with pytest.raises(SystemExit) as exc:
                 cli.cmd_walk(_args(wing="memorypalace"))
 
-        assert exc.value.code == 1
+        assert exc.value.code == 2
         assert "daemon unreachable" in capsys.readouterr().err
 
     def test_local_path_calls_tool_function(self):
