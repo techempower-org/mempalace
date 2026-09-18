@@ -259,6 +259,18 @@ def test_every_allowlisted_pr_is_genuinely_missing_an_entry():
             entries.add(m.group(1))
 
     baseline = re.search(r"^BASELINE=([0-9a-f]+)", SCRIPT.read_text(), re.M).group(1)
+    reachable = subprocess.run(
+        ["git", "cat-file", "-e", f"{baseline}^{{commit}}"], cwd=REPO, capture_output=True
+    )
+    if reachable.returncode != 0:
+        # CI checks the repo out shallow (fetch-depth 1), so the baseline commit does
+        # not exist there and `git log baseline..HEAD` exits 128. This test is the
+        # producer/consumer check against the REAL repo; the fixture-repo tests above
+        # cover the logic. Skip loudly rather than fail on an instrument that cannot
+        # see — a shallow clone is not a missing entry.
+        pytest.skip(
+            f"baseline {baseline} not present (shallow clone); real-repo check needs full history"
+        )
     log = subprocess.run(
         ["git", "log", "--oneline", f"{baseline}..HEAD"],
         cwd=REPO,
