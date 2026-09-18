@@ -1,0 +1,41 @@
+seq: 162
+id: search-banner-states-depth
+date: '2026-09-18'
+bucket: Fixed
+commit: HEAD
+area: Search
+summary: the search banner states the DEPTH, never the store — three cases keyed on curated_first_rank
+body: |
+  "no curated document matched" was a claim about the STORE. What the header
+  measured was the RETURNED SET, and in a wing whose curated layer begins at
+  rank 14-27 the sentence was true of the result and false of the corpus.
+  Two sessions read it as "this project has nothing curated on that" (#526).
+
+  Three cases now, on one result object, keyed on the ``curated_first_rank``
+  field #534 produces:
+
+  * curated ranked inside the limit → nothing said about curation;
+  * curated promoted from rank K → "1 curated hit promoted from rank K; the
+    curated layer in this wing begins there — widen the pool with --limit 30";
+  * none within the deep fetch → "no curated document in the top N", with NO
+    rank clause because no K exists.
+
+  The advice names the mechanism: the requested limit sizes the hybrid fusion
+  candidate pool (#534), so ``--limit 30`` is "widen the pool", not "scroll
+  further down". The banner never fires when there are no hits, so an error
+  path cannot print it.
+
+  Producer/consumer test written before the producer shipped:
+  ``tests/test_search_banner_contract.py`` drives one result object from
+  ``curated_first_rank`` to the rendered banner across all three cases and
+  asserts the printed K equals the K in ``--json`` (parametrised at 14 and
+  27). A banner whose number disagrees with the field is worse than none.
+
+  The all-transcript / transcript-plus-diary split is dropped from the header;
+  the per-hit ⟨transcript⟩ / ⟨diary⟩ tags carry it. ``all_transcript()``
+  therefore has no production caller — kept as a tested predicate with its
+  docstring corrected. Three #477 banner tests updated to the new wording, one
+  now asserting the phrase "no curated document matched" is ABSENT.
+tests: "8 new (test_search_banner_contract: three cases, K-equality at 14 and 27, never-claims-empty, json null, quiet); 3 #477 banner tests updated"
+fork_pr: 542
+files: [mempalace/cli.py, mempalace/provenance.py]
