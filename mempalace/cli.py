@@ -668,10 +668,16 @@ def _post_daemon_mine_cli(
     api_key = os.environ.get("PALACE_API_KEY", "").strip()
     if api_key:
         headers["x-api-key"] = api_key
+    # Compact separators, so the bytes match what ``palace-doc-sync.sh``
+    # puts on the same wire (``printf '{"dir":"%s","wing":"%s",…}'``). The
+    # daemon parses either; the point is ONE wire format that a byte
+    # comparison can pin (#529), rather than two that are "the same" only
+    # after each reader normalises them.
     req = urllib.request.Request(
         f"{_daemon_url()}/mine",
         data=json.dumps(
-            {"dir": directory, "wing": wing, "mode": mode, "background": background}
+            {"dir": directory, "wing": wing, "mode": mode, "background": background},
+            separators=(",", ":"),
         ).encode("utf-8"),
         headers=headers,
         method="POST",
@@ -5487,9 +5493,13 @@ def cmd_migrate_wings(args):
 # daemon request regardless, but the enumeration stats every file, and a
 # repo with a thousand docs should not turn a health check into a disk walk.
 _CURATED_DOCS_MAX = 50
+#: How many file names `reconcile-docs --dry-run` lists before summarising.
+_RECONCILE_SAMPLE = 10
 
 
-def _curated_doc_paths(project_root: str) -> tuple:
+def _curated_doc_paths(
+    project_root: str, *, limit: "int | None" = _CURATED_DOCS_MAX, respect_gitignore: bool = False
+) -> tuple:
     """``(paths_to_examine, total_found)`` for the project's curated docs.
 
     ``CLAUDE.md`` plus ``docs/**/*.md`` — the hand-written layer whose stale
@@ -5512,6 +5522,14 @@ def _curated_doc_paths(project_root: str) -> tuple:
     cap. Sorting the combined list happened to do that, because ``C`` sorts
     before ``docs/``, but "happens to" is not a property worth relying on —
     a project whose docs directory were capitalised would have lost it.
+
+    ``limit=None`` removes the cap, and ``reconcile-docs`` (#529) passes it:
+    a cap is right for a health check that must stay cheap and wrong for a
+    reconciler whose entire job is to miss nothing. ``respect_gitignore``
+    drops ignored files through the miner's own matchers, so the reconciler
+    never queues a mine for a file the miner would refuse to ingest — two
+    components disagreeing about what counts as a doc is the defect this
+    verb exists to remove, and it would be poor form to introduce it here.
     """
     root = os.path.abspath(os.path.expanduser(project_root))
     if not os.path.isdir(root):
@@ -5529,7 +5547,56 @@ def _curated_doc_paths(project_root: str) -> tuple:
                 if name.endswith(".md"):
                     docs.append(os.path.join(dirpath, name))
     ordered = head + sorted(docs)
-    return ordered[:_CURATED_DOCS_MAX], len(ordered)
+    found = len(ordered)
+    if respect_gitignore:
+        ordered = [p for p in ordered if not _doc_is_gitignored(root, p)]
+    # `found` is the PRE-filter, PRE-cap total on purpose: a caller that only
+    # received the survivors could not report how many it skipped, and a count
+    # that hides what it dropped is the same under-reporting this module was
+    # written to remove (#490).
+    return (ordered if limit is None else ordered[:limit]), found
+
+
+def _doc_is_gitignored(root: str, path: str) -> bool:
+    """True when the miner's own .gitignore matchers would skip this file.
+
+    Uses ``miner.load_gitignore_matcher`` / ``is_gitignored`` rather than a
+    second implementation: if the reconciler and the miner disagreed about
+    what counts as a doc, the reconciler would queue mines the miner drops
+    and report them as queued — a report disagreeing with what happened,
+    which is the defect family this verb exists to close.
+    """
+    try:
+        from pathlib import Path
+
+        from .miner import is_gitignored, load_gitignore_matcher
+    except Exception:  # noqa: BLE001 — never let an import break enumeration
+        return False
+    cache: dict = {}
+    here = Path(root)
+    target = Path(path)
+    try:
+        rel_parts = target.relative_to(here).parts[:-1]
+    except ValueError:
+        return False
+    # ``load_gitignore_matcher`` answers None for a directory with no
+    # .gitignore, and ``is_gitignored`` calls ``.matches`` on every entry it
+    # is handed — the miner's walker drops the Nones before that call, and so
+    # must this. The first version appended them and swallowed the resulting
+    # AttributeError under a broad except, which made every doc read
+    # "not ignored": a matcher that had never once matched, reporting clean.
+    matchers = [
+        m
+        for m in (
+            load_gitignore_matcher(part, cache)
+            for part in (
+                here,
+                *[here.joinpath(*rel_parts[: i + 1]) for i in range(len(rel_parts))],
+            )
+        )
+        if m is not None
+    ]
+    return bool(is_gitignored(target, matchers))
 
 
 def _in_linked_worktree(path: str) -> bool:
@@ -5587,6 +5654,51 @@ def _curated_indexed_mtimes(wing: str, palace_path: str) -> tuple:
         return {}, f"palace not readable here ({exc})"
 
 
+def _classify_curated_docs(paths, recorded) -> tuple:
+    """``(stale, never, unknown, current)`` for enumerated curated docs.
+
+    One classifier, read by both ``doctor --curated`` and ``reconcile-docs``
+    (#529), because the two must agree about what "stale" means or the doctor
+    would report a file the reconciler declines to queue — a disagreement
+    between two components that both claim to answer the same question, which
+    is the failure this verb exists to remove rather than to add.
+
+    Staleness is decided by :func:`mempalace.provenance.source_stale` and
+    nowhere else: it owns the 60-second grace window and the honest ``None``.
+
+    ``unknown`` is NEVER folded into ``stale``. Undecidable means the answer
+    is not available — an older daemon with no ``max_source_mtime``, a file
+    this host cannot stat, a recorded time in the future — and treating it as
+    "probably stale" would re-mine a whole wing on the strength of a missing
+    field. It is reported and left for a human, on both sides.
+    """
+    from datetime import datetime
+
+    from . import provenance
+
+    stale, never, unknown, current = [], [], [], []
+    for path in paths:
+        if path not in recorded:
+            never.append(path)
+            continue
+        mtime = recorded.get(path)
+        if mtime is None:
+            unknown.append(path)
+            continue
+        hit = {
+            "source_file": path,
+            "indexed_at": datetime.fromtimestamp(float(mtime)).isoformat(),
+        }
+        verdict = provenance.source_stale(hit)
+        if verdict is True:
+            stale.append(path)
+        elif verdict is None:
+            unknown.append(path)
+        else:
+            current.append(path)
+    return stale, never, unknown, current
+
+
 def _curated_docs_check(wing: str, palace_path: str) -> tuple:
     """``(ok, detail, level)`` for the curated-docs staleness check (#451 E).
 
@@ -5609,34 +5721,13 @@ def _curated_docs_check(wing: str, palace_path: str) -> tuple:
     the miner, where re-mining is cheap and safe. Here it would fabricate
     "you edited this" out of missing bookkeeping, so it reads undecidable.
     """
-    from datetime import datetime
-
-    from . import provenance
-
     paths, total_found = _curated_doc_paths(os.getcwd())
     if not paths:
         return None, "no CLAUDE.md or docs/*.md in this project", "warn"
     unexamined = total_found - len(paths)
 
     recorded, note = _curated_indexed_mtimes(wing, palace_path)
-    stale, never, unknown = [], [], []
-    for path in paths:
-        if path not in recorded:
-            never.append(path)
-            continue
-        mtime = recorded.get(path)
-        if mtime is None:
-            unknown.append(path)
-            continue
-        hit = {
-            "source_file": path,
-            "indexed_at": datetime.fromtimestamp(float(mtime)).isoformat(),
-        }
-        verdict = provenance.source_stale(hit)
-        if verdict is True:
-            stale.append(path)
-        elif verdict is None:
-            unknown.append(path)
+    stale, never, unknown, _current = _classify_curated_docs(paths, recorded)
 
     parts = []
     if stale:
@@ -6048,6 +6139,218 @@ def _open_drawers_or_refuse(
     except Exception as e:  # noqa: BLE001 — backend exceptions vary by backend
         _refuse(f"Error reading palace: {e}", backend_name=backend_name)
     return col, backend_name, target
+
+
+def _main_checkout_for(worktree_root: str) -> str:
+    """The main checkout a linked worktree belongs to, or "" if undeterminable.
+
+    A linked worktree's ``.git`` is a FILE holding
+    ``gitdir: /main/.git/worktrees/<name>``, so the main checkout is that
+    path with ``/.git/worktrees/<name>`` removed. Returning "" rather than
+    guessing matters: the refusal message names a directory the operator is
+    about to run a command in, and a wrong one sends them somewhere real and
+    unrelated. No answer is better than a confident wrong path.
+    """
+    marker = os.path.join(os.path.abspath(os.path.expanduser(worktree_root)), ".git")
+    try:
+        with open(marker, encoding="utf-8") as handle:
+            line = handle.read().strip()
+    except OSError:
+        return ""
+    if not line.startswith("gitdir:"):
+        return ""
+    gitdir = line.split(":", 1)[1].strip()
+    marker_seq = os.sep + ".git" + os.sep + "worktrees" + os.sep
+    idx = gitdir.find(marker_seq)
+    if idx == -1:
+        return ""
+    return gitdir[:idx]
+
+
+def _curated_wing_for(project_root: str) -> str:
+    """The wing the curated-docs hook would use for this project root.
+
+    Mirrors `palace-memory-sync.sh` exactly — `basename` of the project
+    directory, lowercased, with `-` mapped to `_` (`tr 'A-Z-' 'a-z_'`) — so a
+    doc reconciled here lands in the same wing the hook would have filed it
+    under. Two components choosing different wings for the same file is not a
+    cosmetic difference: the palace would hold two copies, and a search
+    scoped to one wing would miss the other.
+    """
+    base = os.path.basename(os.path.abspath(os.path.expanduser(project_root)))
+    return base.lower().replace("-", "_")
+
+
+def cmd_reconcile_docs(args):
+    """Queue a mine for every curated doc the palace has not seen (#529).
+
+    The curated-docs hook is event-driven and therefore best-effort. Measured
+    on the live hook before this verb was written, it misses a doc in at
+    least five distinct ways: a worktree path its Bash matcher excludes; a
+    worktree path its shell-glob matcher DOES match and which then dies on
+    the palace host, which has no `.claude/worktrees` at all; a doc arriving
+    by merge or pull, which produces no tool event; a glob token taken for a
+    filename; and a path the command merely mentioned. Every one is invisible
+    to a listener and obvious to a comparison against what is on disk.
+
+    So this does not listen. It enumerates `CLAUDE.md` + `docs/**/*.md`,
+    asks the palace what it recorded, and queues a background single-file
+    projects-mode mine for anything newer or absent — the same payload
+    `palace-doc-sync.sh` sends, through the same poster, so there is one
+    wire format rather than two that drift.
+
+    Undecidable files are reported and NOT queued. "No recorded mtime" is an
+    absence of an answer, not a stale answer, and re-mining a whole wing on
+    the strength of a missing field is how a reconciler becomes the thing
+    that needs reconciling.
+    """
+    want_json = getattr(args, "json", False)
+    root = os.path.abspath(os.path.expanduser(args.repo_root))
+
+    if not os.path.isdir(root):
+        _fail_client(f"reconcile-docs: {args.repo_root} is not a directory", want_json)
+
+    if _in_linked_worktree(root):
+        # Refuse rather than queue work that cannot land: the palace host
+        # carries the MAIN checkout only (Syncthing does not replicate
+        # `.claude/worktrees`), so every mine queued for a worktree path is
+        # logged "not present on palace host" and dropped. Queuing them would
+        # print a confident `queued=N` for N mines that will never run.
+        main = _main_checkout_for(root)
+        _fail_client(
+            "reconcile-docs: {} is a linked worktree; the palace never saw its "
+            "paths and the palace host does not carry them. Run it against the "
+            "main checkout{}".format(root, f" ({main})" if main else ""),
+            want_json,
+        )
+
+    wing = getattr(args, "wing", None) or _curated_wing_for(root)
+    paths, found = _curated_doc_paths(root, limit=None, respect_gitignore=True)
+    skipped_ignored = found - len(paths)
+
+    if not paths:
+        msg = f"reconcile-docs: no CLAUDE.md or docs/**/*.md under {root}"
+        if want_json:
+            _emit_json(
+                {
+                    "root": root,
+                    "wing": wing,
+                    "queued": 0,
+                    "current": 0,
+                    "skipped_ignored": skipped_ignored,
+                    "note": msg,
+                }
+            )
+        else:
+            print(msg)
+        sys.exit(1)
+
+    if not _daemon_url():
+        _fail_daemon(
+            DaemonError("reconcile-docs needs the palace-daemon; set PALACE_DAEMON_URL"),
+            want_json,
+        )
+
+    palace_path = os.path.expanduser(args.palace) if getattr(args, "palace", None) else ""
+    recorded, note = _curated_indexed_mtimes(wing, palace_path)
+    if note.startswith("daemon unreachable"):
+        _fail_daemon(DaemonError(note), want_json)
+
+    stale, never, unknown, current = _classify_curated_docs(paths, recorded)
+    to_queue = stale + never
+
+    if not recorded and not getattr(args, "force", False):
+        # An empty answer and a genuinely unindexed project are the same
+        # picture from here, and they want opposite actions. The likeliest
+        # cause is a wing that does not exist — a typo, or a project whose
+        # directory name is not its wing — and guessing wrong is not a wasted
+        # call: single-file curated mines each pay a derived-graph recompute
+        # (measured ~20 min, which is why the hook has a pause switch), so a
+        # mistyped wing would queue every doc in the repo.
+        #
+        # Refuse and name the wing. --dry-run is checked BELOW this, so the
+        # plan still prints — showing the operator what it would do is how
+        # they discover the wing was wrong.
+        _fail_client(
+            "reconcile-docs: the palace recorded nothing for wing {!r}, so every "
+            "one of the {} enumerated file(s) reads as never-indexed. That is "
+            "usually a wrong --wing rather than an empty project. Check with "
+            "`mempalace mined --wing {}`, or pass --force if the project really "
+            "has never been mined.".format(wing, len(paths), wing),
+            want_json,
+            wing=wing,
+            enumerated=len(paths),
+        )
+
+    if getattr(args, "dry_run", False):
+        if want_json:
+            _emit_json(
+                {
+                    "root": root,
+                    "wing": wing,
+                    "dry_run": True,
+                    "would_queue": len(to_queue),
+                    "current": len(current),
+                    "undecidable": len(unknown),
+                    "skipped_ignored": skipped_ignored,
+                    "files": to_queue,
+                    "note": note,
+                }
+            )
+        else:
+            print(f"\n  reconcile-docs {root} → wing {wing}\n")
+            print(f"    would queue      {len(to_queue)} file(s)")
+            for path in to_queue[:_RECONCILE_SAMPLE]:
+                print(f"      {os.path.relpath(path, root)}")
+            if len(to_queue) > _RECONCILE_SAMPLE:
+                print(f"      … and {len(to_queue) - _RECONCILE_SAMPLE} more")
+            print(f"    current          {len(current)} file(s)")
+            print(f"    undecidable      {len(unknown)} file(s) (reported, never queued)")
+            print(f"    skipped-ignored  {skipped_ignored} file(s)")
+            if note:
+                print(f"    note             {note}")
+            print("\n  Nothing has been queued. Re-run without --dry-run.\n")
+        sys.exit(0 if to_queue else 1)
+
+    queued, failed = [], []
+    # The poster prints a one-line receipt per accepted mine. Under --json
+    # that receipt would land in front of the document and every consumer's
+    # `json.loads(stdout)` would fail on precisely the runs that queued
+    # something — the useful ones. Receipts go to stderr in JSON mode.
+    receipts = contextlib.redirect_stdout(sys.stderr) if want_json else contextlib.nullcontext()
+    with receipts:
+        for path in to_queue:
+            if _post_daemon_mine_cli(path, wing=wing, mode="projects", background=True):
+                queued.append(path)
+            else:
+                failed.append(path)
+
+    if want_json:
+        _emit_json(
+            {
+                "root": root,
+                "wing": wing,
+                "dry_run": False,
+                "queued": len(queued),
+                "failed": len(failed),
+                "current": len(current),
+                "undecidable": len(unknown),
+                "skipped_ignored": skipped_ignored,
+                "files": queued,
+                "note": note,
+            }
+        )
+    else:
+        print(
+            f"reconcile-docs: queued={len(queued)} file(s) failed={len(failed)} "
+            f"current={len(current)} file(s) undecidable={len(unknown)} file(s) "
+            f"skipped-ignored={skipped_ignored} file(s) wing={wing}"
+        )
+        if note:
+            print(f"  note: {note}", file=sys.stderr)
+    if failed:
+        sys.exit(2)
+    sys.exit(0 if queued else 1)
 
 
 def cmd_mined(args):
@@ -12460,6 +12763,40 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         help="Actually post the queued requests (without this, only a plan is printed)",
     )
 
+    p_reconcile = sub.add_parser(
+        "reconcile-docs",
+        help="Queue a mine for every curated doc the palace has not seen",
+        description=(
+            "Compare a repository's curated docs (CLAUDE.md, docs/**/*.md) with "
+            "what the palace recorded, and queue a background single-file "
+            "projects-mode mine for anything newer or absent. The curated-docs "
+            "hook is event-driven and misses docs that arrive by merge or pull, "
+            "that are written in a linked worktree, or whose write it cannot "
+            "attribute; this enumerates the filesystem instead, so a doc missed "
+            "by any of those routes is caught on the next run."
+        ),
+    )
+    p_reconcile.add_argument(
+        "repo_root",
+        help="The project's MAIN checkout (a linked worktree is refused: the "
+        "palace host does not carry one)",
+    )
+    p_reconcile.add_argument(
+        "--wing",
+        help="Override the wing (default: the project directory name, as the hook derives it)",
+    )
+    p_reconcile.add_argument(
+        "--force",
+        action="store_true",
+        help="Queue even when the palace recorded nothing for the wing (normally "
+        "refused: it usually means a wrong --wing)",
+    )
+    p_reconcile.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Say what would be queued and queue nothing",
+    )
+
     p_mined = sub.add_parser(
         "mined",
         help="List mined source files grouped by wing (companion to status, which groups by room)",
@@ -13415,6 +13752,7 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         "why": cmd_why,
         "tunnels": cmd_tunnels,
         "mined": cmd_mined,
+        "reconcile-docs": cmd_reconcile_docs,
         "pending": cmd_pending,
         "replay": cmd_replay,
         # read family — slices of #191 (issues #356, #360, #362)

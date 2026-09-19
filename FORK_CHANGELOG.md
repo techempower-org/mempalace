@@ -24,6 +24,53 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **`mempalace reconcile-docs` queues a mine for every curated doc the palace missed** (`HEAD` — pending resolution)
+  The curated-docs re-index hook (`palace-memory-sync.sh`) is a listener,
+  and a listener covers only the writes that reach it. Measured on the live
+  hook before any code: a doc written in a lane worktree (its Bash matcher
+  `/Projects/[^ /]+/…` excludes the path; its shell-glob matcher MATCHES it
+  and the mine then dies on the palace host, which has no
+  `.claude/worktrees` at all), a doc landing by merge or `git pull` (no
+  tool event), a glob token taken for a filename, a path a command merely
+  mentioned. `docs/specs/` had 0 drawers for 7 files (#528).
+
+  `mempalace reconcile-docs <repo-root> [--wing W] [--dry-run] [--force]
+  [--json]` does not listen. It enumerates `CLAUDE.md` + `docs/**/*.md`,
+  asks the palace what it recorded (`mempalace_mined`, `max_source_mtime`)
+  and queues a background single-file projects-mode mine for every doc that
+  is stale or absent — the payload `palace-doc-sync.sh` sends, through the
+  same poster, now **byte-identical** (`_post_daemon_mine_cli` writes
+  compact separators). Undecidable files (no recorded mtime) are reported
+  and never queued. Reports `queued / current / undecidable /
+  skipped-ignored` in files.
+
+  **Producer/consumer pair:** the hook's path matcher and this verb's
+  enumeration must agree on what a curated doc is; `tests/
+  test_curated_pattern_agreement.py` runs both (the hook's regex, its
+  `case` glob via bash, the enumerator on a built tree) and pins their one
+  known disagreement — worktree paths — as a hook defect that the dotfiles repo
+  guards with an early exit (its commit d0fa9d6). The wing is the hook's
+  `basename | tr 'A-Z-' 'a-z_'`, executed for real in the test.
+
+  Two refusals at exit 2: a linked-worktree root (the message names the main
+  checkout) and an empty palace answer for the wing — a wrong `--wing`
+  would queue the whole repo, and each single-file curated mine pays a
+  ~20-minute derived-graph recompute (#474). `--force` overrides.
+
+  Found on the way: `_doc_is_gitignored` appended the `None` a directory
+  without `.gitignore` yields and swallowed the resulting AttributeError,
+  so every doc read "not ignored"; and under `--json` the poster's per-file
+  receipts landed in front of the document. Both fixed and pinned.
+
+  **Planning note for the first real pass:** `--dry-run` on
+  `~/Projects/memorypalace` reported **71 files would queue** (the palace
+  held 603 sources for the wing, only 2 of them curated docs). At ~20 min
+  per mine that is roughly a day of derived-graph work if run unpaused; the
+  lead runs the first pass.
+
+  *Tests:* tests/test_cli_reconcile_docs.py drives the real CLI against a stub daemon recording raw bytes (22 tests, 4 mutants killed, base control 19/21 red on origin/main); tests/test_curated_pattern_agreement.py
+
+
 - **check-docs step 8 — every merged fork PR must carry a fork-changes entry** (`HEAD` — pending resolution)
   ``check-docs.sh`` verified render parity, sha resolution, sha ancestry and
   upstream PR states, but never that a merged fork PR documented itself. #517

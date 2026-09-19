@@ -290,6 +290,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| `mempalace reconcile-docs` queues a mine for every curated doc the palace missed | — | `HEAD` — pending resolution |
 | 401/403 are 64 and 404 stays 2; every daemon-failure JSON carries error, code and source | — | `HEAD` — pending resolution |
 | --limit 3 reaches the curated layer — conditional deep fetch plus one reserved, marked slot | — | `HEAD` — pending resolution |
 | check-docs step 8 — every merged fork PR must carry a fork-changes entry | — | `HEAD` — pending resolution |
