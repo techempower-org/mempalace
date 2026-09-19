@@ -202,6 +202,37 @@ class TestCollapseMarkedInEveryProseRenderer:
         assert cli._collapse_tag({"duplicates_collapsed": 0}) == ""
         assert cli._collapse_tag({}) == ""
 
+    @pytest.mark.parametrize("fmt", ["table", "full", "compact"])
+    def test_a_hit_that_is_both_promoted_and_a_collapse_anchor_shows_both(self, capsys, fmt):
+        """Producer→consumer pair for the COMPOSED marker (#534's promotion tag,
+        landed via #542's rebase order, plus this PR's collapse tag): one result
+        object whose reserved hit also absorbed a duplicate, driven through every
+        prose renderer, must show both markers — neither renderer may let one tag
+        hide the other."""
+        shallow = _transcripts(3)
+        deep = _transcripts(30)
+        deep[13] = _hit(14, "file", _C, "/p/docs/foo.md")
+        deep[20] = _hit(21, "file", _C, "/p/docs/rescued/foo.md")
+        out, _ = _run(capsys, [_payload(shallow), _payload(deep)], fmt=fmt)
+        assert "⟨curated, promoted from rank 14⟩" in out.out
+        assert "⟨1 identical copy collapsed⟩" in out.out
+        # and on the same hit, on the same line for compact / the same header line
+        # for table. Anchor on the full ⟨…⟩ marker: #542's banner sentence also
+        # says "promoted from rank 14", and a bare substring would pick it up.
+        line = next(ln for ln in out.out.splitlines() if "⟨curated, promoted from rank 14⟩" in ln)
+        assert "⟨1 identical copy collapsed⟩" in line
+
+    def test_json_carries_both_markers_on_the_same_hit(self, capsys):
+        shallow = _transcripts(3)
+        deep = _transcripts(30)
+        deep[13] = _hit(14, "file", _C, "/p/docs/foo.md")
+        deep[20] = _hit(21, "file", _C, "/p/docs/rescued/foo.md")
+        out, _ = _run(capsys, [_payload(shallow), _payload(deep)])
+        hit = json.loads(out.out)["results"][-1]
+        assert hit["promoted"] is True and hit["promoted_from_rank"] == 14
+        assert hit["duplicates_collapsed"] == 1
+        assert hit["duplicate_of"] == ["/p/docs/rescued/foo.md"]
+
     def test_table_does_not_mark_unique_hits(self, capsys):
         payload = _payload([_hit(1, "file", _C)] + _transcripts(2, start=2))
         out, _ = _run(capsys, [payload], fmt="table")
