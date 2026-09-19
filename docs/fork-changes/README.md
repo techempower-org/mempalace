@@ -32,11 +32,14 @@ The old single-file manifest made every pull request insert at the same
 line, so a 10-PR wave conflicted on it every time — measured on
 2026-09-10/11, with *zero* source conflicts.
 
-A `seq` **collision is harmless**: two lanes both choosing `max + 1`
-write *separate files*, and the tie breaks deterministically. The
-conflict was never the number — it was a shared insertion *line* in a
-shared *file*. A numeric collision costs nothing; a textual one blocks a
-merge. So ordering can stay explicit without being a coordination point.
+A `seq` **collision never blocks a merge and is never a gate**: two lanes
+both choosing `max + 1` write *separate files*. It is not free, though —
+it decides **render order**, which then falls to the `(date desc, id asc)`
+tie-break rather than to either author's intent. The conflict was never
+the number; it was a shared insertion *line* in a shared *file*. A
+numeric collision costs an ordering you did not choose; a textual one
+costs a merge. So ordering can stay explicit without being a coordination
+point.
 
 Get the next number with:
 

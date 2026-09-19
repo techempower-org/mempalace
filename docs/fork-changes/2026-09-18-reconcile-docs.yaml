@@ -2,7 +2,7 @@ seq: 163
 id: reconcile-docs
 date: '2026-09-18'
 bucket: Added
-commit: HEAD
+commit: fdd0d7f
 area: CLI
 summary: '`mempalace reconcile-docs` queues a mine for every curated doc the palace missed'
 body: |
@@ -48,5 +48,5 @@ body: |
   held 603 sources for the wing, only 2 of them curated docs). At ~20 min
   per mine that is roughly a day of derived-graph work if run unpaused; the
   lead runs the first pass.
-fork_pr: 541
 tests: tests/test_cli_reconcile_docs.py drives the real CLI against a stub daemon recording raw bytes (22 tests, 4 mutants killed, base control 19/21 red on origin/main); tests/test_curated_pattern_agreement.py
+fork_pr: 541

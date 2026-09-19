@@ -309,24 +309,24 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
-| a daemon error object (-32003 busy, or any error body) is an ERROR with a code, never 0 hits | — | `HEAD` — pending resolution |
-| identical-text hits from different paths are collapsed before the curated deep fetch and the reserved slot | — | `HEAD` — pending resolution |
-| the search banner states the DEPTH, never the store — three cases keyed on curated_first_rank | — | `HEAD` — pending resolution |
-| failure-shape index follow-up: overlap columns, record-set and markdownlint gates, schema README | — | `HEAD` — pending resolution |
-| `mempalace reconcile-docs` queues a mine for every curated doc the palace missed | — | `HEAD` — pending resolution |
-| 401/403 are 64 and 404 stays 2; every daemon-failure JSON carries error, code and source | — | `HEAD` — pending resolution |
-| --limit 3 reaches the curated layer — conditional deep fetch plus one reserved, marked slot | — | `HEAD` — pending resolution |
-| check-docs step 8 — every merged fork PR must carry a fork-changes entry | — | `HEAD` — pending resolution |
-| 30 failure-shape records as drawers, a recall harness, and a section 5 that runs | — | `HEAD` — pending resolution |
-| daemon-strict `mempalace mine` sent `mode: null` and every mine 422'd | — | `HEAD` — pending resolution |
-| check-docs examines every mention of a PR, not just the first, and matches state words as words | — | `HEAD` — pending resolution |
-| a daemon outage exits 2 (palace unavailable), not 1 (no results) | — | `HEAD` — pending resolution |
-| check-docs must not match a PR number against a commit-sha prefix | — | `HEAD` — pending resolution |
-| the daemon-unreachable message is written once, not hand-copied at 22 places | — | `HEAD` — pending resolution |
-| `mempalace window` walks a wing chronologically; `mempalace source` lists one file's drawers in order | — | `HEAD` — pending resolution |
-| diary read/agents work without a configured identity; the hook keys entries on the harness name | — | `HEAD` — pending resolution |
-| `pending drain` plans before it posts; a daemon 4xx reads as a request error, not an outage | — | `HEAD` — pending resolution |
-| design spec for indexing failure SHAPES, keyed on the action about to be taken | — | `HEAD` — pending resolution |
+| a daemon error object (-32003 busy, or any error body) is an ERROR with a code, never 0 hits | — | [`3aca75e`](https://github.com/techempower-org/mempalace/commit/3aca75e) |
+| identical-text hits from different paths are collapsed before the curated deep fetch and the reserved slot | — | [`a5d8903`](https://github.com/techempower-org/mempalace/commit/a5d8903) |
+| the search banner states the DEPTH, never the store — three cases keyed on curated_first_rank | — | [`0d44883`](https://github.com/techempower-org/mempalace/commit/0d44883) |
+| failure-shape index follow-up: overlap columns, record-set and markdownlint gates, schema README | — | [`d950b11`](https://github.com/techempower-org/mempalace/commit/d950b11) |
+| `mempalace reconcile-docs` queues a mine for every curated doc the palace missed | — | [`fdd0d7f`](https://github.com/techempower-org/mempalace/commit/fdd0d7f) |
+| 401/403 are 64 and 404 stays 2; every daemon-failure JSON carries error, code and source | — | [`8408188`](https://github.com/techempower-org/mempalace/commit/8408188) |
+| --limit 3 reaches the curated layer — conditional deep fetch plus one reserved, marked slot | — | [`69fd30c`](https://github.com/techempower-org/mempalace/commit/69fd30c) |
+| check-docs step 8 — every merged fork PR must carry a fork-changes entry | — | [`9db6577`](https://github.com/techempower-org/mempalace/commit/9db6577) |
+| 30 failure-shape records as drawers, a recall harness, and a section 5 that runs | — | [`42b3319`](https://github.com/techempower-org/mempalace/commit/42b3319) |
+| daemon-strict `mempalace mine` sent `mode: null` and every mine 422'd | — | [`be81aa7`](https://github.com/techempower-org/mempalace/commit/be81aa7) |
+| check-docs examines every mention of a PR, not just the first, and matches state words as words | — | [`7ed80f0`](https://github.com/techempower-org/mempalace/commit/7ed80f0) |
+| a daemon outage exits 2 (palace unavailable), not 1 (no results) | — | [`4c6a8d0`](https://github.com/techempower-org/mempalace/commit/4c6a8d0) |
+| check-docs must not match a PR number against a commit-sha prefix | — | [`80e2c29`](https://github.com/techempower-org/mempalace/commit/80e2c29) |
+| the daemon-unreachable message is written once, not hand-copied at 22 places | — | [`58f8302`](https://github.com/techempower-org/mempalace/commit/58f8302) |
+| `mempalace window` walks a wing chronologically; `mempalace source` lists one file's drawers in order | — | [`95a9385`](https://github.com/techempower-org/mempalace/commit/95a9385) |
+| diary read/agents work without a configured identity; the hook keys entries on the harness name | — | [`7156162`](https://github.com/techempower-org/mempalace/commit/7156162) |
+| `pending drain` plans before it posts; a daemon 4xx reads as a request error, not an outage | — | [`f7db659`](https://github.com/techempower-org/mempalace/commit/f7db659) |
+| design spec for indexing failure SHAPES, keyed on the action about to be taken | — | [`43e6b0c`](https://github.com/techempower-org/mempalace/commit/43e6b0c) |
 | purge / prune / mined share one open-and-refuse sequence and one exit-code contract | — | [`459efab`](https://github.com/techempower-org/mempalace/commit/459efab) |
 | Entry shas resolve from the commit that added the entry file; strict check rejects an unresolved placeholder on main | — | [`b9d168a`](https://github.com/techempower-org/mempalace/commit/b9d168a) |
 | KG write-through commits once per batch instead of once per drawer | — | [`41f1251`](https://github.com/techempower-org/mempalace/commit/41f1251) |

@@ -2,7 +2,7 @@ seq: 166
 id: search-collapse-identical-text
 date: '2026-09-18'
 bucket: Fixed
-commit: HEAD
+commit: a5d8903
 area: Search
 summary: identical-text hits from different paths are collapsed before the curated deep fetch and the reserved slot
 body: |
@@ -32,6 +32,8 @@ body: |
   Two existing fixtures had two hits with identical text — exactly the shape
   this collapses — and were given distinct texts so each test keeps testing
   what it names (a failed second call; one compact line per hit).
-tests: "17 new (test_search_dedup: helper — keep-first, whitespace identity, curated copy takes the slot, distinct text survives, idempotent/tolerant; cmd_search — refill via one deeper call, collapse before reservation, no extra call on the common path; prose mark per renderer table/full/compact + plural + unique-hits negative; a hit that is both promoted and a collapse anchor shows BOTH markers, per renderer + JSON); 3 existing fixtures given distinct texts"
+tests: '17 new (test_search_dedup: helper — keep-first, whitespace identity, curated copy takes the slot, distinct text survives, idempotent/tolerant; cmd_search — refill via one deeper call, collapse before reservation, no extra call on the common path; prose mark per renderer table/full/compact + plural + unique-hits negative; a hit that is both promoted and a collapse anchor shows BOTH markers, per renderer + JSON); 3 existing fixtures given distinct texts'
 fork_pr: 543
-files: [mempalace/cli.py, mempalace/result_ordering.py]
+files:
+- mempalace/cli.py
+- mempalace/result_ordering.py

@@ -2,10 +2,9 @@ seq: 160
 id: check-docs-entry-coverage
 date: '2026-09-18'
 bucket: Added
-commit: HEAD
-fork_pr: 530
+commit: 9db6577
 area: Docs
-summary: "check-docs step 8 — every merged fork PR must carry a fork-changes entry"
+summary: check-docs step 8 — every merged fork PR must carry a fork-changes entry
 body: |
   ``check-docs.sh`` verified render parity, sha resolution, sha ancestry and
   upstream PR states, but never that a merged fork PR documented itself. #517
@@ -36,5 +35,9 @@ body: |
   own: the producer this allowlist exists for, and the pair this check
   consumes. A test verifies every allowlisted PR is genuinely missing an entry
   and genuinely in range, so the allowlist cannot drift into a mute button.
-tests: "8 (test_check_docs_entry_coverage — fixture git repos under the project's tmp/)"
-files: [scripts/check-entry-coverage.sh, scripts/check-docs.sh, docs/fork-changes-no-entry.txt]
+tests: 8 (test_check_docs_entry_coverage — fixture git repos under the project's tmp/)
+fork_pr: 530
+files:
+- scripts/check-entry-coverage.sh
+- scripts/check-docs.sh
+- docs/fork-changes-no-entry.txt

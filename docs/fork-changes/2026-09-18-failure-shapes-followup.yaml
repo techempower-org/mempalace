@@ -1,10 +1,10 @@
 seq: 164
 id: failure-shapes-followup
-date: 2026-09-18
+date: '2026-09-18'
 bucket: Changed
-commit: HEAD
+commit: d950b11
 area: Docs
-summary: "failure-shape index follow-up: overlap columns, record-set and markdownlint gates, schema README"
+summary: 'failure-shape index follow-up: overlap columns, record-set and markdownlint gates, schema README'
 body: |
   Six items queued during #531's review, one PR (Part of #524, #503).
 

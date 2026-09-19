@@ -2,7 +2,7 @@ seq: 161
 id: search-curated-layer-depth
 date: '2026-09-18'
 bucket: Fixed
-commit: HEAD
+commit: 69fd30c
 area: Search
 summary: --limit 3 reaches the curated layer — conditional deep fetch plus one reserved, marked slot
 body: |
@@ -60,6 +60,7 @@ body: |
   renderer — ``table`` (default), ``full`` and ``compact`` — each under its own
   test. The first cut marked ``compact`` only, so the default view shipped the
   very silent promotion the slot exists to avoid (Oracle PART 44 on #534).
-tests: "18 new (test_search_depth: depth floor, conditional trigger, curated_first_rank pre-reorder + null, reservation last-slot/marking/edge cases, prose mark per renderer: table, full, compact, plus a ranked-not-promoted negative); 3 #477 tests updated to the new contract"
+tests: '18 new (test_search_depth: depth floor, conditional trigger, curated_first_rank pre-reorder + null, reservation last-slot/marking/edge cases, prose mark per renderer: table, full, compact, plus a ranked-not-promoted negative); 3 #477 tests updated to the new contract'
 fork_pr: 534
-files: [mempalace/cli.py]
+files:
+- mempalace/cli.py

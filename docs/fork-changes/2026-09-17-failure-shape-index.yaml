@@ -2,7 +2,7 @@ seq: 149
 id: failure-shape-index
 date: '2026-09-17'
 bucket: Added
-commit: HEAD
+commit: 43e6b0c
 area: Docs
 summary: design spec for indexing failure SHAPES, keyed on the action about to be taken
 body: |
@@ -44,6 +44,6 @@ body: |
   (#452) classifies a curated shape card for free, #477's curated-above-transcript
   ordering already puts it on the right side of the ranking, and `why`, `tunnels`,
   `rate` and the AGE graph each have a role with no new route.
+fork_pr: 505
 files:
 - docs/specs/2026-09-17-failure-shape-index.md
-fork_pr: 505

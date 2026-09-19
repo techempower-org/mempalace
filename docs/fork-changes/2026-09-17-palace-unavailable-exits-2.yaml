@@ -2,9 +2,9 @@ seq: 156
 id: palace-unavailable-exits-2
 date: '2026-09-17'
 bucket: Changed
-commit: HEAD
+commit: 4c6a8d0
 area: CLI
-summary: 'a daemon outage exits 2 (palace unavailable), not 1 (no results)'
+summary: a daemon outage exits 2 (palace unavailable), not 1 (no results)
 body: |
   ⚠️ **Issue-number correction.** This work and its predecessor were labelled
   `#476` from a plan note; `#476` is actually "maintain-fork-changes.py:
@@ -80,7 +80,7 @@ body: |
   daemon-failure branches. The ~31 files asserting 1 for genuine no-results
   are untouched and still pass; flipping those would re-create the wave's
   defect inside its own fix.
+tests: 45 updated across 19 files (execution-derived), 32 renamed off `_exits_1`; 8 new in TestTheContractItself incl. argparse-exits-2, the ArgumentParser-subclass absence probe and the header-vs-code probe; 1 new window/source JSON-shape guard
 fork_pr: 522
-tests: '45 updated across 19 files (execution-derived), 32 renamed off `_exits_1`; 8 new in TestTheContractItself incl. argparse-exits-2, the ArgumentParser-subclass absence probe and the header-vs-code probe; 1 new window/source JSON-shape guard'
 files:
 - mempalace/cli.py

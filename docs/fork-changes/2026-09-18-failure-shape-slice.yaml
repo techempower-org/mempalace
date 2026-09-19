@@ -2,7 +2,7 @@ seq: 159
 id: failure-shape-slice
 date: '2026-09-18'
 bucket: Added
-commit: HEAD
+commit: 42b3319
 area: Docs
 summary: 30 failure-shape records as drawers, a recall harness, and a section 5 that runs
 body: |
@@ -55,8 +55,8 @@ body: |
   described the design intent; the code checked something narrower — the shape
   this corpus exists to index, found in the instrument built to measure it.
 tests: '5 (test_failure_shape_recall.py: refusal on a silent search, refusal names the slug, the guard can PASS, a hit for another record does not satisfy it, control phrase is usable). Plus four set-check controls re-run by hand — removed slug, renamed file, edited front-matter slug all exit 1; unmodified tree exits 0. Live read-only end-to-end: refusal fires on the real palace (exit 2) and --force-score prints its banner.'
+fork_pr: 531
 files:
 - docs/failure-shapes/
 - scripts/failure_shape_recall.py
 - docs/specs/2026-09-17-failure-shape-index.md
-fork_pr: 531

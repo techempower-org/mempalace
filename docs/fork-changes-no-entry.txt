@@ -16,3 +16,4 @@
 # here — this is not a judgement call to re-make each time.
 
 495  docs-tooling sweep; scripts/maintain-fork-changes.py step 1 resolves `commit: HEAD` from an entry's `fork_pr:`, so the sweep CONSUMES entries across EXISTING files and adds no change of its own; resolves landed `commit: HEAD` values to squash shas across EXISTING entries and adds no change of its own (the producer this allowlist exists for — see scripts/maintain-fork-changes.py)
+550  docs-tooling sweep; resolves 18 landed `commit: HEAD` values to squash shas across EXISTING entries and adds no change of its own (run-sweep.sh 3aca75e6 wave3; the wave-3 closing PR — same producer as 495)
