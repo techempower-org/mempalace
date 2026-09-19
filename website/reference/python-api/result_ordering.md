@@ -103,3 +103,30 @@ buried — and it is bounded by the rank barrier above.
 Idempotent, tolerant of non-dict items and a non-list argument, and never
 raises: this runs on the return path of a search the caller already paid
 for.
+
+### `collapse_identical_text`
+
+```python
+def collapse_identical_text(results)
+```
+
+Collapse hits that carry the SAME words from DIFFERENT paths, in place.
+
+A document mined at two paths — ``docs/foo.md`` and a
+``docs/rescued-from-vartmp-20260905/foo.md`` copy — comes back twice, and a
+``--limit 3`` spends two slots on one text (techempower-org/mempalace#526).
+This is not :func:`prefer_curated`'s job (it reorders near-duplicates, never
+removes) and not ``searcher._dedupe_rendered_hits`` (same path, closet hits
+only). Identity is the text with whitespace runs collapsed; nothing looser,
+so a one-line edit between two copies stays two documents.
+
+The FIRST occurrence in the ranker's order keeps its position. When a later
+copy is curated and the kept one is not, the curated copy takes that slot —
+same words, but the one a reader can cite. The kept hit is marked:
+``duplicates_collapsed`` (count) and ``duplicate_of`` (the other paths, in
+ranker order), so ``--json`` readers and the prose renderers can both say
+that a slot was recovered rather than silently narrowing the list.
+
+Idempotent, tolerant of non-dict items and a non-list argument, never
+raises: this runs on the return path of a search the caller already paid
+for.

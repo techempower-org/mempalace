@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "NEAR_DUP_THRESHOLD",
+    "collapse_identical_text",
     "is_near_duplicate",
     "prefer_curated",
     "similarity",
@@ -256,4 +257,66 @@ def prefer_curated(results, threshold: Optional[float] = None):
 
     moved = iter([results[i] for i in order])
     results[:] = [next(moved) if isinstance(h, dict) else h for h in results]
+    return results
+
+
+def _text_key(hit) -> Optional[str]:
+    text = hit.get("text") if isinstance(hit, dict) else None
+    if not isinstance(text, str):
+        return None
+    key = " ".join(text.split())
+    return key or None
+
+
+def collapse_identical_text(results):
+    """Collapse hits that carry the SAME words from DIFFERENT paths, in place.
+
+    A document mined at two paths — ``docs/foo.md`` and a
+    ``docs/rescued-from-vartmp-20260905/foo.md`` copy — comes back twice, and a
+    ``--limit 3`` spends two slots on one text (techempower-org/mempalace#526).
+    This is not :func:`prefer_curated`'s job (it reorders near-duplicates, never
+    removes) and not ``searcher._dedupe_rendered_hits`` (same path, closet hits
+    only). Identity is the text with whitespace runs collapsed; nothing looser,
+    so a one-line edit between two copies stays two documents.
+
+    The FIRST occurrence in the ranker's order keeps its position. When a later
+    copy is curated and the kept one is not, the curated copy takes that slot —
+    same words, but the one a reader can cite. The kept hit is marked:
+    ``duplicates_collapsed`` (count) and ``duplicate_of`` (the other paths, in
+    ranker order), so ``--json`` readers and the prose renderers can both say
+    that a slot was recovered rather than silently narrowing the list.
+
+    Idempotent, tolerant of non-dict items and a non-list argument, never
+    raises: this runs on the return path of a search the caller already paid
+    for.
+    """
+    if not isinstance(results, list) or len(results) < 2:
+        return results
+    kept_by_key: dict = {}
+    out = []
+    for hit in results:
+        key = _text_key(hit)
+        if key is None:
+            out.append(hit)
+            continue
+        kept = kept_by_key.get(key)
+        if kept is None:
+            kept_by_key[key] = hit
+            out.append(hit)
+            continue
+        if _kind_rank(hit) < _kind_rank(kept):
+            # Swap payloads: the curated copy takes the ranker's slot and
+            # inherits the duplicate bookkeeping gathered so far.
+            idx = out.index(kept)
+            hit, kept = kept, hit
+            kept["duplicates_collapsed"] = hit.pop("duplicates_collapsed", 0)
+            kept["duplicate_of"] = hit.pop("duplicate_of", [])
+            out[idx] = kept
+            kept_by_key[key] = kept
+        kept["duplicates_collapsed"] = int(kept.get("duplicates_collapsed") or 0) + 1
+        paths = list(kept.get("duplicate_of") or [])
+        paths.append(hit.get("source_file") or hit.get("source_path") or hit.get("id") or "?")
+        kept["duplicate_of"] = paths
+    if len(out) != len(results):
+        results[:] = out
     return results
