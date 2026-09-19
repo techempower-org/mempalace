@@ -3,8 +3,9 @@
 * The failure-shape record set (`scripts/failure_shape_recall.py --check-set-only`)
   had passed at every step of #531 — by hand. That stops being true the first time
   someone edits the spec's runnable table without touching the files.
-* markdownlint ran only in CI (`lint-docs.yml`), so MD052 reached CI at 0b0c3487 with
-  every local check-docs step green. A lint that runs only in CI is a check nobody ran.
+* markdownlint ran only in CI (`lint-docs.yml`), so MD052 reached CI on #531's pre-squash
+  tree with every local check-docs step green. A lint that runs only in CI is a check
+  nobody ran.
 
 Both steps are driven through the REAL `scripts/check-docs.sh` over a throwaway repo,
 with a stub for the set check and the real markdownlint runner when one is present.
@@ -112,7 +113,7 @@ class TestMarkdownlintStep:
         assert rc == 0
 
     @pytest.mark.skipif(RUNNER is None, reason="markdownlint-cli2 not installed")
-    def test_the_md052_ci_found_at_0b0c3487_fails_locally(self, tmp_path):
+    def test_the_md052_ci_found_on_531s_pre_squash_tree_fails_locally(self, tmp_path):
         """Positive control: the exact shape CI caught — `[+-][^+-]` read as a reference link."""
         bad = "# r\n\nthe prose has `[+-][^+-]` and then [+-][^+-] bare\n"
         root = _fixture_repo(tmp_path, set_check_rc=0, docs={"docs/bad.md": bad})

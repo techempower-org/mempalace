@@ -186,8 +186,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   CI's own glob set, read from `.github/workflows/lint-docs.yml` so local and CI
   cannot drift; it warns (never silently passes) when no runner is installed and
   fails when one is present and red. Positive control: the new script run on the
-  `0b0c3487` tree reports the MD052 CI found there; on `42b33192` plus this PR it
-  lints 146 files clean.
+  pre-squash tree of #531 (its intermediate CI head, the one CI flagged) reports the
+  MD052 CI found there; on `42b33192` plus this PR it lints 146 files clean.
 
   **Spec**: the two bare "33 on record" echoes now say *seed* corpus, with the
   shipped 31 named beside the first; §5 states the record file shape — `<slug>.md`,
