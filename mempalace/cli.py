@@ -393,9 +393,10 @@ def _call_daemon_tool(name: str, arguments: dict) -> dict:
     except (urllib.error.URLError, ConnectionError, OSError, json.JSONDecodeError) as e:
         raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
     if "error" in envelope:
-        err = envelope["error"]
-        _raise_if_daemon_error_object(envelope, f"/mcp {name}")  # busy → DaemonBusyError
-        raise DaemonError(f"daemon error {err.get('code')}: {err.get('message')}")
+        # Every error envelope raises here — DaemonBusyError for -32003/"busy",
+        # DaemonError("daemon error <code> on /mcp <tool>: <message>") otherwise.
+        # The route names the tool, which the message this replaced did not.
+        _raise_if_daemon_error_object(envelope, f"/mcp {name}")
     content = (envelope.get("result") or {}).get("content") or []
     if not content:
         return {}
