@@ -60,3 +60,87 @@ def test_a_hit_for_a_different_record_does_not_satisfy_the_control(harness):
     other = [{"drawer_id": "d9", "content": "an unrelated drawer with no slug in it"}]
     indexed, _ = harness.corpus_is_indexed("memorypalace", 30, search_fn=lambda *a, **k: other)
     assert indexed is False
+
+
+# ── token overlap: reported beside recall, never subtracted ──────────────────
+#
+# A high overlap does not invalidate a hit; it explains one. The column exists so
+# that a partition's recall can be read next to how much of the trigger's vocabulary
+# the record already carries. Before the column is trusted it must be seen to
+# discriminate in BOTH directions: a metric only ever observed mid-range is not known
+# to see anything.
+
+
+def test_overlap_high_arm_slug_vocabulary_scores_high(harness):
+    """A trigger deliberately built from the slug's own words."""
+    score = harness.overlap("take the count from the tally line", "tally line")
+    assert score is not None and score >= 0.5, score
+
+
+def test_overlap_low_arm_disjoint_trigger_scores_zero(harness):
+    score = harness.overlap("purple elephants dance quietly", "tally line")
+    assert score == 0.0
+
+
+def test_overlap_is_not_a_constant(harness):
+    """Non-constancy: the two arms must differ on the same target."""
+    high = harness.overlap("take the count from the tally line", "tally line")
+    low = harness.overlap("purple elephants dance quietly", "tally line")
+    assert high != low
+
+
+def test_overlap_empty_trigger_is_not_reported_as_disjoint(harness):
+    """|T| = 0 must render as n/a, never as 0.0 — a zero reads as 'disjoint'."""
+    assert harness.overlap("the of a", "tally line") is None
+
+
+def test_overlap_columns_against_a_real_record_both_directions(harness):
+    """Both columns, driven end to end from the on-disk record `tally-line`."""
+    asked_answered = harness.record_asked_answered("tally-line")
+    assert asked_answered and "summary" in asked_answered.lower()
+    high_slug = harness.overlap("take the count from the tally line", "tally-line")
+    high_aa = harness.overlap("what number did the author state in the summary", asked_answered)
+    low_slug = harness.overlap("purple elephants dance quietly", "tally-line")
+    low_aa = harness.overlap("purple elephants dance quietly", asked_answered)
+    assert high_slug >= 0.5 and high_aa >= 0.5, (high_slug, high_aa)
+    assert low_slug == 0.0 and low_aa == 0.0
+
+
+def test_slug_tokens_split_on_hyphen(harness):
+    assert harness.tokens("bare-path-receipt") == {"bare", "path", "receipt"}
+
+
+def test_overlap_only_mode_scores_without_search(harness, tmp_path, capsys, monkeypatch):
+    """--overlap-only must never call search or the corpus control."""
+    csv_path = tmp_path / "t.csv"
+    csv_path.write_text(
+        "trigger,expected_slug,partition\n"
+        '"take the count from the summary line at the end",tally-line,independent-blind\n'
+        "TBD(fresh-lane),bare-path-receipt,independent-fresh\n",
+        encoding="utf-8",
+    )
+
+    def boom(*a, **k):
+        raise AssertionError("search must not run under --overlap-only")
+
+    monkeypatch.setattr(harness, "search", boom)
+    rc = harness.main(["--triggers", str(csv_path), "--overlap-only"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "tally-line" in out and "ovl/slug" in out and "ovl/asked+answered" in out
+    assert "1 pending" in out
+
+
+def test_readme_in_records_dir_is_not_a_record(harness, tmp_path, monkeypatch):
+    """docs/failure-shapes/README.md has no front matter and must not fail the set check."""
+    recs = tmp_path / "failure-shapes"
+    recs.mkdir()
+    (recs / "README.md").write_text("# not a record\n", encoding="utf-8")
+    (recs / "a-shape.md").write_text("---\nslug: a-shape\n---\n# a-shape\n", encoding="utf-8")
+    spec = tmp_path / "spec.md"
+    spec.write_text("### The runnable table\n\n| `a-shape` | A | x |\n", encoding="utf-8")
+    monkeypatch.setattr(harness, "RECORDS", recs)
+    monkeypatch.setattr(harness, "SPEC", spec)
+    assert harness.check_set(verbose=False) == 0
+    slugs, mismatched = harness.record_slugs()
+    assert slugs == {"a-shape"} and mismatched == []

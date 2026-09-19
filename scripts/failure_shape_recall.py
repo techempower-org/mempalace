@@ -16,8 +16,15 @@ Trigger table (CSV, header required):
 never scored. A partial table is expected — the independent partitions are written by
 lanes that have not read the records.
 
+Beside each rank the table carries two **token-overlap** columns — the trigger's
+vocabulary against its `expected_slug`, and against the record's `asked` + `answered`
+text. They are reported, never subtracted: a high overlap does not invalidate a hit, it
+explains one, and discounting recall by overlap would print a number nobody can check.
+`--overlap-only` computes the two columns with no search and no corpus control.
+
 Usage:
     scripts/failure_shape_recall.py --triggers <csv> [--wing memorypalace] [--limit 30]
+    scripts/failure_shape_recall.py --triggers <csv> --overlap-only
     scripts/failure_shape_recall.py --check-set-only
 """
 
@@ -35,6 +42,23 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 RECORDS = REPO / "docs" / "failure-shapes"
 SPEC = REPO / "docs" / "specs" / "2026-09-17-failure-shape-index.md"
 PENDING = re.compile(r"^TBD\(.+\)$")
+#: Files in RECORDS that are documentation about the records, not records.
+NOT_RECORDS = {"README.md"}
+
+#: Dropped before overlap is computed. Small and fixed on purpose: the column is a
+#: lexical characterisation, and a tunable list would make it a tunable number.
+STOPWORDS = frozenset(
+    """a an the and or but if so of to in on at by for from with as into over under
+    is are was were be been being am do does did done has have had having it its
+    this that these those there here i me my we our you your he she they them
+    their what which who whom whose when where why how not no nor than then too
+    very can will would should could may might must shall""".split()
+)
+
+
+def record_files():
+    """Every record file, in a fixed order — README and friends excluded."""
+    return sorted(p for p in RECORDS.glob("*.md") if p.name not in NOT_RECORDS)
 
 
 def _front_matter_slug(path: pathlib.Path) -> str | None:
@@ -61,7 +85,7 @@ def record_slugs() -> tuple:
     first without the second passes a rename silently — measured, 2026-09-18.
     """
     slugs, mismatched = set(), []
-    for path in RECORDS.glob("*.md"):
+    for path in record_files():
         slug = _front_matter_slug(path)
         if not slug:
             mismatched.append((path.name, "<no slug in front matter>"))
@@ -131,7 +155,7 @@ def control_record() -> tuple:
     Querying it is a positive control on the CORPUS: if a record's own words cannot be
     retrieved, no arrival-phrasing score below is interpretable.
     """
-    for path in sorted(RECORDS.glob("*.md")):
+    for path in record_files():
         text = path.read_text(encoding="utf-8")
         slug = _front_matter_slug(path)
         marker = "**Actually answered:** "
@@ -161,6 +185,53 @@ def corpus_is_indexed(wing: str, limit: int, search_fn=None) -> tuple:
     return True, f"corpus control ok: verbatim text of {slug} retrievable"
 
 
+def tokens(text: str) -> set:
+    """Lowercase, split on non-alphanumerics, drop STOPWORDS. A slug's `-` splits too."""
+    return {t for t in re.split(r"[^a-z0-9]+", (text or "").lower()) if t and t not in STOPWORDS}
+
+
+def overlap(trigger: str, target: str):
+    """|trigger ∩ target| / |trigger| over token sets; None when the trigger has no tokens.
+
+    None is rendered `n/a`, never 0.0 — a zero reads as "disjoint", which is a
+    finding, and an empty trigger is not one.
+    """
+    t = tokens(trigger)
+    if not t:
+        return None
+    return len(t & tokens(target)) / len(t)
+
+
+def _front_matter_field(text: str, key: str) -> str:
+    """One scalar front-matter field, folding a YAML continuation line onto it."""
+    if not text.startswith("---"):
+        return ""
+    lines = text.split("---", 2)[1].splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith(f"{key}:"):
+            value = line.split(":", 1)[1].strip()
+            for cont in lines[i + 1 :]:
+                if cont.startswith("  ") and not cont.startswith("- "):
+                    value += " " + cont.strip()
+                else:
+                    break
+            return value
+    return ""
+
+
+def record_asked_answered(slug: str) -> str:
+    """The record's `asked` + `answered` text from disk, or "" when there is no such record."""
+    path = RECORDS / f"{slug}.md"
+    if path.name in NOT_RECORDS or not path.is_file():
+        return ""
+    text = path.read_text(encoding="utf-8")
+    return " ".join(x for x in (_front_matter_field(text, k) for k in ("asked", "answered")) if x)
+
+
+def _fmt(score) -> str:
+    return " n/a" if score is None else f"{score:4.2f}"
+
+
 def rank_of(hits: list, slug: str):
     """1-based rank of the first hit naming this slug, else None."""
     for i, h in enumerate(hits, 1):
@@ -179,6 +250,11 @@ def main(argv=None) -> int:
     ap.add_argument("--limit", type=int, default=30)
     ap.add_argument("--check-set-only", action="store_true", help="run the slug set diff and exit")
     ap.add_argument(
+        "--overlap-only",
+        action="store_true",
+        help="print the two token-overlap columns only; no search, no corpus control",
+    )
+    ap.add_argument(
         "--force-score",
         action="store_true",
         help="score even if the corpus control fails; the refusal reason is printed above the table",
@@ -191,7 +267,10 @@ def main(argv=None) -> int:
     if not args.triggers:
         ap.error("--triggers is required unless --check-set-only")
 
-    indexed, reason = corpus_is_indexed(args.wing, args.limit)
+    if args.overlap_only:
+        indexed, reason = True, "overlap only: no search issued, ranks not measured"
+    else:
+        indexed, reason = corpus_is_indexed(args.wing, args.limit)
     if not indexed and not args.force_score:
         print(f"\nREFUSING TO SCORE — {reason}", file=sys.stderr)
         print(
@@ -216,8 +295,9 @@ def main(argv=None) -> int:
         if not trig or PENDING.match(trig):
             b["pending"] += 1
             continue
-        hits = search(trig, args.wing, args.limit)
-        b["scored"].append((trig, slug, rank_of(hits, slug)))
+        rank = None if args.overlap_only else rank_of(search(trig, args.wing, args.limit), slug)
+        ovl = (overlap(trig, slug), overlap(trig, record_asked_answered(slug)))
+        b["scored"].append((trig, slug, rank, ovl))
 
     print("\npartition scores — reported separately by design (see spec §5)")
     for part in sorted(parts):
@@ -226,15 +306,26 @@ def main(argv=None) -> int:
         if not n:
             print(f"\n  {part}: 0 scored, {b['pending']} pending")
             continue
-        at3 = sum(1 for _, _, r in b["scored"] if r and r <= 3)
-        at10 = sum(1 for _, _, r in b["scored"] if r and r <= 10)
-        found = [r for _, _, r in b["scored"] if r]
+        at3 = sum(1 for _, _, r, _ in b["scored"] if r and r <= 3)
+        at10 = sum(1 for _, _, r, _ in b["scored"] if r and r <= 10)
+        found = [r for _, _, r, _ in b["scored"] if r]
         print(f"\n  {part}: n={n} scored, {b['pending']} pending")
-        print(f"    recall@3  {at3}/{n}")
-        print(f"    recall@10 {at10}/{n}")
-        print(f"    not found in top {args.limit}: {n - len(found)}/{n}")
-        for trig, slug, r in b["scored"]:
-            print(f"      {'rank %2d' % r if r else '  miss '}  {slug:<34} {trig[:52]}")
+        if args.overlap_only:
+            print("    recall     not measured (--overlap-only)")
+        else:
+            print(f"    recall@3  {at3}/{n}")
+            print(f"    recall@10 {at10}/{n}")
+            print(f"    not found in top {args.limit}: {n - len(found)}/{n}")
+        for col, idx in (("ovl/slug", 0), ("ovl/asked+answered", 1)):
+            vals = [o[idx] for _, _, _, o in b["scored"] if o[idx] is not None]
+            mean = f"{sum(vals) / len(vals):.2f}" if vals else "n/a"
+            print(f"    {col:<19} mean {mean}  (reported beside recall, never subtracted)")
+        print(
+            f"      {'rank':<7}  {'ovl/slug':>8} {'ovl/asked+answered':>18}  {'slug':<34} trigger"
+        )
+        for trig, slug, r, (o_slug, o_aa) in b["scored"]:
+            cell = "rank %2d" % r if r else ("   --  " if args.overlap_only else "  miss ")
+            print(f"      {cell}  {_fmt(o_slug):>8} {_fmt(o_aa):>18}  {slug:<34} {trig[:52]}")
     print("\nNo aggregate across partitions is printed: pooling an authored partition with an")
     print("independent one reports the author's own recall as if it were a reader's.")
     return rc

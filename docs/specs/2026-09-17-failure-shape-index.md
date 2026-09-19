@@ -190,8 +190,9 @@ Four of these were produced **by this document or by fixing it**, and that is th
 > observed**, which is what a modal value on a shape means — not a claim that the
 > mechanism can only fail that way.
 
-> ⚠️ Four of the 2g-c6 eight are not individually described in #503, so the corpus is
-> **33 on record, 29 citable**; any retrieval measurement must state which set it used.
+> ⚠️ Four of the 2g-c6 eight are not individually described in #503, so the **seed**
+> corpus is **33 on record, 29 citable**; any retrieval measurement must state which
+> set it used (the shipped set is 31 files — §5).
 > One further candidate is **unadjudicated**: Oracle's §27.4 `grep -c 'failure-shape'`
 > → 0 against rendered text reading "failure SHAPES" (different case, space not hyphen).
 > It is arguably the `keyed-on terms` regime of §2 rather than this class; it is left
@@ -304,15 +305,17 @@ where the caller's string and the card's string have no lexical overlap by desig
 **Do not ship an index first.** The slice measures the retrieval gap on a labelled
 corpus — 2g's own method applied to the palace.
 
-**Shipped here:** `docs/failure-shapes/` — **31** records, one file per record, fields
-per §1 in front matter so each mines as one drawer into wing `memorypalace`; and
+**Shipped here:** `docs/failure-shapes/` — **31** records, one `<slug>.md` file per
+record (Markdown with the §1 fields as YAML front matter, so each mines as one drawer
+into wing `memorypalace`; the `slug` field must equal the filename stem, and
+`--check-set-only` below enforces it); and
 `scripts/failure_shape_recall.py`, which issues each trigger against
 `mempalace search --json` and reports **recall@3** and first-hit rank. Reads only — no
 index, no CLI verb, no ranking change.
 
 ### Why 31 files and not 33
 
-The corpus counts **33 on record**. Four of 2g-c6's eight are counted but never
+The **seed** corpus counts **33 on record**. Four of 2g-c6's eight are counted but never
 described — #503 gives their total, not their mechanisms — so they have no `asked`, no
 `answered`, and cannot be written without inventing them. §25.6 holds **two** distinct
 mechanisms that the section-unit count merged into one.
@@ -395,3 +398,47 @@ Row three is the trap, and separating the partitions is the whole defence agains
 **Pre-register the expected recall before running the harness** (Oracle PART 23): a
 harness whose result is read without a prediction is an instrument nobody has proven can
 see — the shape this corpus exists to index.
+
+### Outcome — one pre-registered run, 2026-09-18, main `9db6577a`
+
+Conditions: 31 records indexed, corpus control (verbatim `answered` text of
+`add-parser-multiline-grep`) at rank 1, no `--force-score`, `--limit 30`. The 21
+independent-fresh triggers were written by a lane briefed from a slug-free incident list
+and locate-only excerpts; a separate, already-contaminated lane mapped them to slugs and
+ran the harness once. Artefacts: `scratch/refuted-claims-provenance/524-step5/`; full
+table on #524.
+
+| partition | n | recall@3 (harness) | recall@3 (file-only) | record file absent from top 30 |
+|---|---|---|---|---|
+| B-blind · slug-primed | 6 | 6/6 — **not readable**, see below | 2/6 (ranks 3, 3) | 4/6 |
+| independent-fresh · slug-blind | 21 | **0/21** | 0/21 (best rank 5) | **16/21** |
+
+Units: rank is the 1-based position in the returned list; *harness* rank is the first hit
+whose JSON contains the slug anywhere (`rank_of`); *file-only* rank is the first
+`source_kind: file` hit whose basename is `<slug>.md`, derived from the same saved hits.
+The harness's own summary line reads "not found in top 30: 15/21" — that unit counts a
+transcript hit for `add-parser-multiline-grep` (rank 14) as found; the record **file** is
+absent in 16.
+
+**Which row fired.** For the only clean partition, *baseline low*: 0/21 at recall@3 and
+16 of 21 record files never appear in the top 30 at all. Retrieval by arrival phrasing
+does not work against the current search stack.
+
+**Why B-blind cannot be read.** Its six rank-1 hits are self-quotation: the wing had
+already mined today's session transcripts, which carry the literal
+`"<trigger>",<slug>,independent-blind` CSV line — the corpus contained the answer key,
+and `rank_of` accepts any hit that mentions the slug (#539). Scored on record files only,
+B-blind is 2/6. Row three of the falsifier table therefore cannot be read off B-blind;
+on file-only ranks both partitions are low (2/6 vs 0/21).
+
+**What follows, and what it depends on.** Two fixes are independent of the index and of
+each other: score on `source_file` only (#539), and keep any trigger table out of every
+session that is mined into the wing under test. The third is the retrieval gap itself —
+curated documents are not candidates at shallow limits (#526; PR #534) — and is not this
+spec's to fix. Re-run after #534 lands and before any trigger text enters a mined session.
+
+The token-overlap columns the harness now reports beside recall are the diagnostic that
+matters most for that re-run: they say whether a miss is a vocabulary gap or a ranking
+gap. **Run their two-way control first** — a deliberately slug-reusing trigger must score
+high and a disjoint one must score zero, on the same target — before trusting any column;
+a metric only ever seen mid-range is not known to discriminate.
