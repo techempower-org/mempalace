@@ -2,9 +2,9 @@ seq: 153
 id: one-daemon-unreachable-message
 date: '2026-09-17'
 bucket: Changed
-commit: HEAD
+commit: 58f8302
 area: CLI
-summary: 'the daemon-unreachable message is written once, not hand-copied at 22 places'
+summary: the daemon-unreachable message is written once, not hand-copied at 22 places
 body: |
   `palace daemon unreachable at` was written out by hand at **22 places**.
   Twenty now route through `_fail_daemon`; two remain on purpose.

@@ -1,10 +1,10 @@
 seq: 151
 id: diary-read-without-identity
-date: 2026-09-17
+date: '2026-09-17'
 bucket: Fixed
-commit: HEAD
+commit: '7156162'
 area: CLI
-summary: "diary read/agents work without a configured identity; the hook keys entries on the harness name"
+summary: diary read/agents work without a configured identity; the hook keys entries on the harness name
 body: |
   `diary read` refused without `--agent`/`MEMPALACE_AGENT_NAME`, and
   answered "No diary entries" to every name a reader could guess, while

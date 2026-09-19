@@ -2,7 +2,7 @@ seq: 165
 id: search-banner-states-depth
 date: '2026-09-18'
 bucket: Fixed
-commit: HEAD
+commit: 0d44883
 area: Search
 summary: the search banner states the DEPTH, never the store — three cases keyed on curated_first_rank
 body: |
@@ -36,6 +36,8 @@ body: |
   therefore has no production caller — kept as a tested predicate with its
   docstring corrected. Three #477 banner tests updated to the new wording, one
   now asserting the phrase "no curated document matched" is ABSENT.
-tests: "8 new (test_search_banner_contract: three cases, K-equality at 14 and 27, never-claims-empty, json null, quiet); 3 #477 banner tests updated"
+tests: '8 new (test_search_banner_contract: three cases, K-equality at 14 and 27, never-claims-empty, json null, quiet); 3 #477 banner tests updated'
 fork_pr: 542
-files: [mempalace/cli.py, mempalace/provenance.py]
+files:
+- mempalace/cli.py
+- mempalace/provenance.py

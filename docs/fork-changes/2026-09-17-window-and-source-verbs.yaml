@@ -2,10 +2,9 @@ seq: 152
 id: window-and-source-verbs
 date: '2026-09-17'
 bucket: Added
-commit: HEAD
-fork_pr: 512
+commit: 95a9385
 area: CLI
-summary: "`mempalace window` walks a wing chronologically; `mempalace source` lists one file's drawers in order"
+summary: '`mempalace window` walks a wing chronologically; `mempalace source` lists one file''s drawers in order'
 body: |
   There was no way to ask the palace "what happened between these two
   timestamps". ``search --since`` filters a **ranked** search, so inside
@@ -63,6 +62,7 @@ body: |
 
   Pairs with palace-daemon#283 (``/window`` + ``/source``, v1.10.0).
 tests: 35 (test_cli_window_source — three-layer wiring with the probes verified to fail independently, every exit-code row executed, the auth-vs-version distinction in both directions, and a real-binary probe)
+fork_pr: 512
 files:
 - mempalace/cli.py
 - tests/test_cli_window_source.py

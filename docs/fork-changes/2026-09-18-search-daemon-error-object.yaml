@@ -2,7 +2,7 @@ seq: 167
 id: search-daemon-error-object
 date: '2026-09-18'
 bucket: Fixed
-commit: HEAD
+commit: 3aca75e
 area: Search
 summary: a daemon error object (-32003 busy, or any error body) is an ERROR with a code, never 0 hits
 body: |
@@ -39,6 +39,7 @@ body: |
   checked", never as "nothing curated exists". This replaces a pre-registered
   "exit 2 on a busy deeper fetch" that would have contradicted the tested
   contract that the deeper fetch is an optimisation, never a dependency.
-tests: "15 new (test_search_daemon_error_object: hybrid/fast/prose busy → exit 2 + code, non-busy → daemon_error, deeper-fetch and auto-fallback degrade with the daemon's words in warnings + header prints them, daemon_busy documented AND emitted as a literal, classifier pass-through/busy-by-code/by-message/string error, MCP busy is the same exception); BRANCHABLE_CODES gains daemon_busy"
+tests: '15 new (test_search_daemon_error_object: hybrid/fast/prose busy → exit 2 + code, non-busy → daemon_error, deeper-fetch and auto-fallback degrade with the daemon''s words in warnings + header prints them, daemon_busy documented AND emitted as a literal, classifier pass-through/busy-by-code/by-message/string error, MCP busy is the same exception); BRANCHABLE_CODES gains daemon_busy'
 fork_pr: 545
-files: [mempalace/cli.py]
+files:
+- mempalace/cli.py

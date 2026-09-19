@@ -2,7 +2,7 @@ seq: 154
 id: check-docs-pr-matcher
 date: '2026-09-17'
 bucket: Fixed
-commit: HEAD
+commit: 80e2c29
 area: Testing
 summary: check-docs must not match a PR number against a commit-sha prefix
 body: |
@@ -60,8 +60,8 @@ body: |
   same failed search sits in either regime, so `direction` is a property of the
   consumer rather than of the mechanism — which is precisely what retrieval keys
   on.
-tests: 'none (shell script + docs); both controls reproducible via scratch/refuted-claims-provenance/nebula-505b-matcher-control.sh'
+tests: none (shell script + docs); both controls reproducible via scratch/refuted-claims-provenance/nebula-505b-matcher-control.sh
+fork_pr: 511
 files:
 - scripts/check-docs.sh
 - docs/specs/2026-09-17-failure-shape-index.md
-fork_pr: 511

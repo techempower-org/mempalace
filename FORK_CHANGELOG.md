@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **`mempalace reconcile-docs` queues a mine for every curated doc the palace missed** (`HEAD` — pending resolution)
+- **`mempalace reconcile-docs` queues a mine for every curated doc the palace missed** ([`fdd0d7f`](https://github.com/techempower-org/mempalace/commit/fdd0d7f))
   The curated-docs re-index hook (`palace-memory-sync.sh`) is a listener,
   and a listener covers only the writes that reach it. Measured on the live
   hook before any code: a doc written in a lane worktree (its Bash matcher
@@ -71,7 +71,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Tests:* tests/test_cli_reconcile_docs.py drives the real CLI against a stub daemon recording raw bytes (22 tests, 4 mutants killed, base control 19/21 red on origin/main); tests/test_curated_pattern_agreement.py
 
 
-- **check-docs step 8 — every merged fork PR must carry a fork-changes entry** (`HEAD` — pending resolution)
+- **check-docs step 8 — every merged fork PR must carry a fork-changes entry** ([`9db6577`](https://github.com/techempower-org/mempalace/commit/9db6577))
   ``check-docs.sh`` verified render parity, sha resolution, sha ancestry and
   upstream PR states, but never that a merged fork PR documented itself. #517
   was green on every check with **no entry at all**, and nothing would have
@@ -106,7 +106,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `scripts/check-entry-coverage.sh`, `scripts/check-docs.sh`, `docs/fork-changes-no-entry.txt`
 
 
-- **30 failure-shape records as drawers, a recall harness, and a section 5 that runs** (`HEAD` — pending resolution)
+- **30 failure-shape records as drawers, a recall harness, and a section 5 that runs** ([`42b3319`](https://github.com/techempower-org/mempalace/commit/42b3319))
   The #503 spec described a slice and it was never built: `docs/failure-shapes/`
   had 0 files, `scripts/failure_shape_recall.py` did not exist, and the falsifier
   table's columns were `outcome | reading` — interpretations with no queries
@@ -163,7 +163,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **failure-shape index follow-up: overlap columns, record-set and markdownlint gates, schema README** (`HEAD` — pending resolution)
+- **failure-shape index follow-up: overlap columns, record-set and markdownlint gates, schema README** ([`d950b11`](https://github.com/techempower-org/mempalace/commit/d950b11))
   Six items queued during #531's review, one PR (Part of #524, #503).
 
   **Harness** (`scripts/failure_shape_recall.py`): two token-overlap columns beside
@@ -201,7 +201,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   backticks — with the seventeen-file incident that earned it.
 
 
-- **401/403 are 64 and 404 stays 2; every daemon-failure JSON carries error, code and source** (`HEAD` — pending resolution)
+- **401/403 are 64 and 404 stays 2; every daemon-failure JSON carries error, code and source** ([`8408188`](https://github.com/techempower-org/mempalace/commit/8408188))
   Three issues, one defect at three layers: the transport discarded the HTTP
   status, so the renderers could not tell a refusal from an outage, so each
   call site invented its own answer.
@@ -287,7 +287,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **a daemon error object (-32003 busy, or any error body) is an ERROR with a code, never 0 hits** (`HEAD` — pending resolution)
+- **a daemon error object (-32003 busy, or any error body) is an ERROR with a code, never 0 hits** ([`3aca75e`](https://github.com/techempower-org/mempalace/commit/3aca75e))
   Measured on production while probing #526: a saturated daemon answered
   ``/search/hybrid`` with HTTP 200 and a JSON-RPC error body —
   ``{"error": {"code": -32003, "message": "daemon busy: 8 MCP tool call(s) in
@@ -326,7 +326,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`
 
 
-- **identical-text hits from different paths are collapsed before the curated deep fetch and the reserved slot** (`HEAD` — pending resolution)
+- **identical-text hits from different paths are collapsed before the curated deep fetch and the reserved slot** ([`a5d8903`](https://github.com/techempower-org/mempalace/commit/a5d8903))
   A document mined at two paths — ``docs/foo.md`` and its
   ``docs/rescued-from-vartmp-20260905/foo.md`` copy — comes back twice, so a
   ``--limit 3`` spends two of its three slots on the same words (#526).
@@ -358,7 +358,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`, `mempalace/result_ordering.py`
 
 
-- **the search banner states the DEPTH, never the store — three cases keyed on curated_first_rank** (`HEAD` — pending resolution)
+- **the search banner states the DEPTH, never the store — three cases keyed on curated_first_rank** ([`0d44883`](https://github.com/techempower-org/mempalace/commit/0d44883))
   "no curated document matched" was a claim about the STORE. What the header
   measured was the RETURNED SET, and in a wing whose curated layer begins at
   rank 14-27 the sentence was true of the result and false of the corpus.
@@ -394,7 +394,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`, `mempalace/provenance.py`
 
 
-- **--limit 3 reaches the curated layer — conditional deep fetch plus one reserved, marked slot** (`HEAD` — pending resolution)
+- **--limit 3 reaches the curated layer — conditional deep fetch plus one reserved, marked slot** ([`69fd30c`](https://github.com/techempower-org/mempalace/commit/69fd30c))
   In a wing with ~941K transcript drawers ``mempalace search --limit 3``
   returned three session transcripts and the banner said no curated document
   matched, so the reader concluded the corpus held nothing. The first curated
@@ -460,7 +460,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **`mempalace window` walks a wing chronologically; `mempalace source` lists one file's drawers in order** (`HEAD` — pending resolution)
+- **`mempalace window` walks a wing chronologically; `mempalace source` lists one file's drawers in order** ([`95a9385`](https://github.com/techempower-org/mempalace/commit/95a9385))
   There was no way to ask the palace "what happened between these two
   timestamps". ``search --since`` filters a **ranked** search, so inside
   the window you get whatever scores highest rather than the sequence — a
@@ -521,7 +521,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`, `tests/test_cli_window_source.py`
 
 
-- **design spec for indexing failure SHAPES, keyed on the action about to be taken** (`HEAD` — pending resolution)
+- **design spec for indexing failure SHAPES, keyed on the action about to be taken** ([`43e6b0c`](https://github.com/techempower-org/mempalace/commit/43e6b0c))
   A design spec only — `docs/specs/2026-09-17-failure-shape-index.md`, no code.
 
   The 2g-c6 session reported eight errors in one night with a single shape: an
@@ -567,7 +567,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **a daemon outage exits 2 (palace unavailable), not 1 (no results)** (`HEAD` — pending resolution)
+- **a daemon outage exits 2 (palace unavailable), not 1 (no results)** ([`4c6a8d0`](https://github.com/techempower-org/mempalace/commit/4c6a8d0))
   ⚠️ **Issue-number correction.** This work and its predecessor were labelled
   `#476` from a plan note; `#476` is actually "maintain-fork-changes.py:
   positional #NN resolver writes wrong shas" and is unrelated. The real issue
@@ -647,7 +647,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`
 
 
-- **the daemon-unreachable message is written once, not hand-copied at 22 places** (`HEAD` — pending resolution)
+- **the daemon-unreachable message is written once, not hand-copied at 22 places** ([`58f8302`](https://github.com/techempower-org/mempalace/commit/58f8302))
   `palace daemon unreachable at` was written out by hand at **22 places**.
   Twenty now route through `_fail_daemon`; two remain on purpose.
 
@@ -707,7 +707,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **daemon-strict `mempalace mine` sent `mode: null` and every mine 422'd** (`HEAD` — pending resolution)
+- **daemon-strict `mempalace mine` sent `mode: null` and every mine 422'd** ([`be81aa7`](https://github.com/techempower-org/mempalace/commit/be81aa7))
   Upstream v3.8 made `--mode` default to `None` so an unset flag could
   inherit a per-source default. `cmd_mine` normalizes it once at the top —
   `mode = getattr(args, "mode", None) or "projects"` — under a comment
@@ -762,7 +762,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`
 
 
-- **check-docs examines every mention of a PR, not just the first, and matches state words as words** (`HEAD` — pending resolution)
+- **check-docs examines every mention of a PR, not just the first, and matches state words as words** ([`7ed80f0`](https://github.com/techempower-org/mempalace/commit/7ed80f0))
   `scripts/check-docs.sh` step 4 did `grep … | head -1` per document, so only
   the FIRST line mentioning a PR number contributed to that document's claimed
   state. The check answered *"does the first mention agree?"* rather than *"do
@@ -817,7 +817,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   documentation of a merged PR. It is the only such pair in the repo.
 
 
-- **check-docs must not match a PR number against a commit-sha prefix** (`HEAD` — pending resolution)
+- **check-docs must not match a PR number against a commit-sha prefix** ([`80e2c29`](https://github.com/techempower-org/mempalace/commit/80e2c29))
   `scripts/check-docs.sh`'s PR-state step extracted candidate numbers as `#NNNN`
   but then matched them per-document as `(#$n|/$n)`. A PR number is also a valid
   commit-sha prefix, so `/459` matched `.../commit/459efab` — and the README line
@@ -877,7 +877,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `scripts/check-docs.sh`, `docs/specs/2026-09-17-failure-shape-index.md`
 
 
-- **diary read/agents work without a configured identity; the hook keys entries on the harness name** (`HEAD` — pending resolution)
+- **diary read/agents work without a configured identity; the hook keys entries on the harness name** ([`7156162`](https://github.com/techempower-org/mempalace/commit/7156162))
   `diary read` refused without `--agent`/`MEMPALACE_AGENT_NAME`, and
   answered "No diary entries" to every name a reader could guess, while
   `list --wing 2g` plainly showed diary-room drawers (AUTO-SAVE,
@@ -937,7 +937,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Tool surface 49 -> 50.
 
 
-- **`pending drain` plans before it posts; a daemon 4xx reads as a request error, not an outage** (`HEAD` — pending resolution)
+- **`pending drain` plans before it posts; a daemon 4xx reads as a request error, not an outage** ([`f7db659`](https://github.com/techempower-org/mempalace/commit/f7db659))
   Two commands whose **report disagreed with what happened**. Neither
   crashed; both answered confidently and wrongly.
 

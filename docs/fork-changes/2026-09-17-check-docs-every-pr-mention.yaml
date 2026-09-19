@@ -1,10 +1,10 @@
 seq: 157
 id: check-docs-every-pr-mention
-date: 2026-09-17
+date: '2026-09-17'
 bucket: Fixed
-commit: HEAD
+commit: 7ed80f0
 area: Docs
-summary: "check-docs examines every mention of a PR, not just the first, and matches state words as words"
+summary: check-docs examines every mention of a PR, not just the first, and matches state words as words
 body: |
   `scripts/check-docs.sh` step 4 did `grep … | head -1` per document, so only
   the FIRST line mentioning a PR number contributed to that document's claimed

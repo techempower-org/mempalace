@@ -2,7 +2,7 @@ seq: 158
 id: mine-mode-never-null
 date: '2026-09-17'
 bucket: Fixed
-commit: HEAD
+commit: be81aa7
 area: CLI
 summary: 'daemon-strict `mempalace mine` sent `mode: null` and every mine 422''d'
 body: |
@@ -55,7 +55,7 @@ body: |
   repository — because a unit test reading a local variable would have
   passed throughout the outage. A structural test walks the AST and fails
   if any payload reads `args.mode` raw again.
-fork_pr: 527
 tests: '12 (test_cli_mine_mode_payload.py: 5 input shapes against a real stub HTTP daemon recording the body, explicit-mode control, seam refusal x2, AST guard; test_pending_drain_null_mode.py: null/missing/explicit queued mode). 4 mutations, each killing its own tests: revert the call site (6), the hub payload (1), the seam guard (2), the drain fallback (1).'
+fork_pr: 527
 files:
 - mempalace/cli.py
