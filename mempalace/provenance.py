@@ -16,7 +16,9 @@ This module is the shared, side-effect-free predicate set for that question:
 * :func:`source_stale` — has the file on disk moved on since it was indexed?
 * :func:`annotate`     — stamp both onto a result list, in place
 * :func:`provenance_note` — the human-readable caveat for one hit
-* :func:`all_transcript`  — "nothing curated matched" for the header line
+* :func:`all_transcript`  — "every hit is a transcript copy". No production
+  caller since #526 replaced the header line that used it with a
+  depth-based one; kept as a tested predicate rather than deleted.
 
 Only :func:`source_stale` touches the filesystem (one ``os.stat``); everything
 else is pure. Nothing here raises: a hit of an unexpected shape degrades to
@@ -282,8 +284,13 @@ def annotate(results):
 def all_transcript(results) -> bool:
     """True when there are hits and every one of them is a transcript copy.
 
-    That is the shape the fleet keeps getting burned by: no curated document
-    matched at all, so nothing in the result set can carry a later correction.
+    ⚠️ No production caller. The search header used this until #526, which
+    replaced "no curated document matched" — a claim about the STORE — with a
+    claim about the DEPTH, and that line keys on ``no_curated_source`` plus the
+    deep fetch's ``curated_first_rank`` instead. Kept because the predicate is
+    correct and tested; do not read its existence as evidence the banner still
+    distinguishes all-transcript from transcript-plus-diary (it does not — the
+    per-hit ⟨transcript⟩ / ⟨diary⟩ tags carry that now).
     """
     if not isinstance(results, list) or not results:
         return False

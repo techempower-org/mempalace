@@ -53,7 +53,6 @@ from .config import MempalaceConfig
 from .corpus_origin import detect_origin_heuristic, detect_origin_llm
 from .llm_client import LLMError, get_provider
 from .provenance import (
-    all_transcript,
     annotate,
     no_curated_source,
     provenance_note,
@@ -936,17 +935,30 @@ def _print_search_header(
     # time (techempower-org/mempalace#451). Say which of the two shapes it is
     # rather than overclaiming "all transcripts" over a mixed set.
     hits = data.get("results") or []
-    if all_transcript(hits):
+    # #526: "no curated document matched" was read as a statement about the
+    # STORE when it is a statement about the DEPTH — the requested limit sizes
+    # the hybrid fusion candidate pool, so at --limit 3 a curated document that
+    # exists is often never a candidate. The banner therefore names the depth,
+    # and the rank the curated layer actually begins at, and tells the reader to
+    # widen the POOL rather than to scroll further down a list.
+    promoted = next(
+        (h for h in hits if isinstance(h, dict) and h.get("promoted")),
+        None,
+    )
+    curated_rank = data.get("curated_first_rank")
+    if promoted is not None:
         print(
-            f"  ! all {len(hits)} hits are session-transcript copies — no curated "
-            "document matched; the source may be newer than its indexed copy"
+            f"  ! 1 curated hit promoted from rank {promoted.get('promoted_from_rank')}; "
+            "the curated layer in this wing begins there — widen the pool with --limit 30"
         )
     elif no_curated_source(hits):
-        print(
-            f"  ! none of the {len(hits)} hits came from a curated document — they "
-            "are session-transcript and palace-diary copies; the source may be "
-            "newer than its indexed copy"
-        )
+        # The transcript/diary split the old banner drew is carried per hit by
+        # the ⟨transcript⟩ / ⟨diary⟩ tags; at this level the useful statement is
+        # the depth. Never "matched" — that is the sentence #526 was filed about.
+        line = f"  ! no curated document in the top {len(hits)}"
+        if curated_rank:
+            line += f" — first curated hit at rank {curated_rank}; widen the pool with --limit 30"
+        print(line)
     if data.get("fallback"):
         print(f"  ! fallback: {data['fallback']}")
     print(f"  via palace-daemon @ {_daemon_url()}")
