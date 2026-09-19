@@ -309,6 +309,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| identical-text hits from different paths are collapsed before the curated deep fetch and the reserved slot | — | `HEAD` — pending resolution |
 | the search banner states the DEPTH, never the store — three cases keyed on curated_first_rank | — | `HEAD` — pending resolution |
 | failure-shape index follow-up: overlap columns, record-set and markdownlint gates, schema README | — | `HEAD` — pending resolution |
 | `mempalace reconcile-docs` queues a mine for every curated doc the palace missed | — | `HEAD` — pending resolution |
