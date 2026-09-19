@@ -200,12 +200,16 @@ def test_a_bad_cursor_exits_64(daemon, capsys):
     assert "cursor" in capsys.readouterr().err
 
 
-def test_an_auth_failure_is_2_but_NOT_the_deploy_message(daemon, capsys):
-    """The distinction the shared helper cannot express.
+def test_an_auth_failure_is_64_but_NOT_the_deploy_message(daemon, capsys):
+    """Two distinctions, and #518 only changed one of them.
 
-    ``_get_daemon_rest`` returns None for 404, 401 AND 403 alike, so an
-    auth mismatch would be reported as "deploy a newer daemon" — sending
-    the reader after entirely the wrong problem.
+    The MESSAGE distinction is #512's and still holds: an auth mismatch must
+    not be reported as "deploy a newer daemon". The CODE moved — 401/403 are
+    now 64, because the daemon answered and refused a well-formed request.
+
+    The old docstring said ``_get_daemon_rest`` returns None for 404, 401 AND
+    403 alike; after #518 that is true only of 404, and the sentence is
+    rewritten rather than left describing removed behaviour.
     """
     # The scripted detail is deliberately neutral. An earlier version used
     # "invalid api key", and the assertion below passed on that word coming
@@ -213,7 +217,7 @@ def test_an_auth_failure_is_2_but_NOT_the_deploy_message(daemon, capsys):
     # 401 into the generic branch entirely. The mock was asserting the field
     # that happened to be right.
     daemon(401, detail="nope")
-    assert _run(cli.cmd_window, _args()) == 2
+    assert _run(cli.cmd_window, _args()) == 64
     err = capsys.readouterr().err
     assert "1.10.0" not in err, f"an auth failure must not blame the version: {err!r}"
     assert "PALACE_API_KEY" in err, (
@@ -224,7 +228,7 @@ def test_an_auth_failure_is_2_but_NOT_the_deploy_message(daemon, capsys):
 
 def test_a_403_is_reported_the_same_way_as_a_401(daemon, capsys):
     daemon(403, detail="nope")
-    assert _run(cli.cmd_window, _args()) == 2
+    assert _run(cli.cmd_window, _args()) == 64
     err = capsys.readouterr().err
     assert "PALACE_API_KEY" in err
     assert "1.10.0" not in err
@@ -259,25 +263,35 @@ def test_transport_failure_json_keeps_the_window_family_shape(daemon, capsys):
     `test_a_transport_failure_exits_2` still passes, because it asserts only
     the exit code.
 
-    ⭐ The JSON is where they differ, and nothing was watching it:
+    ⭐ The JSON is where they differed, and nothing was watching it:
 
-        window/source family   {"error": <key>, "message": <prose>, …}
+        window/source family   {"error": <key>,   "message": <prose>, …}
         _fail_daemon           {"error": <prose>, "source": "daemon"}
 
-    A client branching on `error` gets a stable key from one and an
-    unstructured sentence from the other. So this pins the family shape: a
-    fold onto `_fail_daemon` now fails loudly here instead of passing green
-    and quietly changing two verbs' machine output.
+    A client branching on `error` got a stable key from one and an
+    unstructured sentence from the other. #521 resolved that with option C
+    rather than by picking a winner: prose in `error` EVERYWHERE, the
+    branchable key in `code` EVERYWHERE. So this test now pins the UNION —
+    which is a stronger guard than before, because it fails both on a fold
+    that drops the key and on one that drops the deprecated `message`.
+
+    `message` is retained for one release and duplicates `error`. Removing it
+    in the same release that introduced `code` would break the readers #512
+    created for no benefit; the deprecation is stated in `_window_route_failed`
+    and in cli.py's header contract.
     """
     import json
 
     daemon(0, raise_transport=True)
     assert _run(cli.cmd_window, _args(json=True)) == 2
     payload = json.loads(capsys.readouterr().out)
-    assert payload["error"] == "daemon_unavailable", (
-        "`error` must stay a branchable KEY for this family, not prose"
+    assert payload["code"] == "daemon_unavailable", (
+        "the branchable key moved to `code` (#521) and must still be present"
     )
-    assert "message" in payload, "the prose belongs in `message`"
+    assert payload["error"] == payload["message"], (
+        "`error` now carries the prose; `message` duplicates it for one release"
+    )
+    assert payload["source"] == "daemon"
 
 
 def test_without_a_daemon_url_it_refuses_with_2(monkeypatch, capsys):

@@ -113,6 +113,92 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `docs/failure-shapes/`, `scripts/failure_shape_recall.py`, `docs/specs/2026-09-17-failure-shape-index.md`
 
 
+### Changed
+
+
+- **401/403 are 64 and 404 stays 2; every daemon-failure JSON carries error, code and source** (`HEAD` — pending resolution)
+  Three issues, one defect at three layers: the transport discarded the HTTP
+  status, so the renderers could not tell a refusal from an outage, so each
+  call site invented its own answer.
+
+  **#518 — 401/403 are 64, 404 stays 2.** `_call_daemon_rest` and
+  `_patch_daemon_rest` returned `None` for 404, 401 and 403 alike.
+  Measured on 7ed80f03 against a stub daemon: `status`, `stats` and
+  `wings` exited **2** for every one of closed-port / 401 / 403 / 404, all
+  with "palace daemon unreachable" and no branchable key in the payload. A
+  wrong `PALACE_API_KEY` was indistinguishable from an old daemon.
+  `doctor` was worse — it reported
+  `unreachable @ …: 'NoneType' object has no attribute 'get'`, leaking an
+  AttributeError into the user-facing line.
+
+  After: 401/403 exit 64 with `code: auth_failed`; 404 and transport
+  failures stay 2. 404 still returns `None` deliberately, because six call
+  sites read `None` as "fall back to MCP" and a missing route is
+  unavailability for that verb. The 404 assertion is unchanged; the
+  combined test was split because two of its three codes now differ.
+
+  The routing is centralised in `_fail_daemon` rather than left to each
+  site's `except` order: of the eight `_call_daemon_rest` consumers only
+  five catch `DaemonRequestError` before `DaemonError`, so raising alone
+  would have fixed five and silently left `_fast_hits`, `cmd_status` and
+  `cmd_doctor` reporting a refused credential as an outage.
+
+  **#521 — option C, applied everywhere.** Every daemon-failure JSON now
+  carries `error` (prose), `code` (a branchable key), `source`, and
+  `status` when an HTTP exchange produced it. `error` holds prose in
+  every writer, so the 20+ readers that print `.error` are unaffected and
+  `code` is purely additive. The window/source family keeps `message` as
+  a duplicate of `error` for one release, deprecated in the docstring and
+  in the header contract.
+
+  `_window_route_failed`'s 401/403 moves 2 -> 64. #512 chose 2 there
+  deliberately. Its docstring, verbatim:
+
+      * **401/403 -> 2**, naming *auth*. Deliberately NOT the deploy message:
+        a key mismatch reported as "deploy a newer daemon" is a refusal
+        naming the wrong reason.
+
+  That argument is about the MESSAGE and it still stands — an auth failure
+  must not be reported as "deploy a newer daemon". Option C preserves it
+  twice over: the prose in `error` still names the credential, and
+  `code: auth_failed` distinguishes it from `code: route_missing` without a
+  reader parsing English. Only the exit code moves, because a refused
+  credential is "the daemon answered and rejected a well-formed request",
+  which the #44 contract numbers 64.
+
+  `cmd_doctor` is fixed here too, and it is the sharpest illustration of why
+  the transport had to carry the status. Before: a 401 reached `data.get(...)`
+  on a `None`, and the AttributeError was swallowed by the blanket handler and
+  rendered as `unreachable @ <url>: 'NoneType' object has no attribute 'get'`
+  — a Python error shown to an operator as an outage. Measured during this
+  change: making 401/403 raise **relocated** that leak to 404 rather than
+  removing it, because 404 still returns `None` and the `.get` still ran. Both
+  halves are now named: "refused the credential (401) — check PALACE_API_KEY"
+  and "/status/fast is missing — older daemon".
+
+  Out of scope and named as such: the 31 client-input `{error, hint}` /
+  `source: "cli"` sites. Those are `_fail_client`'s domain; attaching a daemon
+  `code` and `source: "daemon"` to an argument-parsing error would be wrong.
+
+  `_window_daemon_get` is deliberately not folded into the shared
+  transport: it returns a result for every non-2xx while
+  `_call_daemon_rest` raises, so folding means rewriting its consumer from
+  result-driven to exception-driven rather than deleting a wrapper.
+
+  **#508 — `main()` propagates a handler's exit code.** The symptom no
+  longer reproduces (#509 switched the drain path to `sys.exit`), but the
+  dispatcher still discarded return values, leaving the trap live for the
+  next handler that returned one. The obvious one-liner is harmful:
+  `cmd_sync` returns a `SyncReport`, and `sys.exit(<non-int>)` exits 1
+  after printing `repr()` to stderr — so `sys.exit(dispatch[...](args))`
+  would turn a successful `mempalace sync` into a failure. The guard is
+  `isinstance(rc, int) and not isinstance(rc, bool)`; a mutation to the
+  naive form kills three tests.
+
+  Header contract updated: on a 4xx, what decides 2 vs 64 is who could not
+  proceed, not the status number.
+
+
 ### Fixed
 
 

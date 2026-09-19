@@ -468,7 +468,7 @@ class TestStatsDaemonDown:
                     cli.cmd_stats(self._args())
         assert ex.value.code == 2
 
-    def test_401_exits_2(self, capsys):
+    def test_401_exits_64(self, capsys):
         """Bad auth surfaces as exit 1, same shape as 404."""
         from mempalace import cli
 
@@ -479,9 +479,9 @@ class TestStatsDaemonDown:
             with patch("urllib.request.urlopen", side_effect=unauthorized):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_stats(self._args())
-        assert ex.value.code == 2
+        assert ex.value.code == 64
 
-    def test_403_exits_2(self, capsys):
+    def test_403_exits_64(self, capsys):
         """Forbidden surfaces as exit 1 — daemon reachable but auth bad
         or endpoint disabled."""
         from mempalace import cli
@@ -493,7 +493,7 @@ class TestStatsDaemonDown:
             with patch("urllib.request.urlopen", side_effect=forbidden):
                 with pytest.raises(SystemExit) as ex:
                     cli.cmd_stats(self._args())
-        assert ex.value.code == 2
+        assert ex.value.code == 64
 
     def test_inner_error_envelope_exits_2(self, capsys):
         """Daemon returns 200 with ``{"error": ...}`` — palace itself broken
