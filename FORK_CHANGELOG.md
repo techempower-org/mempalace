@@ -287,6 +287,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **a daemon error object (-32003 busy, or any error body) is an ERROR with a code, never 0 hits** (`HEAD` — pending resolution)
+  Measured on production while probing #526: a saturated daemon answered
+  ``/search/hybrid`` with HTTP 200 and a JSON-RPC error body —
+  ``{"error": {"code": -32003, "message": "daemon busy: 8 MCP tool call(s) in
+  flight (PALACE_MCP_TOOL_MAX_INFLIGHT=8)"}}``. The REST transports returned
+  it verbatim, the search helpers read ``.get("results") or []``, and the CLI
+  printed **0 hits, exit 1** — "the palace was reachable and had nothing to
+  say". A busy daemon was indistinguishable from an empty corpus, and the
+  depth banner would then have said no curated document was in the top N.
+  That is #526's own error class: a statement about the store that is really
+  a statement about something else.
+
+  One classifier, ``_raise_if_daemon_error_object``, keyed on the PAYLOAD (a
+  dict with ``error`` and neither ``results`` nor ``result``), is called by
+  all three transports — REST GET, REST POST and the MCP tool call — so every
+  producer agrees. ``-32003`` or a message containing "busy" raises
+  ``DaemonBusyError``; any other error object raises ``DaemonError`` with the
+  ``"daemon error"`` prefix ``_fail_daemon`` keys its reachable line on.
+  ``cmd_search``'s except now goes through ``_fail_daemon`` (the one
+  search-shaped site #536 did not reach), whose new busy branch emits a dict
+  LITERAL under #536's contract — ``error`` prose, ``code: "daemon_busy"``,
+  ``source``, ``detail`` (the daemon's own words), ``route`` — exit 2. It is a
+  literal on purpose: the contract test walks literals only, so this is how
+  the key documented in the header is shown to be emitted rather than dead
+  vocabulary. ``daemon_busy`` joins the header's documented set and the
+  test's ``BRANCHABLE_CODES`` together.
+
+  Where the failing call is an optimisation — the deeper fetch (#534) and
+  auto-mode's hybrid fallback — the real hits are still returned and the
+  daemon's words travel in ``warnings``, which the search header already
+  prints, so ``curated_first_rank: null`` is read as "the depth was not
+  checked", never as "nothing curated exists". This replaces a pre-registered
+  "exit 2 on a busy deeper fetch" that would have contradicted the tested
+  contract that the deeper fetch is an optimisation, never a dependency.
+
+  *Tests:* 15 new (test_search_daemon_error_object: hybrid/fast/prose busy → exit 2 + code, non-busy → daemon_error, deeper-fetch and auto-fallback degrade with the daemon's words in warnings + header prints them, daemon_busy documented AND emitted as a literal, classifier pass-through/busy-by-code/by-message/string error, MCP busy is the same exception); BRANCHABLE_CODES gains daemon_busy
+  *Files:* `mempalace/cli.py`
+
+
 - **identical-text hits from different paths are collapsed before the curated deep fetch and the reserved slot** (`HEAD` — pending resolution)
   A document mined at two paths — ``docs/foo.md`` and its
   ``docs/rescued-from-vartmp-20260905/foo.md`` copy — comes back twice, so a

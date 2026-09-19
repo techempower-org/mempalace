@@ -309,6 +309,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| a daemon error object (-32003 busy, or any error body) is an ERROR with a code, never 0 hits | — | `HEAD` — pending resolution |
 | identical-text hits from different paths are collapsed before the curated deep fetch and the reserved slot | — | `HEAD` — pending resolution |
 | the search banner states the DEPTH, never the store — three cases keyed on curated_first_rank | — | `HEAD` — pending resolution |
 | failure-shape index follow-up: overlap columns, record-set and markdownlint gates, schema README | — | `HEAD` — pending resolution |

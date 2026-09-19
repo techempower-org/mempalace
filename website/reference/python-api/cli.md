@@ -42,6 +42,25 @@ Examples:
 
 Raised when a daemon HTTP call fails or returns a JSON-RPC error.
 
+### `class DaemonBusyError(DaemonError)`
+
+The daemon answered that it is BUSY — JSON-RPC ``-32003``, or a message
+saying so — and the request was not run (#526, PR 4).
+
+A subclass so every ``except DaemonError`` keeps working. Its own class
+because the reader's next move differs: an outage means check the daemon,
+a refusal means fix the request, busy means retry shortly — and because it
+was measured being rendered as **0 hits, exit 1**: the REST transports
+returned the 200 error body verbatim and ``.get("results") or []`` turned
+a saturated daemon into an empty corpus. Rendered by ``_fail_daemon`` as
+``code: "daemon_busy"``, exit 2.
+
+#### `__init__`
+
+```python
+def __init__(self, message: str, *, detail: str = '', route: str | None = None)
+```
+
 ### `class DaemonRequestError(DaemonError)`
 
 The daemon answered and REFUSED the request — a 4xx, not an outage.
