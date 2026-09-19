@@ -191,9 +191,17 @@ class TestBusyIsDocumentedAndEmittedAsALiteral:
         assert "daemon_busy" in emitted
 
     def test_the_contract_tests_documented_set_names_it(self):
-        from tests.test_cli_daemon_error_contract import BRANCHABLE_CODES
+        # Loaded by FILE PATH, not `from tests.… import`: tests/ has no
+        # __init__.py, so that import is a namespace-package lookup that the
+        # editable .pth resolves to the MAIN checkout's copy — green on main
+        # and CI, red in every worktree (techempower-org/mempalace#546).
+        import importlib.util
 
-        assert "daemon_busy" in BRANCHABLE_CODES
+        sibling = pathlib.Path(__file__).with_name("test_cli_daemon_error_contract.py")
+        spec = importlib.util.spec_from_file_location("_sibling_error_contract", sibling)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert "daemon_busy" in module.BRANCHABLE_CODES
 
 
 class TestClassifier:
