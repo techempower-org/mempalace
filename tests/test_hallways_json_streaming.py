@@ -14,6 +14,7 @@ holds one wing plus a 1 MiB read buffer and passes.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -22,7 +23,6 @@ import textwrap
 
 import pytest
 
-from mempalace import hallways as hallways_mod
 from mempalace.hallway_store import JsonHallwayStore
 
 # Records in the synthetic palace, and the bound on peak RSS growth while the
@@ -32,6 +32,23 @@ from mempalace.hallway_store import JsonHallwayStore
 _RECORDS = 200_000
 _TARGET_WING_RECORDS = 500
 _RSS_GROWTH_BOUND_MB = 64
+
+
+@pytest.fixture
+def hallways_mod(monkeypatch):
+    """The live mempalace.hallways, re-bound as the package attribute.
+
+    tests/test_hallways.py imports the module inside
+    patch.dict("sys.modules", ...), which evicts it again on exit. Later
+    from .hallways import x then loads a second module object, while
+    from . import hallways still returns the first. Binding both to one
+    object keeps these tests independent of collection order.
+    """
+    import mempalace
+
+    mod = importlib.import_module("mempalace.hallways")
+    monkeypatch.setattr(mempalace, "hallways", mod, raising=False)
+    return mod
 
 
 def _record(i: int, wing: str) -> dict:
@@ -53,7 +70,7 @@ def _record(i: int, wing: str) -> dict:
     }
 
 
-def _use_file(monkeypatch, path) -> None:
+def _use_file(monkeypatch, path, hallways_mod) -> None:
     monkeypatch.setattr(hallways_mod, "_get_hallway_file", lambda config=None: str(path))
     monkeypatch.setattr(hallways_mod, "_legacy_hallway_file", lambda: str(path) + ".legacy-absent")
 
@@ -129,9 +146,9 @@ def test_mine_path_peak_rss_does_not_scale_with_palace(tmp_path):
     )
 
 
-def test_save_is_byte_identical_to_json_dump(tmp_path, monkeypatch):
+def test_save_is_byte_identical_to_json_dump(tmp_path, monkeypatch, hallways_mod):
     path = tmp_path / "hallways.json"
-    _use_file(monkeypatch, path)
+    _use_file(monkeypatch, path, hallways_mod)
     records = [_record(i, "w") for i in range(5)]
     records[2]["label"] = 'quotes " and \\ backslash and \n newline and ✦'
     expected = json.dumps(
@@ -147,11 +164,11 @@ def test_save_is_byte_identical_to_json_dump(tmp_path, monkeypatch):
     )
 
 
-def test_replace_wing_refuses_to_overwrite_a_truncated_file(tmp_path, monkeypatch):
+def test_replace_wing_refuses_to_overwrite_a_truncated_file(tmp_path, monkeypatch, hallways_mod):
     """A file cut mid-array must survive a replace. The old store read it as []
     and overwrote it with the one wing, silently dropping every other wing."""
     path = tmp_path / "hallways.json"
-    _use_file(monkeypatch, path)
+    _use_file(monkeypatch, path, hallways_mod)
     hallways_mod._save_hallways([_record(i, f"w{i % 3}") for i in range(30)])
     truncated = path.read_text(encoding="utf-8")[:-40]
     path.write_text(truncated, encoding="utf-8")
@@ -167,9 +184,9 @@ def test_replace_wing_refuses_to_overwrite_a_truncated_file(tmp_path, monkeypatc
     assert store.count() == 0
 
 
-def test_delete_without_a_match_does_not_rewrite(tmp_path, monkeypatch):
+def test_delete_without_a_match_does_not_rewrite(tmp_path, monkeypatch, hallways_mod):
     path = tmp_path / "hallways.json"
-    _use_file(monkeypatch, path)
+    _use_file(monkeypatch, path, hallways_mod)
     hallways_mod._save_hallways([_record(i, "w") for i in range(3)])
     before = os.stat(path)
     store = JsonHallwayStore(None)
@@ -182,9 +199,9 @@ def test_delete_without_a_match_does_not_rewrite(tmp_path, monkeypatch):
     assert [h["id"] for h in store.list()] == [_record(0, "w")["id"], _record(2, "w")["id"]]
 
 
-def test_list_offset_and_limit_match_slicing(tmp_path, monkeypatch):
+def test_list_offset_and_limit_match_slicing(tmp_path, monkeypatch, hallways_mod):
     path = tmp_path / "hallways.json"
-    _use_file(monkeypatch, path)
+    _use_file(monkeypatch, path, hallways_mod)
     records = [_record(i, "a" if i % 2 else "b") for i in range(25)]
     hallways_mod._save_hallways(records)
     store = JsonHallwayStore(None)
@@ -199,9 +216,9 @@ def test_list_offset_and_limit_match_slicing(tmp_path, monkeypatch):
         assert store.count(wing) == len(pool)
 
 
-def test_iter_hallways_stops_at_truncation_without_raising(tmp_path, monkeypatch):
+def test_iter_hallways_stops_at_truncation_without_raising(tmp_path, monkeypatch, hallways_mod):
     path = tmp_path / "hallways.json"
-    _use_file(monkeypatch, path)
+    _use_file(monkeypatch, path, hallways_mod)
     monkeypatch.delenv("MEMPALACE_HALLWAY_BACKEND", raising=False)
     records = [_record(i, "w") for i in range(10)]
     hallways_mod._save_hallways(records)
@@ -212,9 +229,11 @@ def test_iter_hallways_stops_at_truncation_without_raising(tmp_path, monkeypatch
     assert got == records[: len(got)] and 0 < len(got) < 10
 
 
-def test_entity_tunnel_step_streams_instead_of_listing(monkeypatch):
+def test_entity_tunnel_step_streams_instead_of_listing(monkeypatch, hallways_mod):
     """The projects-mode entity-tunnel step must not build the full list (#551)."""
-    from mempalace import miner, palace_graph
+    from mempalace import miner
+
+    palace_graph = importlib.import_module("mempalace.palace_graph")
 
     def _no_full_list(*a, **k):
         raise AssertionError("list_hallways() materializes every record")
