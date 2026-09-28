@@ -411,6 +411,51 @@ class PostgresHallwayStore:
         rows = self._read([(sql, params)], conn=conn, fetch="all", empty=[]) or []
         return [_row_to_record(r) for r in rows]
 
+    def iter(self, batch_size: int = 2000):
+        """Stream every record through a server-side cursor (#551, #553).
+
+        ``iter_hallways`` needs one pass over all wings, for the entity-tunnel
+        step of a derived-graph rebuild. Before, it fell back to ``list()``,
+        which sorts every row by count and fetches them all at once. On the
+        palace host that is 2.6M rows. It hit the statement timeout, so every
+        entity-tunnel rebuild failed, and without the timeout it would hold the
+        whole table in memory (the #551 cliff again). A named cursor keeps
+        ``batch_size`` rows in the client. Each FETCH is a short statement,
+        and one cursor reads one snapshot, so every row comes back exactly once.
+        That is the guarantee separate OFFSET pages lack (#553). No ORDER BY:
+        the single caller aggregates, so order is irrelevant and the sort is
+        pure cost.
+        """
+        conn = self._connect()
+        try:
+            conn.autocommit = False  # a server-side cursor lives inside a transaction
+            with conn.cursor(name="mempalace_hallways_iter") as cur:
+                cur.itersize = batch_size
+                try:
+                    cur.execute(f"SELECT {self._SELECT_COLUMNS} FROM {HALLWAY_TABLE}")
+                except Exception as exc:  # noqa: BLE001 - re-raised unless it is the known case
+                    if not _is_undefined_table(exc):
+                        raise
+                    if not self._missing_table_warned:
+                        self._missing_table_warned = True
+                        logger.warning(
+                            "hallway_backend=postgres but the %s table does not exist; "
+                            "streaming no hallways. Run `python -m mempalace.migrate_hallways`.",
+                            HALLWAY_TABLE,
+                        )
+                    return
+                for row in cur:
+                    yield _row_to_record(row)
+        finally:
+            try:
+                conn.rollback()  # read-only; end the cursor's transaction
+            except Exception:  # noqa: BLE001 - the socket may already be gone
+                logger.debug("hallways: rollback after iter failed", exc_info=True)
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                logger.debug("hallways: closing connection failed", exc_info=True)
+
     def count(self, wing: Optional[str] = None, conn=None) -> int:
         sql = f"SELECT COUNT(*) FROM {HALLWAY_TABLE}"
         params: list = []

@@ -309,6 +309,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| the postgres hallway store streams a full pass through a server-side cursor, so the entity-tunnel rebuild stops timing out on 2.6M rows | — | `HEAD` — pending resolution |
 | postgres get(limit, offset) pages in primary-key order, so offset walks stop missing 27-31% of a wing and duplicating about half | — | `HEAD` — pending resolution |
 | the JSON hallway store streams, so a mine no longer reaches 8 GB and gets OOM-killed on a 1.56 GB hallways.json | — | `HEAD` — pending resolution |
 | a daemon error object (-32003 busy, or any error body) is an ERROR with a code, never 0 hits | — | [`3aca75e`](https://github.com/techempower-org/mempalace/commit/3aca75e) |

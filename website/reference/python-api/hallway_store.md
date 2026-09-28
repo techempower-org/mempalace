@@ -149,6 +149,26 @@ Create the table and indexes if absent. Never drops, never rewrites.
 def list(self, wing: Optional[str] = None, limit = None, offset = None, conn = None) -> list[dict]
 ```
 
+#### `iter`
+
+```python
+def iter(self, batch_size: int = 2000)
+```
+
+Stream every record through a server-side cursor (#551, #553).
+
+``iter_hallways`` needs one pass over all wings, for the entity-tunnel
+step of a derived-graph rebuild. Before, it fell back to ``list()``,
+which sorts every row by count and fetches them all at once. On the
+palace host that is 2.6M rows. It hit the statement timeout, so every
+entity-tunnel rebuild failed, and without the timeout it would hold the
+whole table in memory (the #551 cliff again). A named cursor keeps
+``batch_size`` rows in the client. Each FETCH is a short statement,
+and one cursor reads one snapshot, so every row comes back exactly once.
+That is the guarantee separate OFFSET pages lack (#553). No ORDER BY:
+the single caller aggregates, so order is irrelevant and the sort is
+pure cost.
+
 #### `count`
 
 ```python
