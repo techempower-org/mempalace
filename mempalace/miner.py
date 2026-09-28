@@ -3066,13 +3066,14 @@ def _compute_entity_tunnels_for_wing(wing: str, config=None) -> int:
     Returns the number of tunnels created or refreshed. Zero means no
     eligible entity exists in this wing yet (or no hallway records do).
     """
-    from .hallways import list_hallways
+    from .hallways import iter_hallways
     from .palace_graph import entity_tunnels_for_wing
 
-    hallways = list_hallways(config=config)
-    if not hallways:
-        return 0
-    created = entity_tunnels_for_wing(wing, hallways, config=config)
+    # Streamed, not list_hallways(): one pass is all entity_tunnels_for_wing
+    # makes, and the full list of 2.6M records does not fit in the palace
+    # daemon's 8G cgroup (#551). An empty stream yields no tunnels, the same
+    # result as the old early return.
+    created = entity_tunnels_for_wing(wing, iter_hallways(config=config), config=config)
     return len(created)
 
 

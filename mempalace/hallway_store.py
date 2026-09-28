@@ -184,12 +184,20 @@ def _row_to_record(row) -> dict:
 
 
 class JsonHallwayStore:
-    """The historical store: one JSON file, loaded and rewritten whole.
+    """The historical store: one JSON file, streamed record by record.
 
     Kept as the default and as the fallback for non-postgres installs. Calls
     back into ``hallways`` at call time rather than importing its helpers at
     module scope, so the existing tests that monkeypatch
     ``hallways._get_hallway_file`` keep working unchanged.
+
+    Every method streams (#551). Reads hold only what they return. Writes
+    pass the other wings' records straight from the old file to the temp
+    file. Peak memory therefore tracks one wing's records, not the palace.
+    The old ``json.load`` of the whole file reached more than 8 GB at
+    2.6M records and got the daemon's mine subprocess memcg-killed. The
+    file is still rewritten in full on every write. Only the postgres
+    store makes writes O(wing) in I/O as well.
     """
 
     def __init__(self, config=None):
@@ -198,51 +206,101 @@ class JsonHallwayStore:
     def ensure_schema(self) -> None:
         return None
 
+    def _iter(self):
+        from . import hallways
+
+        return hallways._iter_hallways(self.config)
+
+    def _read(self, fold, empty):
+        """Run ``fold`` over the stream. A missing or corrupt file reads as ``empty``.
+
+        This keeps ``_load_hallways``'s contract, which treats a corrupt file
+        as empty, for every read path.
+        """
+        try:
+            return fold(self._iter())
+        except (OSError, ValueError):
+            logger.debug("hallways: streaming read failed, treating as empty", exc_info=True)
+            return empty
+
     def _all(self) -> list[dict]:
+        return self._read(list, [])
+
+    def iter(self):
+        """Stream every record. A truncated file ends the stream with a warning."""
+        try:
+            yield from self._iter()
+        except (OSError, ValueError) as exc:
+            logger.warning("hallways: stream ended early, file unreadable past this point: %s", exc)
+
+    def _write(self, records, commit=None) -> bool:
         from . import hallways
 
-        return hallways._load_hallways(self.config)
-
-    def _write(self, records: list[dict]) -> None:
-        from . import hallways
-
-        hallways._save_hallways(records, self.config)
+        return hallways._save_hallways(records, self.config, commit=commit)
 
     def list(self, wing: Optional[str] = None, limit=None, offset=None) -> list[dict]:
-        records = self._all()
-        if wing is not None:
-            records = [h for h in records if h.get("wing") == wing]
-        else:
-            records = list(records)
-        if offset:
-            records = records[offset:]
-        if limit is not None:
-            records = records[:limit]
-        return records
+        def fold(stream):
+            out: list[dict] = []
+            skip = offset or 0
+            for h in stream:
+                if wing is not None and h.get("wing") != wing:
+                    continue
+                if skip:
+                    skip -= 1
+                    continue
+                if limit is not None and len(out) >= limit:
+                    break
+                out.append(h)
+            return out
+
+        return self._read(fold, [])
 
     def count(self, wing: Optional[str] = None) -> int:
-        return len(self.list(wing=wing))
+        return self._read(
+            lambda stream: sum(1 for h in stream if wing is None or h.get("wing") == wing), 0
+        )
 
     def dynamics_for_wing(self, wing: str) -> dict:
-        lookup: dict = {}
-        for h in self._all():
-            if h.get("wing") != wing:
-                continue
-            key = tuple(sorted([h.get("entity_a"), h.get("entity_b")]))
-            lookup[key] = {k: h[k] for k in _DYNAMICS if k in h}
-        return lookup
+        def fold(stream):
+            lookup: dict = {}
+            for h in stream:
+                if h.get("wing") != wing:
+                    continue
+                key = tuple(sorted([h.get("entity_a"), h.get("entity_b")]))
+                lookup[key] = {k: h[k] for k in _DYNAMICS if k in h}
+            return lookup
+
+        return self._read(fold, {})
 
     def replace_wing(self, wing: str, records: list[dict]) -> None:
-        preserved = [h for h in self._all() if h.get("wing") != wing]
-        self._write(preserved + list(records))
+        # A truncated or malformed source raises here. The temp file is then
+        # discarded and the existing file stays as it was. The old code read
+        # a corrupt file as [] and overwrote it with this one wing, which
+        # silently dropped every other wing's records.
+        def merged():
+            for h in self._iter():
+                if h.get("wing") != wing:
+                    yield h
+            yield from records
+
+        self._write(merged())
 
     def delete(self, hallway_id: str) -> bool:
-        records = self._all()
-        filtered = [h for h in records if h.get("id") != hallway_id]
-        if len(filtered) == len(records):
+        removed = [0]
+
+        def filtered():
+            for h in self._iter():
+                if h.get("id") == hallway_id:
+                    removed[0] += 1
+                    continue
+                yield h
+
+        try:
+            return self._write(filtered(), commit=lambda: removed[0] > 0)
+        except ValueError:
+            # A corrupt file: nothing to delete, as before (it read as []).
+            logger.debug("hallways: delete could not read the file", exc_info=True)
             return False
-        self._write(filtered)
-        return True
 
 
 class PostgresHallwayStore:

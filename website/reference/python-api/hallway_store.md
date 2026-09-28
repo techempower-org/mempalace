@@ -60,12 +60,20 @@ connection in and holds it open.
 
 ### `class JsonHallwayStore`
 
-The historical store: one JSON file, loaded and rewritten whole.
+The historical store: one JSON file, streamed record by record.
 
 Kept as the default and as the fallback for non-postgres installs. Calls
 back into ``hallways`` at call time rather than importing its helpers at
 module scope, so the existing tests that monkeypatch
 ``hallways._get_hallway_file`` keep working unchanged.
+
+Every method streams (#551). Reads hold only what they return. Writes
+pass the other wings' records straight from the old file to the temp
+file. Peak memory therefore tracks one wing's records, not the palace.
+The old ``json.load`` of the whole file reached more than 8 GB at
+2.6M records and got the daemon's mine subprocess memcg-killed. The
+file is still rewritten in full on every write. Only the postgres
+store makes writes O(wing) in I/O as well.
 
 #### `__init__`
 
@@ -78,6 +86,14 @@ def __init__(self, config = None)
 ```python
 def ensure_schema(self) -> None
 ```
+
+#### `iter`
+
+```python
+def iter(self)
+```
+
+Stream every record. A truncated file ends the stream with a warning.
 
 #### `list`
 

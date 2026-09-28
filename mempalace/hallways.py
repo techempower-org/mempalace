@@ -40,7 +40,7 @@ import tempfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from itertools import combinations
-from typing import Optional
+from typing import Iterable, Iterator, Optional
 
 from .dynamics import initialize_dynamics_fields
 
@@ -58,6 +58,7 @@ _SCHEMA_VERSION = 1
 __all__ = [
     "compute_hallways_for_wing",
     "list_hallways",
+    "iter_hallways",
     "delete_hallway",
 ]
 
@@ -119,32 +120,78 @@ def _load_hallways(config=None) -> list[dict]:
     return []
 
 
-def _save_hallways(hallways: list[dict], config=None) -> None:
+def _iter_hallways(config=None) -> Iterator[dict]:
+    """Yield hallway records one at a time, without loading the file (#551).
+
+    ``_load_hallways`` materializes the whole array. At 1.56 GB / 2.6M records
+    that is more than 8 GB of dicts, and every mine that filed a drawer paid it
+    twice: once for the dynamics lookup, once for the replace. The palace
+    daemon's mine subprocess was memcg-killed at about 8.2 GB anon-rss every
+    10–45 minutes. This reader holds one record plus a 1 MiB buffer.
+
+    A missing file yields nothing, and gets the same legacy-file warning as
+    ``_load_hallways``. A truncated or malformed file raises ``ValueError``
+    part-way through. Callers decide what that means. Readers report empty,
+    as before. Writers refuse to replace a file they could not read to the
+    end, so that one bad byte does not silently drop every other wing's records.
+    """
+    from .migrate_hallways import iter_hallway_records
+
+    current_hallway_file = _get_hallway_file(config)
+    if not os.path.exists(current_hallway_file):
+        _load_hallways(config)  # emits the legacy-file warning, returns []
+        return
+    yield from iter_hallway_records(current_hallway_file)
+
+
+def _dump_record(record: dict) -> str:
+    """One array element, laid out exactly as ``json.dump(indent=2)`` nests it."""
+    return "    " + json.dumps(record, indent=2, ensure_ascii=False).replace("\n", "\n    ")
+
+
+def _save_hallways(hallways: Iterable[dict], config=None, commit=None) -> bool:
     """Atomically persist hallway records to the configured hallway file.
 
     Uses an os.replace temp-file dance so a crash mid-write doesn't
     corrupt the file. POSIX permission is restricted to 0600 because
     hallways reveal within-wing entity connections that the user may
     not want world-readable.
+
+    ``hallways`` may be any iterable, including a generator that reads the
+    file being replaced. Records are written as they arrive, so memory does
+    not grow with the palace (#551). The output is byte-identical to
+    ``json.dump(payload, indent=2, ensure_ascii=False)``. If the iterable
+    raises, the temp file is removed and the existing file is left untouched.
+
+    ``commit`` is an optional zero-argument predicate, checked after the last
+    record is written. If it returns False, the temp file is discarded and
+    nothing is replaced. ``delete`` uses it to avoid rewriting when nothing
+    matched. Returns whether the file was replaced.
     """
     hallway_file = _get_hallway_file(config)
     directory = os.path.dirname(hallway_file)
     os.makedirs(directory, exist_ok=True)
-    payload = {
-        "schema_version": _SCHEMA_VERSION,
-        "hallways": list(hallways),
-    }
     fd, tmp_path = tempfile.mkstemp(prefix=".hallways-", suffix=".tmp", dir=directory)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
+            f.write('{\n  "schema_version": %d,\n  "hallways": [' % _SCHEMA_VERSION)
+            first = True
+            for record in hallways:
+                f.write("\n" if first else ",\n")
+                f.write(_dump_record(record))
+                first = False
+            f.write("]\n}" if first else "\n  ]\n}")
+        if commit is not None and not commit():
+            os.unlink(tmp_path)
+            return False
         try:
             os.chmod(tmp_path, 0o600)
         except OSError:
             # Non-POSIX systems may not support chmod; not fatal.
             pass
         os.replace(tmp_path, hallway_file)
-    except Exception:
+        return True
+    except BaseException:
         try:
             os.unlink(tmp_path)
         except OSError:
@@ -407,6 +454,29 @@ def list_hallways(
     answer ``mempalace_list_hallways`` at all (palace-daemon#255).
     """
     return _hallway_store(config).list(wing=wing, limit=limit, offset=offset)
+
+
+def iter_hallways(config=None) -> Iterator[dict]:
+    """Yield every hallway record without materializing the palace's list (#551).
+
+    For callers that make one pass over all wings, such as the entity-tunnel
+    step of a projects-mode mine. list_hallways() with no wing builds a
+    list of every record. On the JSON store at 2.6M records that is more than
+    8 GB. This streams it instead. On the postgres store it falls back to
+    list(): the store has no cursor API yet, and the palace host is not
+    on that store.
+
+    A JSON file that turns out to be truncated part-way through stops the
+    stream with a warning instead of raising. The records already yielded
+    stand. This is derived-graph input, and the old whole-file reader returned
+    nothing at all for a corrupt file.
+    """
+    store = _hallway_store(config)
+    stream = getattr(store, "iter", None)
+    if stream is None:
+        yield from store.list()
+        return
+    yield from stream()
 
 
 def delete_hallway(hallway_id: str, config=None) -> bool:
