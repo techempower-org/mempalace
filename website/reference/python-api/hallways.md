@@ -105,11 +105,11 @@ def iter_hallways(config = None) -> Iterator[dict]
 Yield every hallway record without materializing the palace's list (#551).
 
 For callers that make one pass over all wings, such as the entity-tunnel
-step of a projects-mode mine. list_hallways() with no wing builds a
+step of a projects-mode mine. ``list_hallways()`` with no wing builds a
 list of every record. On the JSON store at 2.6M records that is more than
-8 GB. This streams it instead. On the postgres store it falls back to
-list(): the store has no cursor API yet, and the palace host is not
-on that store.
+8 GB. This streams it instead. Both stores stream: the JSON store through
+the ``raw_decode`` reader, the postgres store through a server-side cursor.
+A store without ``iter()`` falls back to ``list()``.
 
 A JSON file that turns out to be truncated part-way through stops the
 stream with a warning instead of raising. The records already yielded

@@ -36,12 +36,12 @@ _RSS_GROWTH_BOUND_MB = 64
 
 @pytest.fixture
 def hallways_mod(monkeypatch):
-    """The live mempalace.hallways, re-bound as the package attribute.
+    """The live ``mempalace.hallways``, re-bound as the package attribute.
 
-    tests/test_hallways.py imports the module inside
-    patch.dict("sys.modules", ...), which evicts it again on exit. Later
-    from .hallways import x then loads a second module object, while
-    from . import hallways still returns the first. Binding both to one
+    ``tests/test_hallways.py`` imports the module inside
+    ``patch.dict("sys.modules", ...)``, which evicts it again on exit. Later
+    ``from .hallways import x`` then loads a second module object, while
+    ``from . import hallways`` still returns the first. Binding both to one
     object keeps these tests independent of collection order.
     """
     import mempalace

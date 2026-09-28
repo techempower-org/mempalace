@@ -24,6 +24,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **the postgres hallway store streams a full pass through a server-side cursor, so the entity-tunnel rebuild stops timing out on 2.6M rows** (`HEAD` — pending resolution)
+  ``iter_hallways()`` feeds the entity-tunnel step of every derived-graph
+  rebuild (a projects-mode mine with tunnels, ``mempalace tunnels
+  --rebuild``). On the postgres store it fell back to ``list()``, which sorts
+  every row by co-occurrence and fetches them all at once. After the palace
+  host's #479 cutover that is 2,596,487 rows. Measured read-only, it was
+  cancelled by the statement timeout, so every entity-tunnel rebuild failed.
+  Without the timeout it would hold the whole table in memory, the #551 cliff
+  again on the new store.
+
+  ``PostgresHallwayStore.iter()`` uses a named server-side cursor
+  (``itersize`` 2000, no ORDER BY). One cursor reads one snapshot, so every
+  row comes back exactly once, which separate OFFSET pages do not guarantee
+  (#553). The same prod probe now streams all 2,596,487 rows in 45 s at 93 MB
+  RSS under a 2G cap. A missing table yields nothing, with one warning, the
+  same as the other reads.
+
+  Also restores RST quoting in three #552 docstrings, and the ``miner``
+  entity-tunnel docstring now names ``iter_hallways``.
+
+  *Tests:* 3 new (test_pg_hallway_iter: named cursor + itersize + no ORDER BY + transaction closed; missing table warns once; iter_hallways on postgres never calls list()), all red on the old code
+  *Files:* `mempalace/hallway_store.py`, `mempalace/hallways.py`, `mempalace/miner.py`
+
+
 - **postgres get(limit, offset) pages in primary-key order, so offset walks stop missing 27-31% of a wing and duplicating about half** (`HEAD` — pending resolution)
   ``PostgresCollection.get`` emitted ``LIMIT/OFFSET`` with no ``ORDER BY``.
   Postgres promises no row order without one. With ``synchronize_seqscans``

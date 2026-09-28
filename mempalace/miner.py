@@ -3055,7 +3055,7 @@ def _compute_entity_tunnels_for_wing(wing: str, config=None) -> int:
     """Drop tunnels between ``wing`` and every other wing that shares an
     entity via the within-wing hallway primitive.
 
-    Reads hallway records (``mempalace.hallways.list_hallways``) and
+    Streams hallway records (``mempalace.hallways.iter_hallways``) and
     materializes cross-wing tunnels for any entity that has hallways in
     this wing AND at least one other wing. Tunnels use ``kind="entity"``
     and the synthetic endpoint room ``entity:<name>`` so they're
