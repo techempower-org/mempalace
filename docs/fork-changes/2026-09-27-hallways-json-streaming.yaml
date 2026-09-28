@@ -1,0 +1,42 @@
+seq: 168
+id: hallways-json-streaming
+date: '2026-09-27'
+bucket: Fixed
+commit: HEAD
+area: Hallways
+summary: the JSON hallway store streams, so a mine no longer reaches 8 GB and gets OOM-killed on a 1.56 GB hallways.json
+body: |
+  palace-daemon on the palace host was memcg-OOM-killed every 10-45 minutes
+  at about 8.2 GB anon-rss (#551). The cause was not the transcript. A 35.9 MB
+  transcript mines at 959 MB into a throwaway palace with no hallways. The
+  cause was ``hallways.json``: 1,561,218,945 B and 2,596,749 records, still on
+  the JSON backend because the #479 postgres cutover had not been run. Every
+  convo mine that files a drawer runs ``compute_hallways_for_wing``. The JSON
+  store called ``json.load`` on the whole file for the dynamics lookup, again
+  for ``replace_wing``, and then rewrote the file from one list. A bare
+  ``json.load`` of that file is killed at 8,368,656 kB under an 8G cap. The
+  same mine with a copy of the production file is killed at 8,367,512 kB,
+  which is the production signature.
+
+  ``JsonHallwayStore`` now streams every operation through
+  ``migrate_hallways.iter_hallway_records``. ``_save_hallways`` writes from
+  any iterable, byte-identical to ``json.dump(indent=2)``. ``replace_wing``
+  passes the other wings straight from the old file into the temp file. The
+  same mine now peaks at 978,068 kB max RSS. All 2,596,749 other-wing records
+  come out identical, checked record by record.
+
+  Two behaviour changes. ``replace_wing`` refuses to overwrite a truncated or
+  malformed file. The old code read one as ``[]`` and replaced it with the
+  single wing, silently dropping every other wing. Also, a ``delete`` with no
+  match no longer rewrites the file. The projects-mode entity-tunnel step now
+  streams through a new ``iter_hallways()`` instead of ``list_hallways()``,
+  which lists every record.
+
+  The file is still rewritten in full on each write, which is O(palace) I/O.
+  The #479 postgres store stays the real end state for large palaces. This
+  change removes the memory cliff for installs that stay on JSON.
+tests: '7 new (test_hallways_json_streaming: subprocess peak-RSS gate over 200K records, red on the whole-file store with +235 MB and green with +0; byte-identical save; truncated file survives replace_wing; no-match delete does not rewrite; list offset/limit parity; iter_hallways stops at truncation; the entity-tunnel step never calls list_hallways)'
+files:
+- mempalace/hallways.py
+- mempalace/hallway_store.py
+- mempalace/miner.py
