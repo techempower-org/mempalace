@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **the postgres hallway store streams a full pass through a server-side cursor, so the entity-tunnel rebuild stops timing out on 2.6M rows** (`HEAD` — pending resolution)
+- **the postgres hallway store streams a full pass through a server-side cursor, so the entity-tunnel rebuild stops timing out on 2.6M rows** ([`05b4974`](https://github.com/techempower-org/mempalace/commit/05b4974))
   ``iter_hallways()`` feeds the entity-tunnel step of every derived-graph
   rebuild (a projects-mode mine with tunnels, ``mempalace tunnels
   --rebuild``). On the postgres store it fell back to ``list()``, which sorts
@@ -48,7 +48,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/hallway_store.py`, `mempalace/hallways.py`, `mempalace/miner.py`
 
 
-- **postgres get(limit, offset) pages in primary-key order, so offset walks stop missing 27-31% of a wing and duplicating about half** (`HEAD` — pending resolution)
+- **postgres get(limit, offset) pages in primary-key order, so offset walks stop missing 27-31% of a wing and duplicating about half** ([`fe5516b`](https://github.com/techempower-org/mempalace/commit/fe5516b))
   ``PostgresCollection.get`` emitted ``LIMIT/OFFSET`` with no ``ORDER BY``.
   Postgres promises no row order without one. With ``synchronize_seqscans``
   (the default) and concurrent writes, successive pages start from different
@@ -70,7 +70,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/backends/postgres.py`
 
 
-- **the JSON hallway store streams, so a mine no longer reaches 8 GB and gets OOM-killed on a 1.56 GB hallways.json** (`HEAD` — pending resolution)
+- **the JSON hallway store streams, so a mine no longer reaches 8 GB and gets OOM-killed on a 1.56 GB hallways.json** ([`55811d1`](https://github.com/techempower-org/mempalace/commit/55811d1))
   palace-daemon on the palace host was memcg-OOM-killed every 10-45 minutes
   at about 8.2 GB anon-rss (#551). The cause was not the transcript. A 35.9 MB
   transcript mines at 959 MB into a throwaway palace with no hallways. The
