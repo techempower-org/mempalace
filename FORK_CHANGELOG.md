@@ -24,6 +24,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **postgres get(limit, offset) pages in primary-key order, so offset walks stop missing 27-31% of a wing and duplicating about half** (`HEAD` — pending resolution)
+  ``PostgresCollection.get`` emitted ``LIMIT/OFFSET`` with no ``ORDER BY``.
+  Postgres promises no row order without one. With ``synchronize_seqscans``
+  (the default) and concurrent writes, successive pages start from different
+  scan positions. Measured read-only on the palace host's 997,109-row
+  ``mempalace_drawers``, the ``compute_hallways_for_wing`` walk saw 6,472 and
+  then 6,131 distinct drawers of the money wing's 8,916, with 4,360 and 5,639
+  duplicates. Every offset-paged walk was affected: hallways, which shrank
+  and wobbled from 32,299 to 11,459 in one recompute; export; repair;
+  migrate; closets; the palace graph.
+
+  A paged ``get()`` now adds ``ORDER BY id``. ``id`` is the primary key, so
+  the read is index-ordered. The same walk sees 8,916 of 8,916 with 0
+  duplicates, twice. It takes 66 s against 35 s for the full 997K-row walk.
+  An unpaged ``get()`` keeps its unordered, cheaper plan. Keyset pagination
+  would be faster but changes the ``get(offset=)`` contract, so it is left
+  as a follow-up.
+
+  *Tests:* 6 new (test_postgres_get_paging_order: paged get renders ORDER BY id before LIMIT/OFFSET for 4 shapes; unpaged get stays unordered; real-postgres offset walk over rows whose heap order differs from id order returns every id once, sorted). 5 red on the old code.
+  *Files:* `mempalace/backends/postgres.py`
+
+
 - **the JSON hallway store streams, so a mine no longer reaches 8 GB and gets OOM-killed on a 1.56 GB hallways.json** (`HEAD` — pending resolution)
   palace-daemon on the palace host was memcg-OOM-killed every 10-45 minutes
   at about 8.2 GB anon-rss (#551). The cause was not the transcript. A 35.9 MB
