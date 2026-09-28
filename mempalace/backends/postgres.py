@@ -865,6 +865,16 @@ class PostgresCollection(BaseCollection):
             if clauses
             else self._sql.SQL("")
         )
+        # A paged read needs a total order (#553). Without ORDER BY, postgres
+        # returns rows in whatever order the scan produces, and with
+        # synchronize_seqscans (the default) or concurrent writes, successive
+        # pages start from different scan positions. Measured on the palace
+        # host: an offset walk over mempalace_drawers missed 27-31% of a wing
+        # and duplicated about half, differently on every pass. Every
+        # get(limit=, offset=) loop was affected: hallways, export,
+        # repair, migrate, closets. id is the primary key, so this is an
+        # index-ordered read. An unpaged get() keeps its unordered, cheaper plan.
+        order_clause = self._sql.SQL("ORDER BY id") if (limit or offset) else self._sql.SQL("")
         limit_clause = self._sql.SQL("LIMIT %s") if limit else self._sql.SQL("")
         offset_clause = self._sql.SQL("OFFSET %s") if offset else self._sql.SQL("")
         if limit:
@@ -877,10 +887,11 @@ class PostgresCollection(BaseCollection):
 
         cur = self._cursor()
         cur.execute(
-            self._sql.SQL("SELECT id, document, wing, room, metadata{} FROM {} {} {} {}").format(
+            self._sql.SQL("SELECT id, document, wing, room, metadata{} FROM {} {} {} {} {}").format(
                 embedding_select,
                 self._table_id,
                 where_clause,
+                order_clause,
                 limit_clause,
                 offset_clause,
             ),
