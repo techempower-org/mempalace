@@ -309,6 +309,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| the JSON hallway store streams, so a mine no longer reaches 8 GB and gets OOM-killed on a 1.56 GB hallways.json | — | `HEAD` — pending resolution |
 | a daemon error object (-32003 busy, or any error body) is an ERROR with a code, never 0 hits | — | [`3aca75e`](https://github.com/techempower-org/mempalace/commit/3aca75e) |
 | identical-text hits from different paths are collapsed before the curated deep fetch and the reserved slot | — | [`a5d8903`](https://github.com/techempower-org/mempalace/commit/a5d8903) |
 | the search banner states the DEPTH, never the store — three cases keyed on curated_first_rank | — | [`0d44883`](https://github.com/techempower-org/mempalace/commit/0d44883) |
