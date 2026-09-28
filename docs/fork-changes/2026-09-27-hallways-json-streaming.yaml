@@ -2,7 +2,7 @@ seq: 168
 id: hallways-json-streaming
 date: '2026-09-27'
 bucket: Fixed
-commit: HEAD
+commit: 55811d1
 area: Hallways
 summary: the JSON hallway store streams, so a mine no longer reaches 8 GB and gets OOM-killed on a 1.56 GB hallways.json
 body: |

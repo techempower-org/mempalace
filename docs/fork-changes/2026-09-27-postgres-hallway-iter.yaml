@@ -2,7 +2,7 @@ seq: 170
 id: postgres-hallway-iter
 date: '2026-09-27'
 bucket: Fixed
-commit: HEAD
+commit: 05b4974
 area: Hallways
 summary: the postgres hallway store streams a full pass through a server-side cursor, so the entity-tunnel rebuild stops timing out on 2.6M rows
 body: |

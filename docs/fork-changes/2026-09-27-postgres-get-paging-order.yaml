@@ -2,7 +2,7 @@ seq: 169
 id: postgres-get-paging-order
 date: '2026-09-27'
 bucket: Fixed
-commit: HEAD
+commit: fe5516b
 area: Backends
 summary: postgres get(limit, offset) pages in primary-key order, so offset walks stop missing 27-31% of a wing and duplicating about half
 body: |
