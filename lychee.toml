@@ -6,10 +6,15 @@
 # Format reference:
 #   https://github.com/lycheeverse/lychee/blob/master/lychee.example.toml
 
-# Accept 2xx and 3xx. Some GitHub anchor URLs return 403 to anonymous
+# Accept 2xx and 3xx. 202 is listed explicitly: towardsdatascience.com
+# (Medium) answers 202 Accepted to CI bots on every run (5 of 5 main pushes,
+# 2026-10-03). Be honest about the trade: if that bot wall answers 202 for
+# every path, a dead link on that host can't surface in CI, so this is in
+# effect the same as excluding it. It also accepts any other site's 202. Kept
+# global, like 403/429 below, because the risk is low. Some GitHub anchor URLs return 403 to anonymous
 # scrapers even when the page exists (anti-abuse heuristics); accept 403
 # and 429 too rather than chase per-URL exclusions.
-accept = ["200", "206", "301", "302", "303", "304", "307", "308", "403", "429"]
+accept = ["200", "202", "206", "301", "302", "303", "304", "307", "308", "403", "429"]
 
 # Retry transient failures. CI is the noisy environment, not the
 # real link state.
@@ -46,6 +51,12 @@ exclude = [
     # jphein/mempalace transferred to techempower-org/mempalace and
     # GitHub's redirect can return 404 to unauthenticated scrapers.
     '^https://github\.com/jphein/mempalace(/|$)',
+
+    # familiar.realm.watch is a PRIVATE repo (under both owners), so every link
+    # into it 404s to an unauthenticated checker. They are real links for
+    # people with access. Excluding them turned lychee green on main, which had
+    # failed on 12 of these 404s on every push (measured 2026-10-03, last 5).
+    '^https://github\.com/(jphein|techempower-org)/familiar\.realm\.watch(/|$)',
 
     # Anthropic preview/beta docs URLs occasionally 404 during platform
     # rollouts. We track these in fork-changes.yaml; CI link-checking
