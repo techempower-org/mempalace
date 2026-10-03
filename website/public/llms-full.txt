@@ -309,6 +309,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| the Claude Code plugin's MCP server runs the shipped mempalace-mcp console script again, so palace search works on any host instead of only where a hand-built venv exists | — | `HEAD` — pending resolution |
 | the postgres hallway store streams a full pass through a server-side cursor, so the entity-tunnel rebuild stops timing out on 2.6M rows | — | [`05b4974`](https://github.com/techempower-org/mempalace/commit/05b4974) |
 | postgres get(limit, offset) pages in primary-key order, so offset walks stop missing 27-31% of a wing and duplicating about half | — | [`fe5516b`](https://github.com/techempower-org/mempalace/commit/fe5516b) |
 | the JSON hallway store streams, so a mine no longer reaches 8 GB and gets OOM-killed on a 1.56 GB hallways.json | — | [`55811d1`](https://github.com/techempower-org/mempalace/commit/55811d1) |
