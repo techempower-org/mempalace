@@ -18,6 +18,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-10-03]
+
+
+### Fixed
+
+
+- **the Claude Code plugin's MCP server runs the shipped mempalace-mcp console script again, so palace search works on any host instead of only where a hand-built venv exists** (`HEAD` — pending resolution)
+  ``.claude-plugin/.mcp.json`` had drifted from upstream to
+  ``${CLAUDE_PLUGIN_ROOT}/venv/bin/python …/palace-daemon/clients/mempalace-mcp.py
+  --daemon http://familiar:8085``. That venv is never committed and never synced
+  between hosts, so wherever nobody had built it by hand the server failed to
+  start. ``claude mcp list`` on the palace host reported ``Failed to connect``
+  with ``ENOENT … posix_spawn 'stdio'``. Every Claude Code session outside the
+  memorypalace project then had no palace search, because only that project's
+  own ``.mcp.json`` supplied a working server.
+
+  The file is restored byte-for-byte to upstream's form,
+  ``{"mempalace": {"command": "mempalace-mcp"}}``. That is the console script
+  every install provides, and it already reads the daemon URL and key from the
+  user's environment. It now agrees with ``.claude-plugin/plugin.json`` and the
+  project ``.mcp.json``, which both already said ``mempalace-mcp``. It also drops
+  a hard-coded host and a home-directory path from a shipped manifest.
+
+  Verified: an MCP handshake with ``mempalace-mcp`` from a neutral directory
+  returns ``search-only`` with the single ``mempalace_search`` tool.
+
+  *Tests:* 4 new (test_claude_plugin_mcp_config: valid JSON with a mempalace server; command is a [project.scripts] entry point; no host-specific paths or daemon URL; the three declarations agree), 3 of them red on the old config
+  *Files:* `.claude-plugin/.mcp.json`, `tests/test_claude_plugin_mcp_config.py`
+
+
 ## [2026-09-27]
 
 
