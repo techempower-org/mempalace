@@ -1112,6 +1112,16 @@ def _count_in_scope(drawers_col, where: dict) -> Optional[int]:
         if not where:
             raw = drawers_col.count()
             return int(raw) if isinstance(raw, (int, float)) else None
+        # A backend that can count a filtered scope in one statement says so.
+        # Only a non-negative int is trusted; None (can't), an error, or any
+        # other answer falls through to paging. Paging read every drawer in
+        # the scope: 6.9 s of a 7.0 s postgres search for a 57K wing (measured 2026-10-04).
+        try:
+            direct = drawers_col.count_where(where)
+        except Exception:
+            direct = None
+        if type(direct) is int and direct >= 0:
+            return direct
         PAGE = 5000
         offset = 0
         total = 0

@@ -128,6 +128,18 @@ def rename_wing(self, *, from_wing: str, to_wing: str, batch_size: int = 500) ->
 def count(self) -> int
 ```
 
+#### `count_where`
+
+```python
+def count_where(self, where: Optional[dict] = None) -> Optional[int]
+```
+
+Exact count of rows matching ``where``, in one statement.
+
+Uses ``_where_to_sql``, the same translation ``get()`` uses, so this
+equals the length of a full paged ``get(where=where)``. ``wing`` and
+``room`` filters are served by their btree indexes.
+
 #### `estimated_count`
 
 ```python

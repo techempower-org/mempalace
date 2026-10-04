@@ -290,6 +290,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| a wing-scoped search on postgres counts its scope in one statement instead of reading every drawer, so a 57K-drawer wing searches in 0.08 s (was 7 s) and the 217K-drawer 2g wing in 0.13 s (was 69 s) | — | `HEAD` — pending resolution |
 | the Claude Code plugin's MCP server runs the shipped mempalace-mcp console script again, so palace search works on any host instead of only where a hand-built venv exists | — | `HEAD` — pending resolution |
 | the postgres hallway store streams a full pass through a server-side cursor, so the entity-tunnel rebuild stops timing out on 2.6M rows | — | [`05b4974`](https://github.com/techempower-org/mempalace/commit/05b4974) |
 | postgres get(limit, offset) pages in primary-key order, so offset walks stop missing 27-31% of a wing and duplicating about half | — | [`fe5516b`](https://github.com/techempower-org/mempalace/commit/fe5516b) |

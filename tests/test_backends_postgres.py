@@ -268,3 +268,50 @@ def test_postgres_update_and_rename_guard_wing():
         assert res["metadatas"][0]["wing"] == "renamed_wing_2"
     finally:
         col.delete(ids=["renorm_d1"])
+
+
+def test_postgres_count_where_matches_a_paged_walk(tmp_path):
+    """``count_where`` is the scope count the searcher reports as
+    ``available_in_scope``. It must equal what a paged ``get`` of the same
+    filter returns, for every filter shape the backend translates, because
+    both go through ``_where_to_sql``. Before it existed the searcher paged
+    the whole scope to count it: 6.9 s for a 57K-drawer wing in production."""
+    import uuid
+
+    backend = get_backend("postgres")
+    col = backend.get_collection(
+        palace=_palace_ref(str(tmp_path)),
+        collection_name=f"count_where_{uuid.uuid4().hex[:8]}",
+        create=True,
+        options={"dsn": POSTGRES_DSN},
+    )
+    rows = [("a", "r1")] * 7 + [("a", "r2")] * 5 + [("b", "r1")] * 4
+    col.add(
+        ids=[f"d{i:03d}" for i in range(len(rows))],
+        documents=[f"doc {i}" for i in range(len(rows))],
+        metadatas=[{"wing": w, "room": r} for w, r in rows],
+        embeddings=[[0.01 * (i % 7)] * 384 for i in range(len(rows))],
+    )
+
+    def paged(where):
+        n, offset = 0, 0
+        while True:
+            page = col.get(limit=4, offset=offset, include=[], where=where)
+            if not page["ids"]:
+                return n
+            n += len(page["ids"])
+            offset += len(page["ids"])
+
+    cases = [
+        ({"wing": "a"}, 12),
+        ({"wing": "b"}, 4),
+        ({"wing": "nope"}, 0),
+        ({"$and": [{"wing": "a"}, {"room": "r2"}]}, 5),
+        ({"$or": [{"wing": "b"}, {"room": "r2"}]}, 9),
+        ({"wing": {"$in": ["a", "b"]}}, 16),
+        ({"wing": {"$ne": "a"}}, 4),
+    ]
+    for where, expected in cases:
+        assert col.count_where(where) == expected == paged(where), where
+    # No filter: the same as count().
+    assert col.count_where(None) == col.count() == 16

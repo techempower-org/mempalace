@@ -258,6 +258,22 @@ def count(self) -> int
 def estimated_count(self) -> int
 ```
 
+#### `count_where`
+
+```python
+def count_where(self, where: Optional[dict] = None) -> Optional[int]
+```
+
+Rows matching ``where``, counted without reading them, or ``None``.
+
+``None`` means the backend has no filtered count, and the caller must
+page through ``get`` instead (ChromaDB's ``count()`` takes no
+``where``). A backend that can count in one statement should override
+this: the searcher's in-scope count otherwise reads every drawer in the
+scope, 6.9 s for a 57K-drawer wing on postgres (measured 2026-10-04).
+Wrappers must forward it explicitly, since this default shadows
+``__getattr__``.
+
 #### `close`
 
 ```python

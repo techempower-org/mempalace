@@ -122,6 +122,12 @@ def lexical_search(self, *, query: str, n_results: int = 10, where: Optional[dic
 def facet_counts(self, field: str, where: Optional[dict] = None, limit: int = 1000) -> dict[str, int]
 ```
 
+#### `count_where`
+
+```python
+def count_where(self, where: Optional[dict] = None) -> Optional[int]
+```
+
 #### `get_all_metadata`
 
 ```python

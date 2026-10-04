@@ -178,6 +178,13 @@ class EmbeddingCollection(BaseCollection):
         # client-side counting in mcp_server's try/except.
         return self._inner.facet_counts(field, where=where, limit=limit)
 
+    def count_where(self, where: Optional[dict] = None) -> Optional[int]:
+        # Same MRO shadow as ``facet_counts``: ``BaseCollection.count_where``
+        # is concrete (returns None), so without this forwarder a wrapped
+        # postgres collection would report "can't count" and the searcher
+        # would go back to paging the whole scope.
+        return self._inner.count_where(where)
+
     def get_all_metadata(self, where: Optional[dict] = None) -> list[dict]:
         # ``BaseCollection.get_all_metadata`` ships a concrete default that
         # pages through ``self.get(include=["metadatas"])``. Without this
