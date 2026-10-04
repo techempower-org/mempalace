@@ -1,0 +1,40 @@
+seq: 172
+id: postgres-scope-count
+date: '2026-10-04'
+bucket: Fixed
+commit: HEAD
+area: Search
+summary: a wing-scoped search on postgres counts its scope in one statement instead of reading every drawer, so a 57K-drawer wing searches in 0.08 s (was 7 s) and the 217K-drawer 2g wing in 0.13 s (was 69 s)
+body: |
+  Every scoped search reports ``available_in_scope``. ``_count_in_scope``
+  computed it by paging ``get(include=[])`` 5,000 ids at a time, because
+  ChromaDB's ``count()`` takes no ``where``. On postgres that read the whole
+  scope, and ``include=[]`` still decoded every row's metadata. Profiled on the
+  production palace, one ``wing="memorypalace"`` search spent 6.93 s of 7.0 s
+  there: 12 pages, 57,063 rows. The search itself took about 0.1 s. That was
+  the whole "palace slow (>4s)" timeout on the auto-query hook, about 9 % of
+  its fires on 2026-10-03/04.
+
+  Collections gain an optional ``count_where(where)``. The ``BaseCollection``
+  default returns ``None``, meaning "can't, page instead", so ChromaDB and the
+  other backends keep the old count unchanged. Postgres implements it as one
+  ``SELECT COUNT(*) … WHERE`` through ``_where_to_sql``, the translation
+  ``get()`` uses, so the two cannot disagree. ``EmbeddingCollection`` forwards
+  it explicitly, because the base default shadows ``__getattr__``, the same
+  trap as ``facet_counts`` and ``get_all_metadata``. The searcher trusts only a
+  non-negative int and pages on anything else.
+
+  Measured against the production palace with the same query, 3 runs each,
+  before → after, with ``available_in_scope`` identical:
+
+  - wing ``memorypalace``: 5.7–7.0 s → 0.08 s (57,036)
+  - wing ``2g``: 68–70 s → 0.13 s (216,535)
+  - unscoped: 0.17–0.27 s → 0.17–0.19 s (unchanged)
+tests: '13 new (test_searcher_scope_count: count_where used and get never paged; None, missing, raising or non-int answers fall back to paging; unfiltered keeps count(); base default is None; the wrapper forwards; plus test_postgres_count_where_matches_a_paged_walk against real postgres for wing, $and, $or, $in, $ne, empty and unfiltered scopes). Perturbations, each red on its own test: wrapper forwarder removed, searcher ignores count_where, postgres count drops its WHERE'
+files:
+- mempalace/backends/base.py
+- mempalace/backends/postgres.py
+- mempalace/backends/embedding_wrapper.py
+- mempalace/searcher.py
+- tests/test_searcher_scope_count.py
+- tests/test_backends_postgres.py

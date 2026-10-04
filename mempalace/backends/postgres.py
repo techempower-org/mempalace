@@ -1068,6 +1068,26 @@ class PostgresCollection(BaseCollection):
         cur.execute(self._sql.SQL("SELECT COUNT(*) FROM {}").format(self._table_id))
         return cur.fetchone()[0]
 
+    def count_where(self, where: Optional[dict] = None) -> Optional[int]:
+        """Exact count of rows matching ``where``, in one statement.
+
+        Uses ``_where_to_sql``, the same translation ``get()`` uses, so this
+        equals the length of a full paged ``get(where=where)``. ``wing`` and
+        ``room`` filters are served by their btree indexes.
+        """
+        if not where:
+            return self.count()
+        self._ensure_setup(create=True)
+        where_sql, where_params = self._where_to_sql(where)
+        if not where_sql:
+            return self.count()
+        cur = self._cursor()
+        cur.execute(
+            self._sql.SQL("SELECT COUNT(*) FROM {} WHERE {}").format(self._table_id, where_sql),
+            where_params,
+        )
+        return cur.fetchone()[0]
+
     def estimated_count(self) -> int:
         self._ensure_setup(create=True)
         return self._estimated_count()
