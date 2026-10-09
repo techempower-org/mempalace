@@ -1631,9 +1631,12 @@ class TestCmdSearchProvenance:
             except SystemExit:
                 pass
         out = capsys.readouterr().out
-        assert "no curated document in the top 2" in out, (
+        # The widened fetch examined 4 distinct hits, then truncated to 2. Until
+        # #549 this asserted "top 2", the limit, which was the very undercount
+        # #549 fixed: the banner must name the depth EXAMINED.
+        assert "no curated document in the top 4" in out, (
             "a widened window that still found nothing curated must keep saying so — "
-            "and must say it about the DEPTH, never about the store (#526)"
+            "and must say it about the DEPTH examined, never about the store (#526, #549)"
         )
         assert "no curated document matched" not in out, "the exact sentence #526 was filed about"
 
