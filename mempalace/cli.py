@@ -1013,7 +1013,10 @@ def _print_search_header(
         # The transcript/diary split the old banner drew is carried per hit by
         # the ⟨transcript⟩ / ⟨diary⟩ tags; at this level the useful statement is
         # the depth. Never "matched" — that is the sentence #526 was filed about.
-        line = f"  ! no curated document in the top {len(hits)}"
+        # #549: name the depth actually EXAMINED (30 after a deep fetch), not
+        # the truncated list length, which is only the limit.
+        depth = data.get("depth_examined") or len(hits)
+        line = f"  ! no curated document in the top {depth}"
         if curated_rank:
             line += f" — first curated hit at rank {curated_rank}; widen the pool with --limit 30"
         print(line)
@@ -3196,6 +3199,10 @@ def _daemon_search_fast(query: str, n_results: int, wing: str = None) -> dict | 
         "query": query,
         "source": "bm25-fast",
         "curated_first_rank": curated_rank,
+        # #549: how many distinct hits were checked for a curated document —
+        # the deep fetch's 30 when it ran, the shallow list otherwise. The
+        # results are then truncated to the limit, so len(results) undercounts.
+        "depth_examined": len(hits),
     }
     if warnings:
         data["warnings"] = warnings
@@ -3240,6 +3247,7 @@ def _daemon_search_hybrid(
         prefer_curated(hits)
         data["results"] = _truncate_reserving_curated(hits, n_results, curated_hit, curated_rank)
         data["curated_first_rank"] = curated_rank
+        data["depth_examined"] = len(hits)  # #549: before truncation
     return data
 
 

@@ -18,6 +18,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-10-09]
+
+
+### Fixed
+
+
+- **the "no curated document in the top N" banner names the depth the search actually examined (30 after a deep fetch) instead of the limit, and JSON carries it as depth_examined** (`HEAD` — pending resolution)
+  After #534's conditional deep fetch, a `--limit 3` search with nothing
+  curated in its first three hits re-asks for 30, finds nothing curated there
+  either, then truncates back to 3. The banner read ``len(results)`` after
+  that truncation, so it said "no curated document in the top 3" when the
+  true and stronger statement was "in the top 30". Observed live on
+  2026-09-19 on the `2g` wing.
+
+  Both routes (bm25-fast and hybrid) now record ``depth_examined``, the
+  number of distinct hits checked before truncation, and the banner uses
+  it. Results that never carry the field, from older daemons or other
+  callers, keep the old wording.
+
+  *Tests:* 7 new (test_search_depth_examined: JSON depth after a deep fetch, banner wording, shallow depth without a deep fetch, each on both routes; banner fallback without the field). 6 of 7 red on the old code; dropping the field from the hybrid site alone turns exactly its 3 cases red
+  *Files:* `mempalace/cli.py`, `tests/test_search_depth_examined.py`
+
+
 ## [2026-10-04]
 
 
