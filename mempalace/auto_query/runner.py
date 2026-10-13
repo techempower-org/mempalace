@@ -46,6 +46,47 @@ from mempalace.provenance import source_kind
 _MCP_TIMEOUT_S = 8
 
 
+# Hook deadline. The palace-auto-query hook kills this process at its budget
+# (4 s), but the calls below allow up to 2 s (wings), 2 s (fast route) and
+# _MCP_TIMEOUT_S (hybrid). A hybrid search slower than ~3.5 s was therefore
+# SIGKILLed mid-call: no result, and no receipt saying which call was slow
+# (the residual "palace slow (>4s)" fires, 2026-10-12). When the hook exports
+# MEMPALACE_AQ_DEADLINE (an absolute time.time() value), every daemon call is
+# capped to the time left, and a call with no time left is skipped, so the
+# classifier degrades itself and still prints a receipt. Unset, nothing
+# changes.
+_DEADLINE_MARGIN_S = 0.3
+_MIN_CALL_S = 0.2
+
+
+def _deadline():
+    # type: () -> Optional[float]
+    raw = os.environ.get("MEMPALACE_AQ_DEADLINE", "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def deadline_timeout(default):
+    # type: (float) -> Optional[float]
+    """``default`` capped to the time left before the hook deadline.
+
+    Returns None when there is not enough time left to make the call at all,
+    so the caller can skip it and degrade. With no deadline set, returns
+    ``default`` unchanged.
+    """
+    deadline = _deadline()
+    if deadline is None:
+        return default
+    left = deadline - time.time() - _DEADLINE_MARGIN_S
+    if left < _MIN_CALL_S:
+        return None
+    return min(default, left)
+
+
 class AutoQueryResult:
     """Result of a single auto-query pipeline run."""
 
@@ -566,7 +607,10 @@ def _call_fast_search(query, wing, limit, config):
         headers["X-API-Key"] = api_key
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=2) as resp:
+        timeout = deadline_timeout(2)
+        if timeout is None:
+            return None
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
         return None
@@ -632,8 +676,11 @@ def _call_mcp(tool_call, config):
         method="POST",
     )
 
+    timeout = deadline_timeout(_MCP_TIMEOUT_S)
+    if timeout is None:
+        return None
     try:
-        with urllib.request.urlopen(req, timeout=_MCP_TIMEOUT_S) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8")
             rpc_response = json.loads(body)
             return _extract_mcp_result(rpc_response)

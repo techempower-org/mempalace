@@ -18,6 +18,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-10-13]
+
+
+### Fixed
+
+
+- **the auto-query classifier honours an optional MEMPALACE_AQ_DEADLINE, capping every daemon call to the time left and skipping calls with none, so a slow palace degrades to a receipt instead of a hook kill** (`HEAD` — pending resolution)
+  The palace-auto-query hook kills the classifier at a 4 s budget, but the
+  classifier allowed its daemon calls 2 s (wings) + 2 s (fast route) + 8 s
+  (hybrid /mcp). A hybrid search slower than about 3.5 s was killed
+  mid-call, leaving no result and no receipt naming the slow call. That was
+  the residual "palace slow" fire, measured on 2026-10-12 at light load.
+
+  With `MEMPALACE_AQ_DEADLINE` (epoch seconds) set, `deadline_timeout()`
+  caps each call to the time left minus a 0.3 s margin and skips any call
+  with less than 0.2 s left. The classifier then returns its normal degraded
+  receipt. With the variable unset, every timeout is unchanged. The hook
+  starts exporting the variable in a follow-up claude-config change.
+
+  *Tests:* 13 new (test_auto_query_deadline: deadline_timeout unit cases; each of the wings, fast and mcp calls capped and skipped; the real classifier against a hanging daemon finishes by a 2 s deadline with an error receipt, plus a positive control that without the deadline it outlives a 4 s budget). Making deadline_timeout ignore the variable turns 9 of the 13 red
+  *Files:* `mempalace/auto_query/runner.py`, `mempalace/auto_query/__main__.py`, `tests/test_auto_query_deadline.py`
+
+
 ## [2026-10-09]
 
 
