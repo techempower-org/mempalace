@@ -78,8 +78,13 @@ def _fetch_wings_from_daemon(config):
     if api_key:
         headers["X-API-Key"] = api_key
     req = urllib.request.Request(url, headers=headers, method="GET")
+    from mempalace.auto_query.runner import deadline_timeout
+
+    timeout = deadline_timeout(2)
+    if timeout is None:
+        return set()
     try:
-        with urllib.request.urlopen(req, timeout=2) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
         return set()

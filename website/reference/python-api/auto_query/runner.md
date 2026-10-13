@@ -31,6 +31,18 @@ def __init__(self, injection = None, decision = None, tool_call = None, mcp_resu
 
 ## Functions
 
+### `deadline_timeout`
+
+```python
+def deadline_timeout(default)
+```
+
+``default`` capped to the time left before the hook deadline.
+
+Returns None when there is not enough time left to make the call at all,
+so the caller can skip it and degrade. With no deadline set, returns
+``default`` unchanged.
+
 ### `run_auto_query`
 
 ```python
