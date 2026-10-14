@@ -232,6 +232,10 @@
         "link": "/reference/python-api/migrate_to_postgres"
       },
       {
+        "text": "mempalace.mine_phase",
+        "link": "/reference/python-api/mine_phase"
+      },
+      {
         "text": "mempalace.miner",
         "link": "/reference/python-api/miner"
       },
