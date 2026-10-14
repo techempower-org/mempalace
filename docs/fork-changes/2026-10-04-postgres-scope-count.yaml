@@ -2,7 +2,7 @@ seq: 172
 id: postgres-scope-count
 date: '2026-10-04'
 bucket: Fixed
-commit: HEAD
+commit: b6ff33f
 area: Search
 summary: a wing-scoped search on postgres counts its scope in one statement instead of reading every drawer, so a 57K-drawer wing searches in 0.08 s (was 7 s) and the 217K-drawer 2g wing in 0.13 s (was 69 s)
 body: |

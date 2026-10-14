@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **a convo mine reports its current phase and counts to the file named by MEMPALACE_MINE_PHASE_FILE, so a spawner can see where a slow or idle mine is spending its time** (`HEAD` — pending resolution)
+- **a convo mine reports its current phase and counts to the file named by MEMPALACE_MINE_PHASE_FILE, so a spawner can see where a slow or idle mine is spending its time** ([`70c78e0`](https://github.com/techempower-org/mempalace/commit/70c78e0))
   A drainer-spawned transcript mine once waited 11 h 26 m at ~0 % CPU
   and left no line in any log (#548). Its stdout and stderr are piped
   and read only at exit, and the daemon's own heartbeat (palace-daemon
@@ -52,7 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **the auto-query classifier honours an optional MEMPALACE_AQ_DEADLINE, capping every daemon call to the time left and skipping calls with none, so a slow palace degrades to a receipt instead of a hook kill** (`HEAD` — pending resolution)
+- **the auto-query classifier honours an optional MEMPALACE_AQ_DEADLINE, capping every daemon call to the time left and skipping calls with none, so a slow palace degrades to a receipt instead of a hook kill** ([`b53bd60`](https://github.com/techempower-org/mempalace/commit/b53bd60))
   The palace-auto-query hook kills the classifier at a 4 s budget, but the
   classifier allowed its daemon calls 2 s (wings) + 2 s (fast route) + 8 s
   (hybrid /mcp). A hybrid search slower than about 3.5 s was killed
@@ -75,7 +75,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **the "no curated document in the top N" banner names the depth the search actually examined (30 after a deep fetch) instead of the limit, and JSON carries it as depth_examined** (`HEAD` — pending resolution)
+- **the "no curated document in the top N" banner names the depth the search actually examined (30 after a deep fetch) instead of the limit, and JSON carries it as depth_examined** ([`9078c99`](https://github.com/techempower-org/mempalace/commit/9078c99))
   After #534's conditional deep fetch, a `--limit 3` search with nothing
   curated in its first three hits re-asks for 30, finds nothing curated there
   either, then truncates back to 3. The banner read ``len(results)`` after
@@ -98,7 +98,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **a wing-scoped search on postgres counts its scope in one statement instead of reading every drawer, so a 57K-drawer wing searches in 0.08 s (was 7 s) and the 217K-drawer 2g wing in 0.13 s (was 69 s)** (`HEAD` — pending resolution)
+- **a wing-scoped search on postgres counts its scope in one statement instead of reading every drawer, so a 57K-drawer wing searches in 0.08 s (was 7 s) and the 217K-drawer 2g wing in 0.13 s (was 69 s)** ([`b6ff33f`](https://github.com/techempower-org/mempalace/commit/b6ff33f))
   Every scoped search reports ``available_in_scope``. ``_count_in_scope``
   computed it by paging ``get(include=[])`` 5,000 ids at a time, because
   ChromaDB's ``count()`` takes no ``where``. On postgres that read the whole
@@ -134,7 +134,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **the Claude Code plugin's MCP server runs the shipped mempalace-mcp console script again, so palace search works on any host instead of only where a hand-built venv exists** (`HEAD` — pending resolution)
+- **the Claude Code plugin's MCP server runs the shipped mempalace-mcp console script again, so palace search works on any host instead of only where a hand-built venv exists** ([`5558069`](https://github.com/techempower-org/mempalace/commit/5558069))
   ``.claude-plugin/.mcp.json`` had drifted from upstream to
   ``${CLAUDE_PLUGIN_ROOT}/venv/bin/python …/palace-daemon/clients/mempalace-mcp.py
   --daemon http://familiar:8085``. That venv is never committed and never synced

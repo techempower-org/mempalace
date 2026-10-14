@@ -2,7 +2,7 @@ seq: 175
 id: mine-phase-file
 date: '2026-10-14'
 bucket: Added
-commit: HEAD
+commit: 70c78e0
 area: Mining
 summary: a convo mine reports its current phase and counts to the file named by MEMPALACE_MINE_PHASE_FILE, so a spawner can see where a slow or idle mine is spending its time
 body: |
