@@ -2,7 +2,7 @@ seq: 171
 id: claude-plugin-mcp-command
 date: '2026-10-03'
 bucket: Fixed
-commit: HEAD
+commit: '5558069'
 area: Plugin
 summary: the Claude Code plugin's MCP server runs the shipped mempalace-mcp console script again, so palace search works on any host instead of only where a hand-built venv exists
 body: |

@@ -2,7 +2,7 @@ seq: 173
 id: banner-depth-examined
 date: '2026-10-09'
 bucket: Fixed
-commit: HEAD
+commit: 9078c99
 area: Search
 summary: the "no curated document in the top N" banner names the depth the search actually examined (30 after a deep fetch) instead of the limit, and JSON carries it as depth_examined
 body: |

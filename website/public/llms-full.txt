@@ -309,11 +309,11 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
-| a convo mine reports its current phase and counts to the file named by MEMPALACE_MINE_PHASE_FILE, so a spawner can see where a slow or idle mine is spending its time | — | `HEAD` — pending resolution |
-| the auto-query classifier honours an optional MEMPALACE_AQ_DEADLINE, capping every daemon call to the time left and skipping calls with none, so a slow palace degrades to a receipt instead of a hook kill | — | `HEAD` — pending resolution |
-| the "no curated document in the top N" banner names the depth the search actually examined (30 after a deep fetch) instead of the limit, and JSON carries it as depth_examined | — | `HEAD` — pending resolution |
-| a wing-scoped search on postgres counts its scope in one statement instead of reading every drawer, so a 57K-drawer wing searches in 0.08 s (was 7 s) and the 217K-drawer 2g wing in 0.13 s (was 69 s) | — | `HEAD` — pending resolution |
-| the Claude Code plugin's MCP server runs the shipped mempalace-mcp console script again, so palace search works on any host instead of only where a hand-built venv exists | — | `HEAD` — pending resolution |
+| a convo mine reports its current phase and counts to the file named by MEMPALACE_MINE_PHASE_FILE, so a spawner can see where a slow or idle mine is spending its time | — | [`70c78e0`](https://github.com/techempower-org/mempalace/commit/70c78e0) |
+| the auto-query classifier honours an optional MEMPALACE_AQ_DEADLINE, capping every daemon call to the time left and skipping calls with none, so a slow palace degrades to a receipt instead of a hook kill | — | [`b53bd60`](https://github.com/techempower-org/mempalace/commit/b53bd60) |
+| the "no curated document in the top N" banner names the depth the search actually examined (30 after a deep fetch) instead of the limit, and JSON carries it as depth_examined | — | [`9078c99`](https://github.com/techempower-org/mempalace/commit/9078c99) |
+| a wing-scoped search on postgres counts its scope in one statement instead of reading every drawer, so a 57K-drawer wing searches in 0.08 s (was 7 s) and the 217K-drawer 2g wing in 0.13 s (was 69 s) | — | [`b6ff33f`](https://github.com/techempower-org/mempalace/commit/b6ff33f) |
+| the Claude Code plugin's MCP server runs the shipped mempalace-mcp console script again, so palace search works on any host instead of only where a hand-built venv exists | — | [`5558069`](https://github.com/techempower-org/mempalace/commit/5558069) |
 | the postgres hallway store streams a full pass through a server-side cursor, so the entity-tunnel rebuild stops timing out on 2.6M rows | — | [`05b4974`](https://github.com/techempower-org/mempalace/commit/05b4974) |
 | postgres get(limit, offset) pages in primary-key order, so offset walks stop missing 27-31% of a wing and duplicating about half | — | [`fe5516b`](https://github.com/techempower-org/mempalace/commit/fe5516b) |
 | the JSON hallway store streams, so a mine no longer reaches 8 GB and gets OOM-killed on a 1.56 GB hallways.json | — | [`55811d1`](https://github.com/techempower-org/mempalace/commit/55811d1) |
