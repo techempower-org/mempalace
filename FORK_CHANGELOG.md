@@ -18,6 +18,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-10-14]
+
+
+### Added
+
+
+- **a convo mine reports its current phase and counts to the file named by MEMPALACE_MINE_PHASE_FILE, so a spawner can see where a slow or idle mine is spending its time** (`HEAD` — pending resolution)
+  A drainer-spawned transcript mine once waited 11 h 26 m at ~0 % CPU
+  and left no line in any log (#548). Its stdout and stderr are piped
+  and read only at exit, and the daemon's own heartbeat (palace-daemon
+  #304) can show that a mine is idle but not where.
+
+  With `MEMPALACE_MINE_PHASE_FILE` set, the convo mine rewrites that file
+  atomically with `{phase, since, updated, pid, ...counts}` as it moves
+  through open, prefetch, then per file normalize, chunk and file (embed
+  and write), then hallways, validate and done. Writes within one phase
+  are throttled to one per 2 s; a phase change always writes. The tmp
+  file is opened O_EXCL|O_NOFOLLOW, so a link planted at its name is never
+  written through. Unset, it is a no-op, and a write failure never breaks
+  the mine. Only convo mines are instrumented; a project mine leaves the
+  file absent. The daemon side
+  that sets the variable and reads the file is a follow-up palace-daemon
+  change.
+
+  *Tests:* 6 new (test_mine_phase: unset is a no-op; the record carries phase, pid and counts; same-phase throttling and phase-change writes; an unwritable path never raises; a link planted at the tmp name is not written through; a real convo mine walks all eight phases in order). Removing the file-phase report, the since reset, the throttle, the error swallow, or the O_EXCL|O_NOFOLLOW open each turns one red
+  *Files:* `mempalace/mine_phase.py`, `mempalace/convo_miner.py`, `tests/test_mine_phase.py`
+
+
 ## [2026-10-13]
 
 

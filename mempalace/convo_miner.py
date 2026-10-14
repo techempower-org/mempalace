@@ -21,6 +21,7 @@ from collections import defaultdict
 from typing import Optional
 
 from .backends import PalaceNotFoundError
+from .mine_phase import report as report_phase
 from .collision_scan import assert_no_collisions
 from .ids import (
     ID_RECIPE,
@@ -1506,6 +1507,7 @@ def _mine_convos_impl(
         print("  DRY RUN -- nothing will be filed")
     print(f"{'-' * 55}\n")
 
+    report_phase("open", files_total=len(files))
     collection = _open_convo_collection(
         palace_path,
         dry_run=dry_run,
@@ -1517,6 +1519,7 @@ def _mine_convos_impl(
     # 2000-file sweep used to spend >1h just deciding to skip.
     # prefetch_mined_set() does the same decisions in a single scan; loop
     # body becomes an O(1) dict lookup + a cheap local mtime comparison.
+    report_phase("prefetch", files_total=len(files))
     mined_mtimes: dict = (
         prefetch_mined_set(collection, extract_mode=extract_mode) if collection is not None else {}
     )
@@ -1557,6 +1560,8 @@ def _mine_convos_impl(
             files_skipped += 1
             continue
 
+        progress = {"file": i, "files_total": len(files), "drawers_filed": total_drawers}
+        report_phase("normalize", **progress)
         conversations = _normalize_convo_conversations(
             filepath,
             source_file,
@@ -1596,6 +1601,7 @@ def _mine_convos_impl(
         content_hash = ",".join(h for h, _ in new_items)
 
         # Chunk — either exchange pairs or general extraction
+        report_phase("chunk", **progress)
         if extract_mode == "general":
             from .general_extractor import extract_memories
 
@@ -1645,6 +1651,7 @@ def _mine_convos_impl(
 
         # Lock + purge stale + file fresh chunks. Lock serializes concurrent
         # agents; purge removes pre-v2 drawers so the schema bump applies.
+        report_phase("file", chunks=len(chunks), **progress)
         drawers_added, room_delta, skipped = _file_chunks_locked(
             collection,
             source_file,
@@ -1674,8 +1681,11 @@ def _mine_convos_impl(
         # Compute hallways before the FTS5 validation: the latter opens a direct sqlite
         # connection to the Chroma DB, which can invalidate the live collection handle on
         # some Chroma builds and make the hallway fetch fail.
+        report_phase("hallways", drawers_filed=total_drawers)
         _compute_hallways_for_wing_safe(wing, collection, total_drawers, config=palace_config)
+        report_phase("validate", drawers_filed=total_drawers)
         _validate_palace_fts5_after_mine(palace_path)
+    report_phase("done", drawers_filed=total_drawers)
 
     print(f"\n{'=' * 55}")
     print("  Done.")

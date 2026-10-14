@@ -66,6 +66,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.migrate`](./migrate) — mempalace migrate — Recover a palace created with a different ChromaDB version.
 - [`mempalace.migrate_hallways`](./migrate_hallways) — Move ``hallways.json`` into the postgres hallway table (#442).
 - [`mempalace.migrate_to_postgres`](./migrate_to_postgres) — ChromaDB → Postgres (pgvector + AGE) migration tool.
+- [`mempalace.mine_phase`](./mine_phase) — Report which phase a running mine is in, for whoever spawned it (#548).
 - [`mempalace.miner`](./miner) — miner.py — Files everything into the palace.
 - [`mempalace.multi_encoder`](./multi_encoder) — Multi-encoder retrieval — query N encoder-bound palaces, RRF-fuse.
 - [`mempalace.normalize`](./normalize) — normalize.py — Convert any chat export format to MemPalace transcript format.
