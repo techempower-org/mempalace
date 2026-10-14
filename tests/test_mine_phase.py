@@ -70,6 +70,18 @@ def test_unwritable_path_never_raises(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_a_link_planted_at_the_tmp_name_is_not_written_through(tmp_path, monkeypatch):
+    target = tmp_path / "phase.json"
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me")
+    (tmp_path / f"phase.json.{os.getpid()}.tmp").symlink_to(victim)
+    monkeypatch.setenv(mine_phase.ENV_VAR, str(target))
+    mine_phase.report("open")
+    assert victim.read_text() == "keep me"
+    assert not target.is_symlink()
+    assert _read(target)["phase"] == "open"
+
+
 def test_convo_mine_walks_its_phases_in_order(tmp_path, monkeypatch, capsys):
     convos = tmp_path / "convos"
     convos.mkdir()

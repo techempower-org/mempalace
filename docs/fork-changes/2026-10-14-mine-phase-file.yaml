@@ -15,11 +15,14 @@ body: |
   atomically with `{phase, since, updated, pid, ...counts}` as it moves
   through open, prefetch, then per file normalize, chunk and file (embed
   and write), then hallways, validate and done. Writes within one phase
-  are throttled to one per 2 s; a phase change always writes. Unset, it
-  is a no-op, and a write failure never breaks the mine. The daemon side
+  are throttled to one per 2 s; a phase change always writes. The tmp
+  file is opened O_EXCL|O_NOFOLLOW, so a link planted at its name is never
+  written through. Unset, it is a no-op, and a write failure never breaks
+  the mine. Only convo mines are instrumented; a project mine leaves the
+  file absent. The daemon side
   that sets the variable and reads the file is a follow-up palace-daemon
   change.
-tests: '5 new (test_mine_phase: unset is a no-op; the record carries phase, pid and counts; same-phase throttling and phase-change writes; an unwritable path never raises; a real convo mine walks all eight phases in order). Removing the file-phase report, the since reset, the throttle, or the error swallow each turns one red'
+tests: '6 new (test_mine_phase: unset is a no-op; the record carries phase, pid and counts; same-phase throttling and phase-change writes; an unwritable path never raises; a link planted at the tmp name is not written through; a real convo mine walks all eight phases in order). Removing the file-phase report, the since reset, the throttle, the error swallow, or the O_EXCL|O_NOFOLLOW open each turns one red'
 files:
 - mempalace/mine_phase.py
 - mempalace/convo_miner.py

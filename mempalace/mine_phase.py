@@ -51,7 +51,15 @@ def report(phase: str, **counts) -> None:
     record.update(counts)
     tmp = f"{path}.{os.getpid()}.tmp"
     try:
-        with open(tmp, "w", encoding="utf-8") as f:
+        # O_EXCL | O_NOFOLLOW: never write through a link planted at the tmp
+        # name. Pointed at a shared directory, a plain open() would clobber
+        # whatever the link targets (the pid in the name is guessable).
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        with os.fdopen(os.open(tmp, flags, 0o600), "w", encoding="utf-8") as f:
             json.dump(record, f)
         os.replace(tmp, path)
         _state["written"] = now
