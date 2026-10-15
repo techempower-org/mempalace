@@ -49,6 +49,7 @@ class _FakePgVectorClient:
         self.tables: dict = {}
         self.query_calls: list = []
         self.scroll_calls: list = []
+        self.id_lookups: list = []
         self.facet_calls: list = []
         _FakePgVectorClient.instances.append(self)
 
@@ -105,6 +106,7 @@ class _FakePgVectorClient:
         table,
         *,
         where=None,
+        ids=None,
         with_embedding=False,
         with_document=True,
         limit=None,
@@ -120,7 +122,13 @@ class _FakePgVectorClient:
                 "order_field": order_field,
             }
         )
-        rows = self._filtered(table, where)
+        if ids is not None:
+            self.id_lookups.append(list(ids))
+            store = self.tables.get(table, {"rows": {}})["rows"]
+            rows = [store[item] for item in ids if item in store]
+            rows = [row for row in rows if _matches_where(row.get("metadata") or {}, where)]
+        else:
+            rows = self._filtered(table, where)
         if order_field is not None:
             # Mirror the real backend: ORDER BY metadata->>field DESC NULLS
             # LAST, id — then LIMIT/OFFSET. Sorting by id first and then
@@ -1078,6 +1086,53 @@ def test_pgvector_get_recent_custom_order_field(tmp_path, fake_pgvector):
         embeddings=[[1, 0], [0, 1]],
     )
     assert col.get_recent(limit=2, order_field="authored_at").ids == ["b", "a"]
+
+
+def test_pgvector_id_lookup_uses_the_primary_key():
+    """``get(ids=...)`` is a primary-key fetch, not a scan of the table.
+
+    ``id`` is the primary key, so ``id = ANY(%s)`` is an index lookup. The
+    unfiltered ``WHERE TRUE`` form is what used to read every row.
+    """
+    captured = {}
+
+    class _Recorder(_PgVectorClient):
+        def __init__(self):
+            self._config = None
+
+        def _execute(self, sql, params=None, *, fetch=False, many=False):
+            captured["sql"] = sql
+            captured["params"] = params
+            return []
+
+    _Recorder().scroll_rows("tbl", ids=["b", "a"])
+
+    assert "id = ANY(%s)" in captured["sql"]
+    assert "WHERE (TRUE) AND id = ANY(%s)" in captured["sql"]
+    assert captured["params"] == [["b", "a"]]
+
+    _Recorder().scroll_rows("tbl", where={"wing": "x"}, ids=["b"])
+    assert "metadata @>" in captured["sql"]
+    assert "id = ANY(%s)" in captured["sql"]
+    assert captured["params"][-1] == ["b"]
+
+
+def test_pgvector_get_by_id_reads_only_the_requested_ids(tmp_path, fake_pgvector):
+    _backend, col = _collection(tmp_path)
+    col.add(
+        ids=["a", "b", "c"],
+        documents=["alpha", "beta", "gamma"],
+        metadatas=[{"wing": "x"}, {"wing": "y"}, {"wing": "x"}],
+        embeddings=[[1, 0], [0, 1], [0.5, 0.5]],
+    )
+    client = fake_pgvector.instances[0]
+    client.id_lookups.clear()
+
+    got = col.get(ids=["b"], include=["documents"])
+
+    assert got.ids == ["b"]
+    assert got.documents == ["beta"]
+    assert client.id_lookups == [["b"]]
 
 
 def test_pgvector_scroll_rows_sql_orders_by_metadata_field():
