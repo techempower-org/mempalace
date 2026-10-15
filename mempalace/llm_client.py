@@ -126,6 +126,22 @@ def _endpoint_is_local(url: Optional[str]) -> bool:
     return False
 
 
+def endpoint_is_local(url: Optional[str]) -> bool:
+    """Public name for :func:`_endpoint_is_local`."""
+    return _endpoint_is_local(url)
+
+
+def resolve_openai_url(endpoint: str, leaf: str) -> str:
+    """Join an OpenAI-compatible base URL with ``leaf`` (``chat/completions`` or ``embeddings``)."""
+    url = endpoint.rstrip("/")
+    suffix = "/" + leaf.strip("/")
+    if url.endswith(suffix):
+        return url
+    if not url.endswith("/v1"):
+        url = f"{url}/v1"
+    return f"{url}/{leaf.strip('/')}"
+
+
 class LLMError(RuntimeError):
     """Raised for any provider failure — transport, parse, auth, missing model."""
 
@@ -202,6 +218,61 @@ class LLMProvider:
         (Ollama / OpenAI-compat / Anthropic).
         """
         return not _endpoint_is_local(self.endpoint)
+
+    def sends_api_key(self) -> bool:
+        """Whether the stored key may be attached to a request.
+
+        An environment key is withheld from an external endpoint until the
+        caller has accepted that use. An explicit key is sent.
+        """
+        if not self.api_key:
+            return False
+        if self.api_key_source != "env":
+            return True
+        if not self.is_external_service:
+            return True
+        return bool(self.external_use_accepted)
+
+    def block_silent_external_key(self) -> Optional[str]:
+        """Error when classify would send an env key off-machine, else None."""
+        if self.sends_api_key() or self.api_key_source != "env":
+            return None
+        if not self.is_external_service or self.external_use_accepted:
+            return None
+        return (
+            "Refusing to contact a non-local endpoint with an environment API key. "
+            "Pass the key explicitly or accept external use."
+        )
+
+
+def require_external_consent(
+    provider: LLMProvider,
+    *,
+    accept: bool = False,
+    interactive: bool = False,
+    prompt: Optional[str] = None,
+) -> bool:
+    """Allow an external endpoint only with an explicit yes.
+
+    Local endpoints are allowed. ``accept`` records consent without a prompt.
+    ``interactive`` asks on stdin. A yes sets ``external_use_accepted`` so an
+    environment key may be sent.
+    """
+    if not provider.is_external_service:
+        return True
+    if accept:
+        provider.external_use_accepted = True
+        return True
+    if interactive:
+        text = prompt or "  This endpoint is external. Continue? [y/N] "
+        try:
+            answer = input(text).strip().lower()
+        except EOFError:
+            answer = ""
+        if answer == "y":
+            provider.external_use_accepted = True
+            return True
+    return False
 
 
 def _http_post_json(url: str, body: dict, headers: dict, timeout: int) -> dict:
@@ -337,12 +408,7 @@ class OpenAICompatProvider(LLMProvider):
     def _resolve_url(self) -> str:
         if not self.endpoint:
             raise LLMError("openai-compat provider requires --llm-endpoint")
-        url = self.endpoint.rstrip("/")
-        if url.endswith("/chat/completions"):
-            return url
-        if not url.endswith("/v1"):
-            url = f"{url}/v1"
-        return f"{url}/chat/completions"
+        return resolve_openai_url(self.endpoint, "chat/completions")
 
     def _models_url(self) -> str:
         base = self.endpoint.rstrip("/")
@@ -352,11 +418,7 @@ class OpenAICompatProvider(LLMProvider):
     def served_models(self) -> list[str]:
         """Model ids the endpoint lists; ``[]`` when it cannot be read."""
         req = Request(self._models_url())
-        if self.api_key and (
-            self.api_key_source != "env"
-            or not self.is_external_service
-            or self.external_use_accepted
-        ):
+        if self.sends_api_key():
             req.add_header("Authorization", f"Bearer {self.api_key}")
         with urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
@@ -422,8 +484,11 @@ class OpenAICompatProvider(LLMProvider):
             body["response_format"] = {"type": "json_object"}
         if think is False:
             body["reasoning_effort"] = "none"
+        blocked = self.block_silent_external_key()
+        if blocked:
+            raise LLMError(blocked)
         headers = {}
-        if self.api_key:
+        if self.sends_api_key():
             headers["Authorization"] = f"Bearer {self.api_key}"
         url = self._resolve_url()
         try:
@@ -497,6 +562,9 @@ class AnthropicProvider(LLMProvider):
     ) -> LLMResponse:
         if not self.api_key:
             raise LLMError("Anthropic provider requires ANTHROPIC_API_KEY env or --llm-api-key")
+        blocked = self.block_silent_external_key()
+        if blocked:
+            raise LLMError(blocked)
         sys_prompt = system
         if json_mode:
             sys_prompt += "\n\nRespond with valid JSON only, no prose."
@@ -511,6 +579,8 @@ class AnthropicProvider(LLMProvider):
             "X-API-Key": self.api_key,
             "anthropic-version": self.API_VERSION,
         }
+        if not self.sends_api_key():
+            headers.pop("X-API-Key", None)
         data = _http_post_json(
             f"{self.endpoint}/v1/messages", body, headers=headers, timeout=self.timeout
         )
