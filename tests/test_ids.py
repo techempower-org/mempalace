@@ -124,6 +124,14 @@ def test_make_convo_drawer_id_returns_expected_prefix():
 # ── make_convo_sentinel_id ────────────────────────────────────────────
 
 
+def test_make_format_sentinel_id_is_per_wing_and_path():
+    one = ids.make_format_sentinel_id("wing_a", "/docs/a.pdf")
+    other_wing = ids.make_format_sentinel_id("wing_b", "/docs/a.pdf")
+    other_path = ids.make_format_sentinel_id("wing_a", "/docs/b.pdf")
+    assert one.startswith("_reg_")
+    assert len({one, other_wing, other_path}) == 3
+
+
 def test_make_convo_sentinel_id_returns_expected_prefix():
     """Sentinel IDs are namespaced under '_reg_' so they can be
     filtered out of normal drawer queries."""

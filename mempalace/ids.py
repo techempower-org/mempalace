@@ -97,6 +97,15 @@ def make_convo_drawer_id(
     )
 
 
+def make_format_sentinel_id(wing: str, source_file: str) -> str:
+    """Sentinel id for a format-miner file that produced no drawers.
+
+    Hash input is ``wing``, ``source_file`` and ``format``, so two wings
+    filing the same path do not overwrite each other's marker.
+    """
+    return f"_reg_{_delimited_sha256((wing, source_file, 'format'), _HASH_TRUNC_DRAWER)}"
+
+
 def make_convo_sentinel_id(source_file: str, extract_mode: str) -> str:
     """Sentinel registry ID for the conversation miner zero-chunk-file path.
 
