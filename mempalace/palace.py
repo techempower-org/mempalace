@@ -12,7 +12,7 @@ import re
 import sys
 import threading
 import time
-from typing import Optional
+from typing import Iterable, Optional
 
 from .backends import (
     BackendClosedError,
@@ -1722,8 +1722,24 @@ def file_already_mined(
         return False
 
 
+def _scoped_metadata(collection, where: dict) -> list:
+    """Every matching drawer's metadata, fetched through the index.
+
+    Uses the backend's ``get_all_metadata`` contract (#1796) when it has one:
+    pgvector answers ``metadata @> {...}`` from its GIN index and projects the
+    document column out, so the cost tracks the match, not the palace. Falls
+    back to one filtered ``get`` for collection objects that predate it.
+    """
+    get_all = getattr(collection, "get_all_metadata", None)
+    if callable(get_all):
+        return get_all(where=where)
+    return collection.get(where=where, include=["metadatas"])["metadatas"]
+
+
 def prefetch_mined_set(
-    collection, extract_mode: Optional[str] = None
+    collection,
+    extract_mode: Optional[str] = None,
+    source_files: Optional[Iterable[str]] = None,
 ) -> dict[str, Optional[float]]:
     """Pre-fetch source_file -> stored source_mtime for files already mined
     at the current NORMALIZE_VERSION, in one bulk pass instead of one
@@ -1756,41 +1772,55 @@ def prefetch_mined_set(
     `collection.get(where={"source_file": X})` costs ~2s on a 150k-drawer
     palace, making a 2000-file sweep take >1h of pure skip-checking. This
     helper drops that to a single paginated scan plus O(1) lookups.
+
+    ``source_files`` scopes the answer to those paths: one index-backed
+    ``source_file`` lookup each instead of the whole-palace scan. The scan
+    pays for every drawer in every wing whatever the target, so a one-file
+    drain mine spent minutes in it and once grew to 3.75 GB (#548). The
+    result is exactly the full scan's, restricted to ``source_files``.
     """
     # Per source_file: per stored_mtime group → count + optional chunk_total.
     # A source is only "mined" once some group is complete.
     groups: dict[str, dict] = {}
+
+    def fold(metadatas) -> None:
+        for meta in metadatas:
+            meta = meta or {}
+            src = meta.get("source_file")
+            if not src:
+                continue
+            if not _metadata_matches_extract_mode(meta, extract_mode):
+                continue
+            # Same default as file_already_mined: missing version == 1
+            version = meta.get("normalize_version", 1)
+            if version < NORMALIZE_VERSION:
+                continue
+            stored_mtime = meta.get("source_mtime")
+            mtime_key = float(stored_mtime) if stored_mtime is not None else None
+            entry = groups.setdefault(src, {}).setdefault(
+                mtime_key, {"count": 0, "chunk_total": None}
+            )
+            entry["count"] += 1
+            chunk_total = meta.get("chunk_total")
+            if chunk_total is not None:
+                try:
+                    entry["chunk_total"] = int(chunk_total)
+                except (TypeError, ValueError):
+                    pass
+
     try:
-        total = collection.count()
-        offset = 0
-        while offset < total:
-            batch = collection.get(limit=1000, offset=offset, include=["metadatas"])
-            for meta in batch["metadatas"]:
-                meta = meta or {}
-                src = meta.get("source_file")
-                if not src:
-                    continue
-                if not _metadata_matches_extract_mode(meta, extract_mode):
-                    continue
-                # Same default as file_already_mined: missing version == 1
-                version = meta.get("normalize_version", 1)
-                if version < NORMALIZE_VERSION:
-                    continue
-                stored_mtime = meta.get("source_mtime")
-                mtime_key = float(stored_mtime) if stored_mtime is not None else None
-                entry = groups.setdefault(src, {}).setdefault(
-                    mtime_key, {"count": 0, "chunk_total": None}
-                )
-                entry["count"] += 1
-                chunk_total = meta.get("chunk_total")
-                if chunk_total is not None:
-                    try:
-                        entry["chunk_total"] = int(chunk_total)
-                    except (TypeError, ValueError):
-                        pass
-            if not batch["ids"]:
-                break
-            offset += len(batch["ids"])
+        if source_files is not None:
+            for src in dict.fromkeys(source_files):
+                fold(_scoped_metadata(collection, {"source_file": src}))
+        else:
+            total = collection.count()
+            offset = 0
+            while offset < total:
+                batch = collection.get(limit=1000, offset=offset, include=["metadatas"])
+                fold(batch["metadatas"])
+                if not batch["ids"]:
+                    break
+                offset += len(batch["ids"])
     except Exception:
         logger.warning("prefetch_mined_set: partial fetch, %d source groups loaded", len(groups))
 
@@ -1809,7 +1839,9 @@ def prefetch_mined_set(
 
 
 def prefetch_content_hashes(
-    collection, extract_mode: Optional[str] = None
+    collection,
+    extract_mode: Optional[str] = None,
+    wing: Optional[str] = None,
 ) -> dict[tuple[str, str], str]:
     """Pre-fetch (wing, content_hash) -> source_file for drawers already
     filed at the current NORMALIZE_VERSION, in one bulk pass.
@@ -1835,32 +1867,46 @@ def prefetch_content_hashes(
     the ones that didn't. Only the first source_file seen for a given
     (wing, hash) pair is kept — good enough to detect and skip a repeat,
     the point is not to track every alias.
+
+    ``wing`` scopes the answer to that wing: one index-backed, metadata-only
+    fetch instead of the whole-palace scan. Every key is ``(wing, hash)``,
+    so a miner filing into one wing can never match another wing's drawers.
+    The result is exactly the full scan's keys for that wing.
     """
     hashes: dict[tuple[str, str], str] = {}
+
+    def fold(metadatas) -> None:
+        for meta in metadatas:
+            meta = meta or {}
+            content_hash_field = meta.get("content_hash")
+            src = meta.get("source_file")
+            drawer_wing = meta.get("wing")
+            if not content_hash_field or not src or not drawer_wing:
+                continue
+            if wing is not None and drawer_wing != wing:
+                continue
+            if not _metadata_matches_extract_mode(meta, extract_mode):
+                continue
+            version = meta.get("normalize_version", 1)
+            if version < NORMALIZE_VERSION:
+                continue
+            for content_hash in content_hash_field.split(","):
+                key = (drawer_wing, content_hash)
+                if content_hash and key not in hashes:
+                    hashes[key] = src
+
     try:
-        total = collection.count()
-        offset = 0
-        while offset < total:
-            batch = collection.get(limit=1000, offset=offset, include=["metadatas"])
-            for meta in batch["metadatas"]:
-                meta = meta or {}
-                content_hash_field = meta.get("content_hash")
-                src = meta.get("source_file")
-                wing = meta.get("wing")
-                if not content_hash_field or not src or not wing:
-                    continue
-                if not _metadata_matches_extract_mode(meta, extract_mode):
-                    continue
-                version = meta.get("normalize_version", 1)
-                if version < NORMALIZE_VERSION:
-                    continue
-                for content_hash in content_hash_field.split(","):
-                    key = (wing, content_hash)
-                    if content_hash and key not in hashes:
-                        hashes[key] = src
-            if not batch["ids"]:
-                break
-            offset += len(batch["ids"])
+        if wing is not None:
+            fold(_scoped_metadata(collection, {"wing": wing}))
+        else:
+            total = collection.count()
+            offset = 0
+            while offset < total:
+                batch = collection.get(limit=1000, offset=offset, include=["metadatas"])
+                fold(batch["metadatas"])
+                if not batch["ids"]:
+                    break
+                offset += len(batch["ids"])
     except Exception:
         logger.warning("prefetch_content_hashes: partial fetch, %d hashes loaded", len(hashes))
     return hashes
