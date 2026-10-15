@@ -364,8 +364,8 @@ The convo miner walks thousands of transcript files; per-file
 palace, making a 2000-file sweep take >1h of pure skip-checking. This
 helper drops that to a single paginated scan plus O(1) lookups.
 
-``source_files`` scopes the answer to those paths: one index-backed
-``source_file`` lookup each instead of the whole-palace scan. The scan
+``source_files`` scopes the answer to those paths: one ``source_file``
+lookup each instead of the whole-palace scan. The scan
 pays for every drawer in every wing whatever the target, so a one-file
 drain mine spent 5-10 minutes in it (#548). The
 result is exactly the full scan's, restricted to ``source_files``.
@@ -401,7 +401,7 @@ the ones that didn't. Only the first source_file seen for a given
 (wing, hash) pair is kept — good enough to detect and skip a repeat,
 the point is not to track every alias.
 
-``wing`` scopes the answer to that wing: one index-backed, metadata-only
-fetch instead of the whole-palace scan. Every key is ``(wing, hash)``,
+``wing`` scopes the answer to that wing: one paged fetch of the wing
+instead of the whole-palace scan. Every key is ``(wing, hash)``,
 so a miner filing into one wing can never match another wing's drawers.
 The result is exactly the full scan's keys for that wing.
