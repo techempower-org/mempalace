@@ -1722,18 +1722,24 @@ def file_already_mined(
         return False
 
 
-def _scoped_metadata(collection, where: dict) -> list:
-    """Every matching drawer's metadata, fetched through the index.
+def _iter_scoped_metadata(collection, where: dict, page_size: int = 1000):
+    """Yield pages of the metadata of every drawer matching ``where``.
 
-    Uses the backend's ``get_all_metadata`` contract (#1796) when it has one:
-    pgvector answers ``metadata @> {...}`` from its GIN index and projects the
-    document column out, so the cost tracks the match, not the palace. Falls
-    back to one filtered ``get`` for collection objects that predate it.
+    Pages, like the whole-palace scan, so memory holds one page however
+    large the scope: ``get_all_metadata`` returns the whole match as one
+    list, which for a 217K-drawer wing peaked at 820 MB against the full
+    scan's 204 MB (measured on the postgres palace, 2026-10-15). On the
+    postgres backend ``wing`` is a btree column; ``source_file`` is a
+    ``metadata->>`` comparison with no index yet, about 24 s per lookup
+    on a 1.16M-drawer palace.
     """
-    get_all = getattr(collection, "get_all_metadata", None)
-    if callable(get_all):
-        return get_all(where=where)
-    return collection.get(where=where, include=["metadatas"])["metadatas"]
+    offset = 0
+    while True:
+        batch = collection.get(where=where, limit=page_size, offset=offset, include=["metadatas"])
+        if not batch["ids"]:
+            return
+        yield batch["metadatas"]
+        offset += len(batch["ids"])
 
 
 def prefetch_mined_set(
@@ -1773,8 +1779,8 @@ def prefetch_mined_set(
     palace, making a 2000-file sweep take >1h of pure skip-checking. This
     helper drops that to a single paginated scan plus O(1) lookups.
 
-    ``source_files`` scopes the answer to those paths: one index-backed
-    ``source_file`` lookup each instead of the whole-palace scan. The scan
+    ``source_files`` scopes the answer to those paths: one ``source_file``
+    lookup each instead of the whole-palace scan. The scan
     pays for every drawer in every wing whatever the target, so a one-file
     drain mine spent 5-10 minutes in it (#548). The
     result is exactly the full scan's, restricted to ``source_files``.
@@ -1811,7 +1817,8 @@ def prefetch_mined_set(
     try:
         if source_files is not None:
             for src in dict.fromkeys(source_files):
-                fold(_scoped_metadata(collection, {"source_file": src}))
+                for page in _iter_scoped_metadata(collection, {"source_file": src}):
+                    fold(page)
         else:
             total = collection.count()
             offset = 0
@@ -1868,8 +1875,8 @@ def prefetch_content_hashes(
     (wing, hash) pair is kept — good enough to detect and skip a repeat,
     the point is not to track every alias.
 
-    ``wing`` scopes the answer to that wing: one index-backed, metadata-only
-    fetch instead of the whole-palace scan. Every key is ``(wing, hash)``,
+    ``wing`` scopes the answer to that wing: one paged fetch of the wing
+    instead of the whole-palace scan. Every key is ``(wing, hash)``,
     so a miner filing into one wing can never match another wing's drawers.
     The result is exactly the full scan's keys for that wing.
     """
@@ -1897,7 +1904,8 @@ def prefetch_content_hashes(
 
     try:
         if wing is not None:
-            fold(_scoped_metadata(collection, {"wing": wing}))
+            for page in _iter_scoped_metadata(collection, {"wing": wing}):
+                fold(page)
         else:
             total = collection.count()
             offset = 0

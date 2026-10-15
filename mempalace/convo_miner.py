@@ -167,9 +167,10 @@ _LINE_GROUP_SIZE = 25  # lines per fallback group when no paragraph breaks
 _LINE_FALLBACK_MIN_NEWLINES = 20  # trigger line-group fallback above this newline count
 DRAWER_UPSERT_BATCH_SIZE = 1000
 # A mine of at most this many files skips the whole-palace prefetch scan for
-# per-file and per-wing index lookups (#548). A thousand-file sweep keeps
-# the scan: past here one pass is cheaper than this many lookups.
-SCOPED_PREFETCH_MAX_FILES = 50
+# per-file and per-wing lookups (#548). On the postgres palace a per-file
+# lookup is a ~24 s sequential scan and the whole scan ~9 min, so past about
+# twenty files one pass is cheaper; ten keeps a margin. A drain mine is one.
+SCOPED_PREFETCH_MAX_FILES = 10
 MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB — skip files larger than this.
 # Matches miner.py at 500 MB. Long Claude Code sessions, multi-year
 # ChatGPT exports, and lifetime Slack dumps routinely exceed 10 MB; the

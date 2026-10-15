@@ -2,8 +2,9 @@
 
 ``prefetch_mined_set(source_files=...)`` and ``prefetch_content_hashes(wing=...)``
 must return exactly what the whole-palace scan returns, restricted to the
-scope, and must never fall back to that scan. ``mine_convos`` takes the
-scoped path for a target of at most ``SCOPED_PREFETCH_MAX_FILES`` files.
+scope, and must never fall back to that scan. Both page, so memory
+holds one page however large the scope. ``mine_convos`` takes the scoped
+path for a target of at most ``SCOPED_PREFETCH_MAX_FILES`` files.
 """
 
 import chromadb
@@ -12,6 +13,7 @@ import pytest
 import mempalace.convo_miner as convo_miner
 from mempalace.palace import (
     NORMALIZE_VERSION,
+    _iter_scoped_metadata,
     prefetch_content_hashes,
     prefetch_mined_set,
 )
@@ -65,12 +67,10 @@ def col(tmp_path):
 class _Spy:
     """Wraps a collection; records how the palace was read."""
 
-    def __init__(self, inner, metadata_contract=True):
+    def __init__(self, inner):
         self._inner = inner
         self.unfiltered_gets = 0
-        self.scoped = []
-        if metadata_contract:
-            self.get_all_metadata = self._get_all_metadata
+        self.scoped = []  # (where, limit, offset) per filtered get
 
     def count(self):
         return self._inner.count()
@@ -79,12 +79,11 @@ class _Spy:
         if not kwargs.get("where"):
             self.unfiltered_gets += 1
         else:
-            self.scoped.append(kwargs["where"])
+            self.scoped.append((kwargs["where"], kwargs.get("limit"), kwargs.get("offset")))
         return self._inner.get(**kwargs)
 
-    def _get_all_metadata(self, where=None):
-        self.scoped.append(where)
-        return self._inner.get(where=where, include=["metadatas"])["metadatas"]
+    def get_all_metadata(self, where=None):  # pragma: no cover - must stay unused
+        raise AssertionError("scoped prefetch must page, not load the whole match")
 
 
 SCOPES = [
@@ -126,14 +125,24 @@ def test_scoped_content_hashes_split_joined_hashes(col):
     }
 
 
-@pytest.mark.parametrize("metadata_contract", [True, False])
-def test_scoped_prefetch_never_scans_the_palace(col, metadata_contract):
-    spy = _Spy(col, metadata_contract=metadata_contract)
+def test_scoped_prefetch_never_scans_the_palace(col):
+    spy = _Spy(col)
     prefetch_mined_set(spy, extract_mode="exchange", source_files=["/s/complete", "/s/complete"])
     prefetch_content_hashes(spy, extract_mode="exchange", wing="alpha")
     assert spy.unfiltered_gets == 0
-    # One lookup per distinct file, one per wing.
-    assert spy.scoped == [{"source_file": "/s/complete"}, {"wing": "alpha"}]
+    # One paged lookup per distinct file, one per wing; every read is paged.
+    starts = [where for where, _, offset in spy.scoped if not offset]
+    assert starts == [{"source_file": "/s/complete"}, {"wing": "alpha"}]
+    assert all(limit for _, limit, _ in spy.scoped)
+
+
+def test_scoped_pages_hold_one_page_at_a_time(col):
+    pages = list(_iter_scoped_metadata(col, {"wing": "alpha"}, page_size=2))
+    assert [len(page) for page in pages] == [2, 2, 2]
+    assert sorted(m["source_file"] for page in pages for m in page) == sorted(
+        m["source_file"]
+        for m in col.get(where={"wing": "alpha"}, include=["metadatas"])["metadatas"]
+    )
 
 
 def test_unscoped_prefetch_still_scans(col):
