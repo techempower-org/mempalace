@@ -329,7 +329,7 @@ exactly as before.
 ### `prefetch_mined_set`
 
 ```python
-def prefetch_mined_set(collection, extract_mode: Optional[str] = None) -> dict[str, Optional[float]]
+def prefetch_mined_set(collection, extract_mode: Optional[str] = None, source_files: Optional[Iterable[str]] = None) -> dict[str, Optional[float]]
 ```
 
 Pre-fetch source_file -> stored source_mtime for files already mined
@@ -364,10 +364,16 @@ The convo miner walks thousands of transcript files; per-file
 palace, making a 2000-file sweep take >1h of pure skip-checking. This
 helper drops that to a single paginated scan plus O(1) lookups.
 
+``source_files`` scopes the answer to those paths: one index-backed
+``source_file`` lookup each instead of the whole-palace scan. The scan
+pays for every drawer in every wing whatever the target, so a one-file
+drain mine spent 5-10 minutes in it (#548). The
+result is exactly the full scan's, restricted to ``source_files``.
+
 ### `prefetch_content_hashes`
 
 ```python
-def prefetch_content_hashes(collection, extract_mode: Optional[str] = None) -> dict[tuple[str, str], str]
+def prefetch_content_hashes(collection, extract_mode: Optional[str] = None, wing: Optional[str] = None) -> dict[tuple[str, str], str]
 ```
 
 Pre-fetch (wing, content_hash) -> source_file for drawers already
@@ -394,3 +400,8 @@ re-export with one new conversation added doesn't change the hash of
 the ones that didn't. Only the first source_file seen for a given
 (wing, hash) pair is kept — good enough to detect and skip a repeat,
 the point is not to track every alias.
+
+``wing`` scopes the answer to that wing: one index-backed, metadata-only
+fetch instead of the whole-palace scan. Every key is ``(wing, hash)``,
+so a miner filing into one wing can never match another wing's drawers.
+The result is exactly the full scan's keys for that wing.

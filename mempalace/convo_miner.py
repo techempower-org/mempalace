@@ -1527,7 +1527,7 @@ def _mine_convos_impl(
     # A small target (a drain mine is one transcript) asks the index about
     # its own files and wing instead: the whole-palace scan costs the same
     # for one file as for two thousand, and on a 950K-drawer palace a
-    # one-file mine sat in it for minutes and once grew to 3.75 GB (#548).
+    # one-file mine sat in it for 5-10 minutes (#548).
     scoped = len(files) <= SCOPED_PREFETCH_MAX_FILES
     report_phase("prefetch", files_total=len(files), scoped=scoped)
     mined_mtimes: dict = (

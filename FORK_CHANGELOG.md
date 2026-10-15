@@ -18,6 +18,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-10-15]
+
+
+### Fixed
+
+
+- **a convo mine of at most 50 files looks up its own files and wing through the index instead of scanning every drawer in the palace, so a one-file drain mine no longer spends minutes, or gigabytes, in prefetch** (`HEAD` — pending resolution)
+  Before deciding what to mine, the convo miner ran two whole-palace
+  scans, `prefetch_mined_set` and `prefetch_content_hashes`, paging
+  through every drawer in every wing with LIMIT/OFFSET. That suits a
+  thousand-file sweep, but a palace-daemon drain mine is one transcript,
+  and on a ~950K-drawer palace it cost the same: the mine phase file
+  (#548) showed one-file mines in `prefetch` for 5 to 10 minutes at
+  ~12 CPU-s per 5 min. One, last reported 10 minutes into prefetch,
+  reached 3.75 GB four minutes later and took the daemon down with an
+  OOM kill on 2026-10-14.
+
+  For a target of at most `SCOPED_PREFETCH_MAX_FILES` (50) files, the
+  mined set is built from one `source_file` lookup per file and the
+  content-hash map from one lookup of the target wing. Both go through
+  the backend's metadata-only `get_all_metadata` contract, which pgvector
+  answers from its GIN index on `metadata` without reading the document
+  column. The results are exactly the full scan's, restricted to the
+  scope: the completeness (`chunk_total`), schema-version and
+  extract-mode rules are the same code, and every content-hash key is
+  `(wing, hash)`, so no other wing's drawer could ever match. Larger
+  mines keep the single scan. The `prefetch` phase record now carries
+  `scoped`.
+
+  *Tests:* 29 new (test_scoped_prefetch: the scoped mined set equals the full scan restricted to the files, across four scopes and three extract modes; the completeness rule holds; the scoped hash map equals the full scan for the wing, across three wings and three modes, splitting comma-joined hashes; neither scoped path ever issues an unfiltered get, with or without get_all_metadata; the unscoped path still scans; a small mine passes its files and wing, a mine over the threshold passes neither; a scoped re-mine skips both files and adds no drawers). Keying the file lookup by wing, never taking the scoped path, dropping the de-duplication of repeated paths, ignoring the wing scope, or filtering the wing lookup by the wrong field each turns tests red
+  *Files:* `mempalace/palace.py`, `mempalace/convo_miner.py`, `tests/test_scoped_prefetch.py`
+
+
 ## [2026-10-14]
 
 

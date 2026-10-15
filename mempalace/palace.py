@@ -1776,7 +1776,7 @@ def prefetch_mined_set(
     ``source_files`` scopes the answer to those paths: one index-backed
     ``source_file`` lookup each instead of the whole-palace scan. The scan
     pays for every drawer in every wing whatever the target, so a one-file
-    drain mine spent minutes in it and once grew to 3.75 GB (#548). The
+    drain mine spent 5-10 minutes in it (#548). The
     result is exactly the full scan's, restricted to ``source_files``.
     """
     # Per source_file: per stored_mtime group → count + optional chunk_total.
