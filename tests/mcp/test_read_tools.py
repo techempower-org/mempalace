@@ -1270,3 +1270,54 @@ class TestFetchDrawerRowsDelegation:
         assert ids == ["a"]
         assert documents == ["doc a"]
         assert metadatas == [{"wing": "w"}]
+
+
+def test_follow_tunnels_does_not_write_without_the_writer_lock(monkeypatch):
+    """A peer that has never attempted the lease must not write the tunnel file."""
+    from mempalace import mcp_server
+
+    captured = {}
+
+    def _fake_follow(wing, room, col=None, record=True):
+        captured["record"] = record
+        captured["wing"] = wing
+        return [{"tunnel_id": "t1"}]
+
+    monkeypatch.setattr(mcp_server, "follow_tunnels", _fake_follow)
+    monkeypatch.setattr(mcp_server, "_get_collection", lambda create=False: object())
+    monkeypatch.setattr(mcp_server, "_READ_ONLY", False)
+    monkeypatch.setattr(mcp_server, "_MCP_WRITER_LOCK_CM", None)
+    monkeypatch.setattr(mcp_server, "_MCP_WRITER_READ_ONLY", False)
+
+    result = mcp_server.tool_follow_tunnels("wing_a", "room_a", record=True)
+
+    assert result == [{"tunnel_id": "t1"}]
+    assert captured["record"] is False
+    assert captured["wing"] == "wing_a"
+
+
+def test_follow_tunnels_records_only_while_this_process_holds_the_lock(monkeypatch):
+    from mempalace import mcp_server
+
+    captured = {}
+
+    def _fake_follow(wing, room, col=None, record=True):
+        del wing, room, col
+        captured["record"] = record
+        return []
+
+    monkeypatch.setattr(mcp_server, "follow_tunnels", _fake_follow)
+    monkeypatch.setattr(mcp_server, "_get_collection", lambda create=False: object())
+    monkeypatch.setattr(mcp_server, "_READ_ONLY", False)
+    monkeypatch.setattr(mcp_server, "_MCP_WRITER_LOCK_CM", object())
+    monkeypatch.setattr(mcp_server, "_MCP_WRITER_READ_ONLY", False)
+
+    mcp_server.tool_follow_tunnels("wing_a", "room_a", record=True)
+    assert captured["record"] is True
+
+    mcp_server.tool_follow_tunnels("wing_a", "room_a", record=False)
+    assert captured["record"] is False
+
+    monkeypatch.setattr(mcp_server, "_READ_ONLY", True)
+    mcp_server.tool_follow_tunnels("wing_a", "room_a", record=True)
+    assert captured["record"] is False
