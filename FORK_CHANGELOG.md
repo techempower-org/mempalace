@@ -24,6 +24,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **a Claude Code transcript's tool output that isn't text (a binary piped to stdout, or a minified-code line) is replaced by a marker giving its size before it is filed, so it no longer becomes drawers that recall surfaces as "essential story"** (`HEAD` — pending resolution)
+  jp-92's post-compaction recovery block on 2026-10-20 pulled drawers
+  from wing plan_realm_watch that were binary garbage: UTF-16 and
+  U+FFFD fragments from a binary dumped through Bash, and minified JS
+  from a bundled CLI. `_format_tool_result` passed tool output through
+  as-is, so every 800-character chunk of it became a drawer.
+
+  Before formatting, a tool result whose printable share is under 85%
+  becomes `[binary output omitted: N chars]`. Each line of 1,000+
+  characters with under 5% whitespace and at least 10% `;{}()=`
+  becomes `[minified code line omitted: N chars]`. The neighbouring
+  lines are kept. This applies in verbatim mode too: it is nobody's
+  words, and the marker keeps its size. JSON, CSS and prose sit below
+  the punctuation floor and are kept. Run over the 2,941 drawers in
+  plan_realm_watch, the same rules flag 8 binary and 13 minified-code
+  drawers, and no JSON, prose or ordinary code.
+
+  *Tests:* 6 new (test_normalize_non_text: UTF-16 and U+FFFD output are omitted; a minified line is omitted and its neighbours kept; JSON, CSS, prose and a stray U+FFFD are kept; verbatim mode omits too; Bash output keeps its other lines). Not calling the filter (2 failed), dropping the punctuation floor (1 failed) or switching off the binary rule (3 failed) each turns tests red
+  *Files:* `mempalace/normalize.py`, `tests/test_normalize_non_text.py`
+
+
 - **AGE knowledge-graph setup no longer counts duplicate Drawer ids when the drawer_id_unique index is already installed, so opening the graph stops running a COUNT(DISTINCT) over every Drawer row** (`HEAD` — pending resolution)
   `_ensure_drawer_unique_index` ran on every KG setup. Before checking
   whether the index existed, it counted duplicate ids with

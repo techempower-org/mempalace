@@ -933,6 +933,48 @@ _TOOL_RESULT_MAX_LINES_BASH = 20  # head and tail line count
 _TOOL_RESULT_MAX_MATCHES = 20  # Grep/Glob cap
 _TOOL_RESULT_MAX_BYTES = 2048  # fallback cap for unknown tools
 
+# Tool output that isn't text: a binary piped to stdout, or a bundled JS line.
+# Measured in wing plan_realm_watch on 2026-10-20: 18 drawers of UTF-16 / U+FFFD
+# fragments and minified-JS chunks surfaced as "essential story" recall. They
+# are not anyone's words, so they are replaced by a marker that keeps the size.
+_BINARY_MIN_CHARS = 64
+_BINARY_MAX_PRINTABLE = 0.85  # below this share of printable chars: binary
+_MINIFIED_MIN_LINE = 1000
+_MINIFIED_MAX_SPACE = 0.05
+_MINIFIED_MIN_CODE_PUNCT = 0.10  # ; { } ( ) = per char; JSON and prose are far lower
+_CODE_PUNCT = frozenset(";{}()=")
+
+
+def _looks_binary(text: str) -> bool:
+    if len(text) < _BINARY_MIN_CHARS:
+        return False
+    printable = sum(1 for c in text if (c.isprintable() and c != "�") or c in "\n\t")
+    return printable / len(text) < _BINARY_MAX_PRINTABLE
+
+
+def _looks_minified(line: str) -> bool:
+    n = len(line)
+    if n < _MINIFIED_MIN_LINE:
+        return False
+    spaces = sum(1 for c in line if c.isspace())
+    punct = sum(1 for c in line if c in _CODE_PUNCT)
+    return spaces / n < _MINIFIED_MAX_SPACE and punct / n >= _MINIFIED_MIN_CODE_PUNCT
+
+
+def _omit_non_text(text: str) -> str:
+    """Replace binary output, or minified-code lines, with a size marker."""
+    if _looks_binary(text):
+        return f"[binary output omitted: {len(text)} chars]"
+    if len(text) < _MINIFIED_MIN_LINE:
+        return text
+    lines = text.split("\n")
+    if not any(_looks_minified(line) for line in lines):
+        return text
+    return "\n".join(
+        f"[minified code line omitted: {len(line)} chars]" if _looks_minified(line) else line
+        for line in lines
+    )
+
 
 def _format_tool_result(content, tool_name: str, verbatim: bool = False) -> str:
     """Format a tool_result based on the originating tool's type.
@@ -963,6 +1005,8 @@ def _format_tool_result(content, tool_name: str, verbatim: bool = False) -> str:
     text = text.strip()
     if not text:
         return ""
+    # In every mode, verbatim included: this isn't anyone's words.
+    text = _omit_non_text(text)
 
     # Read/Edit/Write — omit result (content is in palace or git).
     # In verbatim mode, include the full result so the transcript carries
