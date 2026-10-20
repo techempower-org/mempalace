@@ -113,3 +113,25 @@ def test_unavailable_fast_path_still_walks():
     with patch.object(pg, "_build_graph_postgres", return_value=None):
         nodes, _ = build_graph(col=col)
     assert "walked" in nodes
+
+
+def test_a_write_within_the_window_does_not_rerun_the_aggregate():
+    col = _pg_col()
+    with patch.object(pg, "_build_graph_postgres", return_value=GOOD) as agg:
+        assert build_graph(col=col) == GOOD
+        for _ in range(5):
+            invalidate_graph_cache()  # a mine write
+            assert build_graph(col=col) == GOOD
+    assert agg.call_count == 1
+
+
+def test_after_the_window_a_write_rebuilds():
+    col = _pg_col()
+    newer = ({"room_b": {"wings": ["w3"], "halls": [], "count": 1, "dates": []}}, [])
+    with patch.object(pg, "_build_graph_postgres", return_value=GOOD):
+        build_graph(col=col)
+    invalidate_graph_cache()
+    pg._graph_last_good_at = time.time() - pg._GRAPH_PG_SERVE_RECENT_S - 1
+    with patch.object(pg, "_build_graph_postgres", return_value=newer) as agg:
+        assert build_graph(col=col) == newer
+    assert agg.call_count == 1

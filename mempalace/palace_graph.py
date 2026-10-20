@@ -78,6 +78,13 @@ _graph_last_good = None
 # re-run by every waiter in turn.
 _graph_pg_failed_at = 0.0
 _GRAPH_PG_RETRY_AFTER = 30.0
+# On postgres a graph a build produced serves for this long even after a write
+# empties the cache above. Every mine write invalidates, so without it the
+# aggregate re-ran on nearly every graph_stats call (about 85 an hour on
+# familiar, 2026-10-20) and timed out under load. A new room shows up at most
+# this late.
+_graph_last_good_at = 0.0
+_GRAPH_PG_SERVE_RECENT_S = 300.0
 
 
 class GraphUnavailableError(RuntimeError):
@@ -215,7 +222,7 @@ def _build_graph_postgres_once(col, config=None):
     or raises :class:`GraphUnavailableError` when there is none.
     """
     global _graph_cache_nodes, _graph_cache_edges, _graph_cache_time
-    global _graph_last_good, _graph_pg_failed_at
+    global _graph_last_good, _graph_last_good_at, _graph_pg_failed_at
     with _graph_build_lock:
         # A build that finished while this caller waited is the answer.
         with _graph_cache_lock:
@@ -224,6 +231,11 @@ def _build_graph_postgres_once(col, config=None):
                 and (time.time() - _graph_cache_time) < _GRAPH_CACHE_TTL
             ):
                 return _graph_cache_nodes, _graph_cache_edges
+        if (
+            _graph_last_good is not None
+            and time.time() - _graph_last_good_at < _GRAPH_PG_SERVE_RECENT_S
+        ):
+            return _graph_last_good
         if time.time() - _graph_pg_failed_at < _GRAPH_PG_RETRY_AFTER:
             return _last_good_or_raise("failed less than %ds ago" % _GRAPH_PG_RETRY_AFTER)
         try:
@@ -240,6 +252,7 @@ def _build_graph_postgres_once(col, config=None):
                 _graph_cache_edges = pg_edges
                 _graph_cache_time = time.time()
             _graph_last_good = (pg_nodes, pg_edges)
+            _graph_last_good_at = time.time()
         return pg_nodes, pg_edges
 
 

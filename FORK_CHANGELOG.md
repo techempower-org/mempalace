@@ -24,6 +24,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **on postgres, a graph build serves for five minutes even after a write empties the graph cache, so a palace being mined no longer re-runs the room aggregate on nearly every graph_stats call** (`HEAD` — pending resolution)
+  After #568, graph_stats on familiar still ran about 85 times an hour.
+  Every mine write calls invalidate_graph_cache(), so nearly every call
+  re-ran the room aggregate over 1.18M drawers. Under load it hit the
+  30 s statement timeout 12 times in 38 minutes, and the last good
+  graph was served instead.
+
+  On postgres, the last graph a build produced now serves for
+  `_GRAPH_PG_SERVE_RECENT_S` (300 s) whatever the invalidation, and
+  only then is the aggregate run again. A room created by a mine shows
+  up in graph_stats, traverse and tunnels at most five minutes late. The
+  60 s cache and its write invalidation are unchanged for the other
+  backends.
+
+  *Tests:* 2 new in test_palace_graph_single_flight: five writes inside the window run the aggregate once; after the window a write rebuilds. A zero window, or never stamping the build time, each turns a test red
+  *Files:* `mempalace/palace_graph.py`, `tests/conftest.py`, `tests/test_palace_graph_single_flight.py`
+
+
 - **a Claude Code transcript's tool output that isn't text (a binary piped to stdout, or a minified-code line) is replaced by a marker giving its size before it is filed, so it no longer becomes drawers that recall surfaces as "essential story"** (`HEAD` — pending resolution)
   jp-92's post-compaction recovery block on 2026-10-20 pulled drawers
   from wing plan_realm_watch that were binary garbage: UTF-16 and
