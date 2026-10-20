@@ -309,6 +309,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| a convo mine of at most ten files reads only its own files' and wing's drawers before mining, instead of two scans of every drawer in the palace, so a one-file drain mine in the `money` wing spends 84 s in prefetch rather than two scans of 1.16M drawers | — | `HEAD` — pending resolution |
 | a convo mine reports its current phase and counts to the file named by MEMPALACE_MINE_PHASE_FILE, so a spawner can see where a slow or idle mine is spending its time | — | [`70c78e0`](https://github.com/techempower-org/mempalace/commit/70c78e0) |
 | the auto-query classifier honours an optional MEMPALACE_AQ_DEADLINE, capping every daemon call to the time left and skipping calls with none, so a slow palace degrades to a receipt instead of a hook kill | — | [`b53bd60`](https://github.com/techempower-org/mempalace/commit/b53bd60) |
 | the "no curated document in the top N" banner names the depth the search actually examined (30 after a deep fetch) instead of the limit, and JSON carries it as depth_examined | — | [`9078c99`](https://github.com/techempower-org/mempalace/commit/9078c99) |
