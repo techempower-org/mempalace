@@ -309,6 +309,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| a Claude Code transcript's tool output that isn't text (a binary piped to stdout, or a minified-code line) is replaced by a marker giving its size before it is filed, so it no longer becomes drawers that recall surfaces as "essential story" | — | `HEAD` — pending resolution |
 | AGE knowledge-graph setup no longer counts duplicate Drawer ids when the drawer_id_unique index is already installed, so opening the graph stops running a COUNT(DISTINCT) over every Drawer row | — | `HEAD` — pending resolution |
 | on the postgres backend a paged get() that continues the previous page of the same filter reads `id > <last id>` instead of OFFSET, and a read that doesn't ask for documents no longer fetches them, so a full walk over the drawers table is linear in pages rather than quadratic | — | `HEAD` — pending resolution |
 | on postgres, build_graph runs one aggregate at a time and never falls back to a row walk when the aggregate fails; it serves the last good graph instead, or raises GraphUnavailableError when there is none, so a statement timeout under load no longer turns every graph_stats call into an OFFSET walk over every drawer | — | `HEAD` — pending resolution |
