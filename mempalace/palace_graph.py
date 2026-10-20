@@ -65,6 +65,24 @@ _graph_cache_edges = None
 _graph_cache_time = 0.0
 _GRAPH_CACHE_TTL = 60.0  # seconds — graph changes less often than metadata
 
+# Postgres builds run one at a time. Measured on familiar 2026-10-20: up to 8
+# graph_stats calls in flight (every SessionStart hook calls status), each
+# running its own aggregate, and every mine write empties the cache above.
+# Callers that queue behind a build read its result instead of repeating it.
+_graph_build_lock = threading.Lock()
+# The last graph a build produced. invalidate_graph_cache() keeps it: it is
+# what a caller gets when the postgres aggregate fails, instead of a row walk.
+_graph_last_good = None
+# After a failed aggregate, callers within this many seconds get the last good
+# graph (or the error) without retrying, so a timeout under load is not
+# re-run by every waiter in turn.
+_graph_pg_failed_at = 0.0
+_GRAPH_PG_RETRY_AFTER = 30.0
+
+
+class GraphUnavailableError(RuntimeError):
+    """The postgres graph aggregate failed and no earlier graph exists."""
+
 
 def sqlite_grouped_counts_reader(config=None):
     """Return the backend's grouped-counts function, or ``None``.
@@ -178,6 +196,51 @@ def invalidate_graph_cache():
         _graph_cache_nodes = None
         _graph_cache_edges = None
         _graph_cache_time = 0.0
+
+
+def _last_good_or_raise(reason):
+    if _graph_last_good is not None:
+        logger.warning(
+            "palace_graph: postgres aggregate failed (%s); serving the last good graph.", reason
+        )
+        return _graph_last_good
+    raise GraphUnavailableError(f"postgres graph aggregate failed: {reason}")
+
+
+def _build_graph_postgres_once(col, config=None):
+    """Run the postgres aggregate behind ``_graph_build_lock``.
+
+    Returns ``(nodes, edges)``, or ``None`` when the fast path is unavailable
+    (the caller then walks). A failed aggregate returns the last good graph,
+    or raises :class:`GraphUnavailableError` when there is none.
+    """
+    global _graph_cache_nodes, _graph_cache_edges, _graph_cache_time
+    global _graph_last_good, _graph_pg_failed_at
+    with _graph_build_lock:
+        # A build that finished while this caller waited is the answer.
+        with _graph_cache_lock:
+            if (
+                _graph_cache_nodes is not None
+                and (time.time() - _graph_cache_time) < _GRAPH_CACHE_TTL
+            ):
+                return _graph_cache_nodes, _graph_cache_edges
+        if time.time() - _graph_pg_failed_at < _GRAPH_PG_RETRY_AFTER:
+            return _last_good_or_raise("failed less than %ds ago" % _GRAPH_PG_RETRY_AFTER)
+        try:
+            pg_result = _build_graph_postgres(col, config)
+        except Exception as e:
+            _graph_pg_failed_at = time.time()
+            return _last_good_or_raise(e)
+        if pg_result is None:
+            return None
+        pg_nodes, pg_edges = pg_result
+        if pg_nodes:
+            with _graph_cache_lock:
+                _graph_cache_nodes = pg_nodes
+                _graph_cache_edges = pg_edges
+                _graph_cache_time = time.time()
+            _graph_last_good = (pg_nodes, pg_edges)
+        return pg_nodes, pg_edges
 
 
 def _get_collection(config=None):
@@ -338,27 +401,17 @@ def build_graph(col=None, config=None):
     # chroma collections don't have either, and MagicMock collections in
     # tests don't have string-typed values. Isinstance check on the dsn
     # being a real str avoids the test-mock false positive (MagicMock
-    # makes hasattr() match everything). Falling through to the walk path
-    # on any postgres-path failure means the worst case is the prior
-    # behavior, not a hard error.
+    # makes hasattr() match everything). Only an unavailable fast path
+    # (no psycopg2, no dsn: it returns None) falls through to the walk.
+    # A failed aggregate never does: on postgres the walk is an OFFSET
+    # pagination over every drawer, O(n^2) in pages, and it ran exactly
+    # when the aggregate had timed out under load (familiar 2026-10-20,
+    # load 49). The caller gets the last good graph, or the error.
     pg_dsn = getattr(col, "dsn", None)
     if isinstance(pg_dsn, str) and pg_dsn and hasattr(col, "table_name"):
-        try:
-            pg_result = _build_graph_postgres(col, config)
-        except Exception as e:
-            logger.warning(
-                "palace_graph: postgres aggregate path failed (%s); falling back to row walk.",
-                e,
-            )
-            pg_result = None
+        pg_result = _build_graph_postgres_once(col, config)
         if pg_result is not None:
-            pg_nodes, pg_edges = pg_result
-            if pg_nodes:
-                with _graph_cache_lock:
-                    _graph_cache_nodes = pg_nodes
-                    _graph_cache_edges = pg_edges
-                    _graph_cache_time = time.time()
-            return pg_nodes, pg_edges
+            return pg_result
 
     total = col.count()
     room_data = defaultdict(lambda: {"wings": set(), "halls": set(), "count": 0, "dates": set()})

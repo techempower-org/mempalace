@@ -530,14 +530,14 @@ class TestPostgresFastPath:
         result = pg._build_graph_postgres(col)
         assert result is None
 
-    def test_build_graph_falls_back_to_walk_on_postgres_failure(self):
-        """If the postgres fast path raises mid-execution (network blip,
-        schema drift, etc.) build_graph catches and falls through to the
-        walk path. Worst case == prior behavior."""
+    def test_build_graph_does_not_walk_on_postgres_failure(self):
+        """If the postgres fast path raises mid-execution (statement timeout,
+        network blip, schema drift) build_graph does NOT fall through to the
+        walk: on postgres that is an O(n^2) OFFSET pagination over every
+        drawer. With no earlier graph it raises GraphUnavailableError."""
+        from mempalace.palace_graph import GraphUnavailableError
+
         invalidate_graph_cache()
-        # A walk-compatible col with a real string dsn so the fast-path
-        # dispatch fires, then we make psycopg2.connect raise so the
-        # try/except catches and falls through.
         col = _make_fake_collection(
             [{"wing": "wing_a", "room": "fallback_room", "hall": "h1", "date": "2026-01-01"}]
         )
@@ -551,11 +551,10 @@ class TestPostgresFastPath:
             "mempalace.backends.postgres._load_psycopg2",
             return_value=(fake_psycopg2, None),
         ):
-            nodes, _ = build_graph(col=col)
+            with pytest.raises(GraphUnavailableError, match="connection refused"):
+                build_graph(col=col)
 
-        # Walk path took over — fallback_room is present.
-        assert "fallback_room" in nodes
-        assert nodes["fallback_room"]["wings"] == ["wing_a"]
+        col.get.assert_not_called()
 
     def test_postgres_fast_path_caches_when_nonempty(self):
         """A non-empty postgres result populates the module-level cache so
