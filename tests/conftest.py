@@ -448,3 +448,20 @@ def seeded_kg(kg):
     kg.add_triple("Alice", "works_at", "NewCo", valid_from="2025-01-01")
 
     return kg
+
+
+@pytest.fixture(autouse=True)
+def _reset_palace_graph_postgres_state():
+    """Clear palace_graph's last-good graph and failure time between tests.
+
+    invalidate_graph_cache() keeps both on purpose (a write is not a sign
+    postgres recovered), so tests that drive a failed aggregate would
+    otherwise leak a stale graph or a retry window into the next test.
+    """
+    import sys
+
+    yield
+    pg = sys.modules.get("mempalace.palace_graph")
+    if pg is not None:
+        pg._graph_last_good = None
+        pg._graph_pg_failed_at = 0.0

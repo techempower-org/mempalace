@@ -17,6 +17,12 @@ Enables queries like:
 
 No external graph DB needed — built from ChromaDB metadata.
 
+## Classes
+
+### `class GraphUnavailableError(RuntimeError)`
+
+The postgres graph aggregate failed and no earlier graph exists.
+
 ## Functions
 
 ### `sqlite_grouped_counts_reader`

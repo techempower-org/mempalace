@@ -1,0 +1,30 @@
+seq: 177
+id: graph-no-walk-on-postgres
+date: '2026-10-20'
+bucket: Fixed
+commit: HEAD
+area: Graph
+summary: on postgres, build_graph runs one aggregate at a time and never falls back to a row walk when the aggregate fails; it serves the last good graph instead, or raises GraphUnavailableError when there is none, so a statement timeout under load no longer turns every graph_stats call into an OFFSET walk over every drawer
+body: |
+  On familiar on 2026-10-20 (load 49, 16.8 GB swap) graph_stats ran
+  with up to 8 calls in flight, because every SessionStart hook calls
+  status and every mine write empties the 60 s graph cache. Each call
+  ran its own room aggregate. Under that load the aggregate hit the
+  statement timeout (13 times in 3 h), and every failure fell back to
+  the chroma-style walk: `col.get(limit=1000, offset=...)` over all
+  1.18M drawers, which re-reads the primary key from the start on every
+  page. The fallback ran exactly when the database was already
+  saturated.
+
+  Now postgres builds run behind one lock, and a caller that waited
+  reads the build it waited for. A failed aggregate returns the last
+  good graph, which a write's invalidate_graph_cache() keeps, or raises
+  GraphUnavailableError when no graph was ever built. For 30 s after a
+  failure, callers get the same answer without retrying. An unavailable
+  fast path (no psycopg2, no dsn) still walks, as before.
+tests: '6 new (test_palace_graph_single_flight: a failure with no earlier graph raises and never walks; a failure after a write serves the last good graph; a recent failure is not retried by the next caller; a retry happens after the window; 8 concurrent callers share one aggregate; an unavailable fast path still walks), and test_build_graph_falls_back_to_walk_on_postgres_failure became test_build_graph_does_not_walk_on_postgres_failure. Restoring the walk on failure (5 failed), removing the build lock (1 failed) or removing the retry window (1 failed) each turns tests red'
+files:
+- mempalace/palace_graph.py
+- tests/conftest.py
+- tests/test_palace_graph.py
+- tests/test_palace_graph_single_flight.py

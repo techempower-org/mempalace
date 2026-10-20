@@ -309,6 +309,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| on postgres, build_graph runs one aggregate at a time and never falls back to a row walk when the aggregate fails; it serves the last good graph instead, or raises GraphUnavailableError when there is none, so a statement timeout under load no longer turns every graph_stats call into an OFFSET walk over every drawer | — | `HEAD` — pending resolution |
 | a convo mine of at most ten files reads only its own files' and wing's drawers before mining, instead of two scans of every drawer in the palace, so a one-file drain mine in the `money` wing spends 84 s in prefetch rather than two scans of 1.16M drawers | — | `HEAD` — pending resolution |
 | a convo mine reports its current phase and counts to the file named by MEMPALACE_MINE_PHASE_FILE, so a spawner can see where a slow or idle mine is spending its time | — | [`70c78e0`](https://github.com/techempower-org/mempalace/commit/70c78e0) |
 | the auto-query classifier honours an optional MEMPALACE_AQ_DEADLINE, capping every daemon call to the time left and skipping calls with none, so a slow palace degrades to a receipt instead of a hook kill | — | [`b53bd60`](https://github.com/techempower-org/mempalace/commit/b53bd60) |
