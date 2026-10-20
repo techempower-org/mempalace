@@ -24,6 +24,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **AGE knowledge-graph setup no longer counts duplicate Drawer ids when the drawer_id_unique index is already installed, so opening the graph stops running a COUNT(DISTINCT) over every Drawer row** (`HEAD` — pending resolution)
+  `_ensure_drawer_unique_index` ran on every KG setup. Before checking
+  whether the index existed, it counted duplicate ids with
+  `COUNT(*) - COUNT(DISTINCT (properties::text)::jsonb->>'id')` over the
+  whole Drawer label table: 1.2M rows and 401 MB on familiar on
+  2026-10-20, where the index had long been installed. jp-92 saw that
+  statement among the active queries while familiar sat at load 48.
+  Setup now looks up `drawer_id_unique` in `pg_indexes` first, and
+  returns when it's there. A missing index is still created only when
+  the table has no duplicates.
+
+  *Tests:* 4 new (test_knowledge_graph_age_drawer_index: an installed index skips the duplicate count and the CREATE; a missing index is created when there are no duplicates; duplicates still block it; no Drawer table does nothing). Removing the early return turns tests red
+  *Files:* `mempalace/knowledge_graph_age.py`, `tests/test_knowledge_graph_age_drawer_index.py`
+
+
 - **on postgres, build_graph runs one aggregate at a time and never falls back to a row walk when the aggregate fails; it serves the last good graph instead, or raises GraphUnavailableError when there is none, so a statement timeout under load no longer turns every graph_stats call into an OFFSET walk over every drawer** (`HEAD` — pending resolution)
   On familiar on 2026-10-20 (load 49, 16.8 GB swap) graph_stats ran
   with up to 8 calls in flight, because every SessionStart hook calls
