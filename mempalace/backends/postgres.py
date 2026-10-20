@@ -10,6 +10,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+import time
+from collections import OrderedDict
 from typing import Any, Optional
 
 from ..config import normalize_wing_name, strip_lone_surrogates
@@ -827,6 +830,42 @@ class PostgresCollection(BaseCollection):
             result_embeddings,
         )
 
+    # Keyset memo for paged get(): (filter, next offset) -> last id returned.
+    # Bounded, and entries expire, so a continuation never outlives the walk
+    # that wrote it by more than _PAGE_MEMO_TTL_S.
+    _PAGE_MEMO_MAX = 256
+    _PAGE_MEMO_TTL_S = 120.0
+
+    def _page_memo(self):
+        memo = getattr(self, "_page_memo_store", None)
+        if memo is None:
+            memo = self._page_memo_store = (threading.Lock(), OrderedDict())
+        return memo
+
+    @staticmethod
+    def _page_key(where: Optional[dict]) -> str:
+        return json.dumps(where or {}, sort_keys=True, default=str)
+
+    def _page_resume(self, key: str, offset: int) -> Optional[str]:
+        lock, entries = self._page_memo()
+        with lock:
+            hit = entries.get((key, offset))
+            if hit is None:
+                return None
+            last_id, at = hit
+            if time.monotonic() - at > self._PAGE_MEMO_TTL_S:
+                del entries[(key, offset)]
+                return None
+            return last_id
+
+    def _page_remember(self, key: str, next_offset: int, last_id: str) -> None:
+        lock, entries = self._page_memo()
+        with lock:
+            entries[(key, next_offset)] = (last_id, time.monotonic())
+            entries.move_to_end((key, next_offset))
+            while len(entries) > self._PAGE_MEMO_MAX:
+                entries.popitem(last=False)
+
     def get(
         self,
         *,
@@ -857,8 +896,30 @@ class PostgresCollection(BaseCollection):
         if where:
             where_sql, where_params = self._where_to_sql(where)
             if where_sql:
-                clauses.append(where_sql)
+                # Parenthesised: a top-level $or compiles to "(a) OR (b)", and
+                # ANDed with another clause unwrapped it would bind as
+                # "(a) OR ((b) AND ...)".
+                clauses.append(self._sql.SQL("({})").format(where_sql))
                 params.extend(where_params)
+
+        # Keyset continuation: a page that starts where the previous page of
+        # the same filter ended reads ``id > <last id>`` instead of OFFSET.
+        # OFFSET re-walks every earlier row, so a full walk was O(n^2) in
+        # pages: on familiar (1.18M drawers, 2026-10-20) the miner's
+        # prefetch, hallways and the graph fallback each re-read the primary
+        # key from the start on every page. The row after the first `offset`
+        # rows in id order is the first row with id > the last of them, so
+        # the page is the same; under concurrent writes it is the better
+        # answer (no row skipped or repeated because an earlier one changed).
+        page_key = None
+        resume_after = None
+        if ids is None and limit:
+            page_key = self._page_key(where)
+            if offset:
+                resume_after = self._page_resume(page_key, int(offset))
+        if resume_after is not None:
+            clauses.append(self._sql.SQL("id > %s"))
+            params.append(resume_after)
 
         where_clause = (
             self._sql.SQL("WHERE {}").format(self._sql.SQL(" AND ").join(clauses))
@@ -876,18 +937,25 @@ class PostgresCollection(BaseCollection):
         # index-ordered read. An unpaged get() keeps its unordered, cheaper plan.
         order_clause = self._sql.SQL("ORDER BY id") if (limit or offset) else self._sql.SQL("")
         limit_clause = self._sql.SQL("LIMIT %s") if limit else self._sql.SQL("")
-        offset_clause = self._sql.SQL("OFFSET %s") if offset else self._sql.SQL("")
+        use_offset = bool(offset) and resume_after is None
+        offset_clause = self._sql.SQL("OFFSET %s") if use_offset else self._sql.SQL("")
         if limit:
             params.append(int(limit))
-        if offset:
+        if use_offset:
             params.append(int(offset))
         embedding_select = (
             self._sql.SQL(", embedding::text") if spec.embeddings else self._sql.SQL("")
         )
+        # A metadata-only read doesn't fetch the document: detoasting it is
+        # most of the bytes a page reads. The NULL keeps row[1] in place.
+        document_select = (
+            self._sql.SQL("document") if spec.documents else self._sql.SQL("NULL::text")
+        )
 
         cur = self._cursor()
         cur.execute(
-            self._sql.SQL("SELECT id, document, wing, room, metadata{} FROM {} {} {} {} {}").format(
+            self._sql.SQL("SELECT id, {}, wing, room, metadata{} FROM {} {} {} {} {}").format(
+                document_select,
                 embedding_select,
                 self._table_id,
                 where_clause,
@@ -898,6 +966,8 @@ class PostgresCollection(BaseCollection):
             params,
         )
         rows = cur.fetchall()
+        if page_key is not None and rows:
+            self._page_remember(page_key, int(offset or 0) + len(rows), rows[-1][0])
 
         result_ids = [row[0] for row in rows]
         documents = [row[1] for row in rows] if spec.documents else []
@@ -931,7 +1001,10 @@ class PostgresCollection(BaseCollection):
         if where:
             where_sql, where_params = self._where_to_sql(where)
             if where_sql:
-                clauses.append(where_sql)
+                # Parenthesised: a top-level $or compiles to "(a) OR (b)", and
+                # ANDed with another clause unwrapped it would bind as
+                # "(a) OR ((b) AND ...)".
+                clauses.append(self._sql.SQL("({})").format(where_sql))
                 params.extend(where_params)
 
         if not clauses:

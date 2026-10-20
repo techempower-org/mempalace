@@ -39,6 +39,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/knowledge_graph_age.py`, `tests/test_knowledge_graph_age_drawer_index.py`
 
 
+- **on the postgres backend a paged get() that continues the previous page of the same filter reads `id > <last id>` instead of OFFSET, and a read that doesn't ask for documents no longer fetches them, so a full walk over the drawers table is linear in pages rather than quadratic** (`HEAD` — pending resolution)
+  OFFSET re-walks every earlier row, so `get(limit=, offset=)` loops
+  were O(n^2) in pages. On familiar on 2026-10-20 (1.18M drawers, load
+  49), three of them ran over the whole table: the miner's prefetch
+  (scoped by #566), the graph fallback (removed by #568) and
+  `compute_hallways_for_wing`, which pages every drawer and keeps one
+  wing client-side. The exporter, repair, migrate and closets use the
+  same loop.
+
+  PostgresCollection remembers, per filter, the offset where its last
+  page ended and the last id it returned. A page that starts there
+  appends `id > %s` and drops the OFFSET. The row after the first k
+  rows in id order is the first row whose id is greater than the last
+  of them, so the page is the same. Under concurrent writes it is the
+  better answer, since no row is skipped or repeated because an
+  earlier one moved. Any other offset uses OFFSET as before. The memo
+  holds 256 entries, and an entry expires after 120 s. A metadata-only
+  read now selects `NULL::text` in the document slot: detoasting the
+  document was most of the bytes each page read.
+
+  The compiled filter is now parenthesised before it is ANDed with
+  another clause. A top-level `$or` compiles to `(a) OR (b)`, so
+  `... AND id > %s` bound as `(a) OR ((b) AND id > ...)` and a keyset
+  walk never ended. The same precedence was already wrong on main in
+  `delete(ids=..., where={"$or": ...})`, which bound as
+  `id IN (...) AND (a) OR (b)` and deleted every row matching `b`.
+
+  *Tests:* 17 new or kept fake-connection tests in test_postgres_keyset_paging: a walk continues by keyset; a filtered walk keeps its filter; an unreached offset, another filter or an expired entry uses OFFSET; the memo is bounded; an empty page writes nothing; an id lookup never uses it; the document is selected only when asked for; a $or filter is parenthesised before the keyset clause. Plus a real-postgres walk (TEST_POSTGRES_DSN) that matches the full id order with and without a filter, documents included, a $or walk ends, and delete(ids=, where=$or) removes only the intersection. Never resuming, remembering the wrong next offset, always selecting the document, never expiring an entry, or dropping the parentheses each turns tests red
+  *Files:* `mempalace/backends/postgres.py`, `tests/test_postgres_keyset_paging.py`
+
+
 - **on postgres, build_graph runs one aggregate at a time and never falls back to a row walk when the aggregate fails; it serves the last good graph instead, or raises GraphUnavailableError when there is none, so a statement timeout under load no longer turns every graph_stats call into an OFFSET walk over every drawer** (`HEAD` — pending resolution)
   On familiar on 2026-10-20 (load 49, 16.8 GB swap) graph_stats ran
   with up to 8 calls in flight, because every SessionStart hook calls
