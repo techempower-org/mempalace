@@ -464,4 +464,5 @@ def _reset_palace_graph_postgres_state():
     pg = sys.modules.get("mempalace.palace_graph")
     if pg is not None:
         pg._graph_last_good = None
+        pg._graph_last_good_at = 0.0
         pg._graph_pg_failed_at = 0.0
