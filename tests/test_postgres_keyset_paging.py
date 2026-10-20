@@ -227,6 +227,16 @@ def test_keyset_walk_matches_offset_walk_on_postgres(tmp_path):
             assert docs == [f"doc {int(i[1:])}" for i in expect]
         meta_only = col.get(limit=5, include=["metadatas"])
         assert meta_only.ids == ids[:5] and all(m["room"] == "r" for m in meta_only.metadatas)
+        # get(ids=, where=$or) returns only the intersection.
+        # Unwrapped, it would bind as "id IN (...) AND (x) OR (r)" and return every row.
+        both = col.get(
+            ids=["d0000", "d0001"], where={"$or": [{"wing": "x"}, {"room": "r"}]}, include=[]
+        )
+        assert sorted(both.ids) == ["d0000", "d0001"]
+        some = col.get(
+            ids=["d0000", "d0001"], where={"$or": [{"wing": "x"}, {"room": "q"}]}, include=[]
+        )
+        assert some.ids == ["d0000"]
         # delete(ids=, where=$or) removes only the intersection.
         # Unwrapped, this would bind as "id IN (...) AND (x) OR (r)" and delete every row.
         col.delete(ids=["d0000", "d0001"], where={"$or": [{"wing": "x"}, {"room": "r"}]})
