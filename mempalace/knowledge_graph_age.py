@@ -340,6 +340,15 @@ class KnowledgeGraphAGE:
             )
             if cur.fetchone() is None:
                 return
+            # Already installed: nothing to check. The duplicate count below
+            # is a COUNT(DISTINCT) over every Drawer row (1.2M rows, 401 MB
+            # on familiar 2026-10-20), and it ran on every KG setup.
+            cur.execute(
+                "SELECT 1 FROM pg_indexes WHERE schemaname = %s AND indexname = 'drawer_id_unique'",
+                (graph,),
+            )
+            if cur.fetchone() is not None:
+                return
             cur.execute(
                 f"SELECT COUNT(*) - COUNT(DISTINCT (properties::text)::jsonb->>'id') "
                 f'FROM "{graph}"."Drawer"'
