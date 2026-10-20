@@ -103,6 +103,20 @@ def test_a_filtered_walk_keeps_its_filter_and_continues(fake):
     assert p == ["money", "b", 2]
 
 
+def test_an_or_filter_is_parenthesised_before_the_keyset_clause(fake):
+    """A top-level $or ANDed with ``id > %s`` unwrapped binds as
+    "(a) OR ((b) AND id > x)": rows matching (a) come back on every page and
+    the walk never ends (seen as a hung test-postgres job on #569)."""
+    col, conn = fake
+    where = {"$or": [{"wing": "b"}, {"room": "r2"}]}
+    conn.pages = [_rows("a", "b")]
+    col.get(where=where, limit=2, offset=0, include=[])
+    col.get(where=where, limit=2, offset=2, include=[])
+    q, _ = _last_select(conn)
+    where_sql = q[q.index("WHERE") + len("WHERE") : q.index("ORDER BY")].strip()
+    assert where_sql.startswith("((") and ") AND id > %s" in where_sql, where_sql
+
+
 def test_an_offset_nobody_reached_uses_offset(fake):
     col, conn = fake
     col.get(limit=2, offset=10, include=["metadatas"])
@@ -194,9 +208,15 @@ def test_keyset_walk_matches_offset_walk_on_postgres(tmp_path):
             metadatas=[{"wing": "w" if i % 3 else "x", "room": "r"} for i in reversed(range(250))],
             embeddings=[[0.0] * 384 for _ in ids],
         )
-        for where, expect in ((None, ids), ({"wing": "x"}, ids[::3])):
+        x_ids = [i for i in ids if int(i[1:]) % 3 == 0]
+        cases = (
+            (None, ids),
+            ({"wing": "x"}, x_ids),
+            ({"$or": [{"wing": "x"}, {"room": "q"}]}, x_ids),
+        )
+        for where, expect in cases:
             walked, docs, offset = [], [], 0
-            while True:
+            for _ in range(100):  # 7 pages expected; bounded so a regression fails, not hangs
                 page = col.get(where=where, limit=40, offset=offset, include=["documents"])
                 if not page.ids:
                     break
@@ -207,6 +227,11 @@ def test_keyset_walk_matches_offset_walk_on_postgres(tmp_path):
             assert docs == [f"doc {int(i[1:])}" for i in expect]
         meta_only = col.get(limit=5, include=["metadatas"])
         assert meta_only.ids == ids[:5] and all(m["room"] == "r" for m in meta_only.metadatas)
+        # delete(ids=, where=$or) removes only the intersection.
+        # Unwrapped, this would bind as "id IN (...) AND (x) OR (r)" and delete every row.
+        col.delete(ids=["d0000", "d0001"], where={"$or": [{"wing": "x"}, {"room": "r"}]})
+        left = set(col.get(limit=1000, include=[]).ids)
+        assert left == set(ids[2:])
     finally:
         import psycopg
         from psycopg import sql

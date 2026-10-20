@@ -59,7 +59,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   read now selects `NULL::text` in the document slot: detoasting the
   document was most of the bytes each page read.
 
-  *Tests:* 17 new or kept fake-connection tests in test_postgres_keyset_paging: a walk continues by keyset; a filtered walk keeps its filter; an unreached offset, another filter or an expired entry uses OFFSET; the memo is bounded; an empty page writes nothing; an id lookup never uses it; the document is selected only when asked for. Plus a real-postgres walk (TEST_POSTGRES_DSN) that matches the full id order with and without a filter, documents included. Never resuming, remembering the wrong next offset, always selecting the document, or never expiring an entry each turns tests red
+  The compiled filter is now parenthesised before it is ANDed with
+  another clause. A top-level `$or` compiles to `(a) OR (b)`, so
+  `... AND id > %s` bound as `(a) OR ((b) AND id > ...)` and a keyset
+  walk never ended. The same precedence was already wrong on main in
+  `delete(ids=..., where={"$or": ...})`, which bound as
+  `id IN (...) AND (a) OR (b)` and deleted every row matching `b`.
+
+  *Tests:* 17 new or kept fake-connection tests in test_postgres_keyset_paging: a walk continues by keyset; a filtered walk keeps its filter; an unreached offset, another filter or an expired entry uses OFFSET; the memo is bounded; an empty page writes nothing; an id lookup never uses it; the document is selected only when asked for; a $or filter is parenthesised before the keyset clause. Plus a real-postgres walk (TEST_POSTGRES_DSN) that matches the full id order with and without a filter, documents included, a $or walk ends, and delete(ids=, where=$or) removes only the intersection. Never resuming, remembering the wrong next offset, always selecting the document, never expiring an entry, or dropping the parentheses each turns tests red
   *Files:* `mempalace/backends/postgres.py`, `tests/test_postgres_keyset_paging.py`
 
 

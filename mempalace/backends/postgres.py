@@ -896,7 +896,10 @@ class PostgresCollection(BaseCollection):
         if where:
             where_sql, where_params = self._where_to_sql(where)
             if where_sql:
-                clauses.append(where_sql)
+                # Parenthesised: a top-level $or compiles to "(a) OR (b)", and
+                # ANDed with another clause unwrapped it would bind as
+                # "(a) OR ((b) AND ...)".
+                clauses.append(self._sql.SQL("({})").format(where_sql))
                 params.extend(where_params)
 
         # Keyset continuation: a page that starts where the previous page of
@@ -998,7 +1001,10 @@ class PostgresCollection(BaseCollection):
         if where:
             where_sql, where_params = self._where_to_sql(where)
             if where_sql:
-                clauses.append(where_sql)
+                # Parenthesised: a top-level $or compiles to "(a) OR (b)", and
+                # ANDed with another clause unwrapped it would bind as
+                # "(a) OR ((b) AND ...)".
+                clauses.append(self._sql.SQL("({})").format(where_sql))
                 params.extend(where_params)
 
         if not clauses:
