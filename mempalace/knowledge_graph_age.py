@@ -331,40 +331,46 @@ class KnowledgeGraphAGE:
         has duplicate ids (cleanup hasn't run). Logs at debug for both.
         Callers can re-invoke after dedup to install the index then.
         """
-        graph = self.GRAPH_NAME
         with self._conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM information_schema.tables "
-                "WHERE table_schema = %s AND table_name = 'Drawer'",
-                (graph,),
-            )
-            if cur.fetchone() is None:
-                return
-            # Already installed: nothing to check. The duplicate count below
-            # is a COUNT(DISTINCT) over every Drawer row (1.2M rows, 401 MB
-            # on familiar 2026-10-20), and it ran on every KG setup.
-            cur.execute(
-                "SELECT 1 FROM pg_indexes WHERE schemaname = %s AND indexname = 'drawer_id_unique'",
-                (graph,),
-            )
-            if cur.fetchone() is not None:
-                return
-            cur.execute(
-                f"SELECT COUNT(*) - COUNT(DISTINCT (properties::text)::jsonb->>'id') "
-                f'FROM "{graph}"."Drawer"'
-            )
-            dup_excess = cur.fetchone()[0]
-            if dup_excess and dup_excess > 0:
-                logger.debug(
-                    "skipping Drawer unique index: %d duplicate rows exist; run dedup first",
-                    dup_excess,
-                )
-                return
-            cur.execute(
-                f"CREATE UNIQUE INDEX IF NOT EXISTS drawer_id_unique "
-                f'ON "{graph}"."Drawer" (((properties::text)::jsonb->>\'id\'))'
-            )
+            self._drawer_unique_index_step(cur, self.GRAPH_NAME)
+        # Every path commits, the early returns included. Without it the setup
+        # connection sat "idle in transaction" holding a snapshot, which blocks
+        # CREATE INDEX CONCURRENTLY and holds back vacuum (familiar, 2026-10-20).
         self._conn.commit()
+
+    @staticmethod
+    def _drawer_unique_index_step(cur, graph: str) -> None:
+        cur.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = %s AND table_name = 'Drawer'",
+            (graph,),
+        )
+        if cur.fetchone() is None:
+            return
+        # Already installed: nothing to check. The duplicate count below
+        # is a COUNT(DISTINCT) over every Drawer row (1.2M rows, 401 MB
+        # on familiar 2026-10-20), and it ran on every KG setup.
+        cur.execute(
+            "SELECT 1 FROM pg_indexes WHERE schemaname = %s AND indexname = 'drawer_id_unique'",
+            (graph,),
+        )
+        if cur.fetchone() is not None:
+            return
+        cur.execute(
+            f"SELECT COUNT(*) - COUNT(DISTINCT (properties::text)::jsonb->>'id') "
+            f'FROM "{graph}"."Drawer"'
+        )
+        dup_excess = cur.fetchone()[0]
+        if dup_excess and dup_excess > 0:
+            logger.debug(
+                "skipping Drawer unique index: %d duplicate rows exist; run dedup first",
+                dup_excess,
+            )
+            return
+        cur.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS drawer_id_unique "
+            f'ON "{graph}"."Drawer" (((properties::text)::jsonb->>\'id\'))'
+        )
 
     # Edge-endpoint indexes the graph-walk retrieval paths join on. AGE only
     # btree-indexes each label table's own ``id`` (``_ag_label_edge_pkey``),

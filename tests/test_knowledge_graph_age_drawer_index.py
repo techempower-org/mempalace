@@ -79,3 +79,18 @@ def test_no_drawer_table_does_nothing():
     kg = _kg({TABLE: None})
     kg._ensure_drawer_unique_index()
     assert kg._conn.cur.executed == [kg._conn.cur.executed[0]]
+
+
+def test_every_path_commits_so_setup_never_sits_idle_in_transaction():
+    """An early return used to skip the commit, so the setup connection sat
+    "idle in transaction" holding a snapshot. That blocked a CREATE INDEX
+    CONCURRENTLY on familiar (2026-10-20) and held back vacuum."""
+    for answers in (
+        {TABLE: None},  # no Drawer table
+        {TABLE: (1,), INDEX: (1,)},  # index already installed
+        {TABLE: (1,), INDEX: None, COUNT: (3,)},  # duplicates block it
+        {TABLE: (1,), INDEX: None, COUNT: (0,)},  # index created
+    ):
+        kg = _kg(answers)
+        kg._ensure_drawer_unique_index()
+        assert kg._conn.commits == 1, answers
