@@ -24,6 +24,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **AGE knowledge-graph setup commits on every path through the Drawer-index check, so its connection no longer sits idle in transaction holding a snapshot after an early return** (`HEAD` — pending resolution)
+  `_ensure_drawer_unique_index` committed only on the path that created
+  the index. Since #570 the common path returns early because the index
+  exists, so every KG setup left its connection "idle in transaction"
+  with a snapshot (`backend_xmin` set). On familiar at 23:51 on
+  2026-10-20, this blocked a `CREATE INDEX CONCURRENTLY` in its
+  "waiting for old snapshots" phase, and it holds back vacuum's horizon
+  for as long as the connection stays idle. The "no Drawer table" return
+  had the same leak before #570.
+
+  The checks now run in a helper, and the caller commits once after it,
+  whichever way it returns.
+
+  *Tests:* test_every_path_commits_so_setup_never_sits_idle_in_transaction: each of the four paths (no table, index installed, duplicates, index created) commits exactly once. It fails on the previous code
+  *Files:* `mempalace/knowledge_graph_age.py`, `tests/test_knowledge_graph_age_drawer_index.py`
+
+
 - **on postgres, tool_status reuses a result for 60 s, runs one build at a time, and when the count queries miss their timeout it serves the last result (marked stale, for up to 30 min) instead of falling back to the full metadata sweep** (`HEAD` — pending resolution)
   Every SessionStart hook calls status. On postgres, status ran three
   whole-table count queries under a 3 s statement timeout, and on a

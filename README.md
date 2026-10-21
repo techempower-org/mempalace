@@ -290,6 +290,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| AGE knowledge-graph setup commits on every path through the Drawer-index check, so its connection no longer sits idle in transaction holding a snapshot after an early return | — | `HEAD` — pending resolution |
 | on postgres, tool_status reuses a result for 60 s, runs one build at a time, and when the count queries miss their timeout it serves the last result (marked stale, for up to 30 min) instead of falling back to the full metadata sweep | — | `HEAD` — pending resolution |
 | on postgres, a graph build serves for five minutes even after a write empties the graph cache, so a palace being mined no longer re-runs the room aggregate on nearly every graph_stats call | — | `HEAD` — pending resolution |
 | a Claude Code transcript's tool output that isn't text (a binary piped to stdout, or a minified-code line) is replaced by a marker giving its size before it is filed, so it no longer becomes drawers that recall surfaces as "essential story" | — | `HEAD` — pending resolution |

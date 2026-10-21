@@ -238,7 +238,9 @@ def test_kg_age_init_bootstraps_graph(monkeypatch):
     assert "LOAD 'age'" in statements
     assert "search_path" in statements
     assert "create_graph" in statements
-    assert conn.commits == 1
+    # One for the graph setup, one for the Drawer-index check (#574: every path
+    # of that check commits, so setup never sits idle in transaction).
+    assert conn.commits == 2
     assert conn.autocommit is False
 
 
