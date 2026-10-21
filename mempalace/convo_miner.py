@@ -898,10 +898,13 @@ def _file_chunks_locked(
         # too — ``prefetch_content_hashes`` must see the same value a full
         # mine would have written. filed_at / entities / hall / novelty_tag
         # are left as they were: the drawer's content did not change.
-        if unchanged:
+        use_manifest, to_refresh = _unchanged_to_refresh(
+            collection, unchanged, extract_mode, content_hash
+        )
+        if to_refresh:
             refreshed = _refresh_unchanged_drawers(
                 collection,
-                unchanged,
+                to_refresh,
                 source_mtime=source_mtime,
                 chunk_total=chunk_total,
                 authored_at=authored_at,
@@ -988,9 +991,10 @@ def _file_chunks_locked(
             # A successful earlier batch has the source's current mtime and
             # chunk_total. Remove the rows this pass wrote so the next run
             # cannot treat the incomplete set as fully filed (#2183 / #2122).
-            # The unchanged drawers stay: they already carry the new mtime
-            # and chunk_total, and with the new rows gone the group is short
-            # of chunk_total, so the file is re-mined next pass anyway.
+            # The unchanged drawers stay. Without a manifest they already carry the
+            # new mtime and chunk_total, and with the new rows gone the group is short
+            # of chunk_total. With one, the manifest row was not written. Either way
+            # the file is re-mined next pass.
             try:
                 delete_ids = [drawer_id for _chunk, _room, drawer_id in changed]
                 if delete_ids:
@@ -1002,12 +1006,54 @@ def _file_chunks_locked(
                     exc_info=True,
                 )
             raise
+        _write_source_manifest(
+            use_manifest, collection, source_file, extract_mode, source_mtime, chunk_total
+        )
         if unchanged:
             print(
                 f"    = {len(unchanged)} unchanged drawer(s) kept, "
                 f"{len(changed)} embedded ({Path(source_file).name[:50]})"
             )
     return drawers_added, room_counts_delta, False
+
+
+def _unchanged_to_refresh(collection, unchanged: list, extract_mode, content_hash):
+    """``(use_manifest, items)``: whether this pass records completeness in the source
+    manifest, and which unchanged drawers still need a metadata refresh.
+
+    With a manifest (postgres, #575) completeness lives in one row per source, so the
+    unchanged drawers are left alone: re-stamping them was a non-HOT UPDATE per chunk
+    that wrote every drawer index (familiar, 2026-10-21: 33k rows per pass of one
+    transcript). Only chunk 0 is refreshed, because it carries the file-level
+    content_hash that prefetch_content_hashes reads. Without a manifest, every
+    unchanged drawer is refreshed, as before.
+    """
+    use_manifest = (
+        extract_mode is not None and getattr(collection, "supports_source_manifest", False) is True
+    )
+    if not use_manifest:
+        return False, unchanged
+    if content_hash is None:
+        return True, []
+    return True, [item for item in unchanged if item[0].get("chunk_index", 0) == 0]
+
+
+def _write_source_manifest(
+    use_manifest, collection, source_file, extract_mode, source_mtime, chunk_total
+):
+    """Record this pass as complete (when the pass uses the manifest). Written last, after
+    every upsert, so it is the pass's commit point; a failure only costs a redundant
+    re-mine next time."""
+    if not use_manifest:
+        return
+    try:
+        collection.manifest_put(
+            source_file, extract_mode, source_mtime, chunk_total, NORMALIZE_VERSION
+        )
+    except Exception:
+        logger.warning(
+            "Source manifest write failed for %s; it will be re-mined", source_file, exc_info=True
+        )
 
 
 def _refresh_unchanged_drawers(

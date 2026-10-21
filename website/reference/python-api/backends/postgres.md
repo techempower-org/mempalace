@@ -146,6 +146,20 @@ equals the length of a full paged ``get(where=where)``. ``wing`` and
 def estimated_count(self) -> int
 ```
 
+#### `manifest_get`
+
+```python
+def manifest_get(self, extract_mode: str, source_files: Optional[list] = None) -> dict
+```
+
+``&#123;source_file: &#123;"source_mtime", "chunk_total", "normalize_version"}}``.
+
+#### `manifest_put`
+
+```python
+def manifest_put(self, source_file: str, extract_mode: str, source_mtime: Optional[float], chunk_total: int, normalize_version: int) -> None
+```
+
 #### `close`
 
 ```python

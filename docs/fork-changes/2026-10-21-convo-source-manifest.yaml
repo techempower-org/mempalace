@@ -1,0 +1,36 @@
+seq: 184
+id: convo-source-manifest
+date: '2026-10-21'
+bucket: Fixed
+commit: HEAD
+area: Mining
+summary: on postgres a convo re-mine no longer re-stamps every unchanged chunk; completeness is recorded in one source-manifest row per (source_file, extract_mode), written last in the pass, so re-mining an appended live session updates its new chunks plus chunk 0 instead of every chunk
+body: |
+  Every re-mine of a live transcript refreshed each unchanged chunk's
+  `source_mtime`/`chunk_total` so the completeness readers would see
+  one coherent group (#2183). On postgres, `metadata` is GIN-indexed,
+  so each refresh was a non-HOT UPDATE that wrote all eight drawer
+  indexes, HNSW included. On familiar on 2026-10-21 the drainer re-mined
+  one 33,443-chunk transcript 45 times in 13 h. In three minutes
+  pg_statio showed the HNSW index reading 1.18 GB and the text GINs
+  about 1.2 GB, with no seq scans. That was most of the NVMe load, and
+  realm.db on the same disk took write holds over 5 s.
+
+  `PostgresCollection` gains a source manifest
+  (`<table>_source_manifest`, keyed by source_file and extract_mode)
+  with `manifest_get`/`manifest_put`, advertised by
+  `supports_source_manifest = True`. With it, the convo miner refreshes
+  only chunk 0 (its file-level `content_hash` feeds
+  prefetch_content_hashes) and writes the manifest row after every
+  upsert of the pass has succeeded. That row is the pass's commit point:
+  a pass that fails leaves the previous row, and the file is re-mined.
+  `file_already_mined` and `prefetch_mined_set` (full and scoped) prefer
+  a current-schema manifest row to the per-drawer groups, and fall back
+  to them when there is no row or the read fails. Other backends keep
+  the per-chunk refresh unchanged.
+tests: '9 new (test_source_manifest: with a manifest only chunk 0 is refreshed, and nothing without a content hash; without the capability every unchanged drawer is, including a MagicMock collection; manifest reads fail toward the drawer groups; only a current-schema row with an mtime counts; prefetch reads a generator of source files twice). Against real postgres: a re-mine of an appended session updates only chunk 0 and moves the manifest, which both readers see; a pass that fails mid-upsert leaves the manifest stale and the file not mined; without the capability the old refresh runs. Refreshing every unchanged chunk, never writing the manifest, readers ignoring it, or writing it before the upserts each turns tests red'
+files:
+- mempalace/backends/postgres.py
+- mempalace/convo_miner.py
+- mempalace/palace.py
+- tests/test_source_manifest.py

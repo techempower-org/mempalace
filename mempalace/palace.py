@@ -1622,6 +1622,32 @@ def _metadata_matches_extract_mode(meta: dict, extract_mode: Optional[str]) -> b
     return extract_mode == "exchange" and meta.get("ingest_mode") in (None, "convos")
 
 
+def _source_manifest(collection, extract_mode: Optional[str], source_files=None) -> dict:
+    """Manifest rows for ``extract_mode`` (postgres, #575), or ``{}`` when there is none.
+
+    The convo miner writes one row per source after a pass has filed every chunk, and
+    from then on leaves unchanged drawers' ``source_mtime``/``chunk_total`` alone. So a
+    current row is the record of the last complete pass, and readers prefer it to the
+    per-drawer groups. Any failure reads as "no manifest", falling back to the drawers.
+    """
+    if extract_mode is None or getattr(collection, "supports_source_manifest", False) is not True:
+        return {}
+    try:
+        files = list(source_files) if source_files is not None else None
+        return collection.manifest_get(extract_mode, files) or {}
+    except Exception:
+        logger.debug("source manifest read failed; using the drawer groups", exc_info=True)
+        return {}
+
+
+def _manifest_mtime(row) -> Optional[float]:
+    """The row's mtime when it is at the current schema and has one, else ``None``."""
+    if not isinstance(row, dict) or int(row.get("normalize_version") or 0) < NORMALIZE_VERSION:
+        return None
+    mtime = row.get("source_mtime")
+    return float(mtime) if mtime is not None else None
+
+
 def file_already_mined(
     collection,
     source_file: str,
@@ -1673,6 +1699,12 @@ def file_already_mined(
         # Iterating via the same paginated pattern used in the
         # extract_mode-is-set branch lets the function short-circuit on the
         # first matching group regardless of ordering.
+        manifest = _source_manifest(collection, extract_mode, [source_file]).get(source_file)
+        manifest_mtime = _manifest_mtime(manifest)
+        if manifest_mtime is not None:
+            if not check_mtime:
+                return True
+            return abs(manifest_mtime - os.path.getmtime(source_file)) < 0.001
         current_mtime = os.path.getmtime(source_file) if check_mtime else None
         offset = 0
         # Tracks, per matching stored_mtime group, how many drawers have
@@ -1816,7 +1848,10 @@ def prefetch_mined_set(
 
     try:
         if source_files is not None:
-            for src in dict.fromkeys(source_files):
+            source_files = list(
+                dict.fromkeys(source_files)
+            )  # read twice: here and the manifest overlay
+            for src in source_files:
                 for page in _iter_scoped_metadata(collection, {"source_file": src}):
                     fold(page)
         else:
@@ -1842,6 +1877,11 @@ def prefetch_mined_set(
             if entry["count"] >= chunk_total:
                 mined[src] = mtime_key
                 break
+    # A current manifest row is the last complete pass, and outranks the drawer groups.
+    for src, row in _source_manifest(collection, extract_mode, source_files).items():
+        manifest_mtime = _manifest_mtime(row)
+        if manifest_mtime is not None:
+            mined[src] = manifest_mtime
     return mined
 
 

@@ -1165,6 +1165,81 @@ class PostgresCollection(BaseCollection):
         self._ensure_setup(create=True)
         return self._estimated_count()
 
+    # ------------------------------------------------------------------
+    # Source manifest (#575)
+    # ------------------------------------------------------------------
+    # One row per (source_file, extract_mode): the mtime, chunk count and schema version of
+    # the last pass that filed every chunk of that source. The convo miner writes it last,
+    # after all of a pass's upserts, so a crashed pass leaves the previous row and the file
+    # is re-mined (the #2183 guarantee). With it, a re-mine no longer re-stamps every
+    # unchanged chunk: on familiar (2026-10-21) those metadata UPDATEs were non-HOT and
+    # wrote all eight drawer indexes, HNSW included, 33k rows per pass of one transcript.
+
+    supports_source_manifest = True
+
+    @property
+    def _manifest_id(self):
+        return self._sql.Identifier(f"{self.table_name}_source_manifest")
+
+    def _ensure_manifest(self) -> None:
+        if getattr(self, "_manifest_ready", False):
+            return
+        self._ensure_setup(create=True)
+        self._cursor().execute(
+            self._sql.SQL(
+                "CREATE TABLE IF NOT EXISTS {} ("
+                " source_file text NOT NULL,"
+                " extract_mode text NOT NULL,"
+                " source_mtime double precision,"
+                " chunk_total integer NOT NULL,"
+                " normalize_version integer NOT NULL,"
+                " updated_at timestamptz NOT NULL DEFAULT now(),"
+                " PRIMARY KEY (source_file, extract_mode))"
+            ).format(self._manifest_id)
+        )
+        self._manifest_ready = True
+
+    def manifest_get(self, extract_mode: str, source_files: Optional[list] = None) -> dict:
+        """``{source_file: {"source_mtime", "chunk_total", "normalize_version"}}``."""
+        self._ensure_manifest()
+        params: list[Any] = [extract_mode]
+        sql = self._sql.SQL(
+            "SELECT source_file, source_mtime, chunk_total, normalize_version FROM {}"
+            " WHERE extract_mode = %s"
+        ).format(self._manifest_id)
+        if source_files is not None:
+            files = [f for f in source_files if isinstance(f, str)]
+            if not files:
+                return {}
+            sql = sql + self._sql.SQL(" AND source_file = ANY(%s)")
+            params.append(files)
+        cur = self._cursor()
+        cur.execute(sql, params)
+        return {
+            row[0]: {"source_mtime": row[1], "chunk_total": row[2], "normalize_version": row[3]}
+            for row in cur.fetchall()
+        }
+
+    def manifest_put(
+        self,
+        source_file: str,
+        extract_mode: str,
+        source_mtime: Optional[float],
+        chunk_total: int,
+        normalize_version: int,
+    ) -> None:
+        self._ensure_manifest()
+        self._cursor().execute(
+            self._sql.SQL(
+                "INSERT INTO {} (source_file, extract_mode, source_mtime, chunk_total,"
+                " normalize_version, updated_at) VALUES (%s, %s, %s, %s, %s, now())"
+                " ON CONFLICT (source_file, extract_mode) DO UPDATE SET"
+                " source_mtime = EXCLUDED.source_mtime, chunk_total = EXCLUDED.chunk_total,"
+                " normalize_version = EXCLUDED.normalize_version, updated_at = now()"
+            ).format(self._manifest_id),
+            [source_file, extract_mode, source_mtime, int(chunk_total), int(normalize_version)],
+        )
+
     def close(self) -> None:
         if self._conn is not None:
             self._conn.close()
