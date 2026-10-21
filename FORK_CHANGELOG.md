@@ -24,6 +24,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **on postgres, tool_status reuses a result for 60 s, runs one build at a time, and when the count queries miss their timeout it serves the last result (marked stale, for up to 30 min) instead of falling back to the full metadata sweep** (`HEAD` — pending resolution)
+  Every SessionStart hook calls status. On postgres, status ran three
+  whole-table count queries under a 3 s statement timeout, and on a
+  miss it fell back to the legacy sweep of every drawer's metadata. On
+  familiar on 2026-10-20 (1.18M drawers, NVMe 89% busy during a
+  20,569-chunk mine) the counts kept missing, so each status call added
+  a full-table read exactly when the disk was saturated. realm.db, on
+  the same NVMe, took a 16.7 s lock hold at 22:41.
+
+  `_tool_status_via_postgres` now caches a successful result for 60 s
+  behind a lock. A failed build returns the last result with
+  `stale: true` and `stale_age_s`, for up to 30 minutes. Only when no
+  result exists at all does it return None, so the caller falls back
+  to the sweep as before.
+
+  *Tests:* 6 new (test_tool_status_postgres_cache: a fresh result is reused without querying; a failure serves the last result marked stale; a failure with nothing cached returns None; a result past the stale limit is not served; a cached result is not mutated by callers; tool_status on postgres does not sweep when a stale result exists). A zero TTL (2 failed), no stale serving (3 failed) or returning the cached dict itself (1 failed) each turns tests red
+  *Files:* `mempalace/mcp_server.py`, `tests/conftest.py`, `tests/test_tool_status_postgres_cache.py`
+
+
 - **on postgres, a graph build serves for five minutes even after a write empties the graph cache, so a palace being mined no longer re-runs the room aggregate on nearly every graph_stats call** (`HEAD` — pending resolution)
   After #568, graph_stats on familiar still ran about 85 times an hour.
   Every mine write calls invalidate_graph_cache(), so nearly every call

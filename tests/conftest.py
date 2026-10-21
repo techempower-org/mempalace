@@ -466,3 +466,17 @@ def _reset_palace_graph_postgres_state():
         pg._graph_last_good = None
         pg._graph_last_good_at = 0.0
         pg._graph_pg_failed_at = 0.0
+
+
+@pytest.fixture(autouse=True)
+def _reset_postgres_status_cache():
+    """mcp_server keeps the last postgres status result across calls."""
+    import sys
+
+    mcp = sys.modules.get("mempalace.mcp_server")
+    if mcp is not None and hasattr(mcp, "_pg_status_cache"):
+        mcp._pg_status_cache = None
+    yield
+    mcp = sys.modules.get("mempalace.mcp_server")
+    if mcp is not None and hasattr(mcp, "_pg_status_cache"):
+        mcp._pg_status_cache = None

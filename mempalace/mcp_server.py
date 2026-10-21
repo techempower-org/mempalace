@@ -2381,7 +2381,37 @@ def _tool_status_via_sqlite() -> dict:
     return result
 
 
+# Postgres status cache. Every SessionStart hook calls status, and the three
+# count queries are whole-table scans: on familiar (1.18M drawers, 2026-10-20)
+# they missed the 3 s timeout whenever the disk was busy. Each miss fell back
+# to the metadata sweep below, a full-table read, exactly when the disk was
+# saturated. So a result is reused for _PG_STATUS_TTL_S, builds run one at a
+# time, and a failed build serves the last result (marked stale) for up to
+# _PG_STATUS_STALE_MAX_S instead of returning None.
+_pg_status_lock = threading.Lock()
+_pg_status_cache = None  # (result dict, time.time() it was built)
+_PG_STATUS_TTL_S = 60.0
+_PG_STATUS_STALE_MAX_S = 1800.0
+
+
 def _tool_status_via_postgres() -> Optional[dict]:
+    global _pg_status_cache
+    with _pg_status_lock:
+        cached = _pg_status_cache
+        if cached is not None and time.time() - cached[1] < _PG_STATUS_TTL_S:
+            return dict(cached[0])
+        result = _tool_status_via_postgres_uncached()
+        if result is not None:
+            _pg_status_cache = (result, time.time())
+            return dict(result)
+        if cached is not None and time.time() - cached[1] < _PG_STATUS_STALE_MAX_S:
+            age = int(time.time() - cached[1])
+            logger.warning("tool_status postgres fast-path failed; serving a %ds-old result", age)
+            return {**cached[0], "stale": True, "stale_age_s": age}
+        return None
+
+
+def _tool_status_via_postgres_uncached() -> Optional[dict]:
     """Postgres fast-path for tool_status: SQL group-by, sub-100ms on 370k rows.
 
     Mirrors palace-daemon's ``/status/fast`` (main.py ``status_fast``):
