@@ -20,6 +20,12 @@ Supported:
 
 No API key. No internet. Everything local.
 
+## Classes
+
+### `class UnparsedCodexTranscriptError(ValueError)`
+
+A recognized Codex rollout did not yield a supported conversation.
+
 ## Functions
 
 ### `strip_noise`

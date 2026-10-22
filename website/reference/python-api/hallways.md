@@ -57,15 +57,18 @@ Algorithm:
 
 Args:
     wing: wing name to scan.
-    col: ChromaDB collection — must support ``.count()`` and paginated
-        ``.get(limit=..., offset=..., include=...)``. The fetch is filtered
-        to ``wing`` client-side rather than via ``.get(where=&#123;"wing": ...})``,
-        which binds one SQL variable per matched id and overflows SQLite's
-        ``SQLITE_MAX_VARIABLE_NUMBER`` on large wings (#1619). Fake
-        collections and alternate backends must implement this shape.
-        If ``None``, returns ``[]`` (caller didn't supply a backing
-        store, so nothing to compute against). Tests pass a controlled
-        MagicMock.
+    col: ChromaDB collection — must support paginated
+        ``.get(where=&#123;"wing": ...}, limit=..., offset=..., include=...)``.
+        The fetch is scoped to ``wing`` server-side AND paginated: an
+        unbounded ``.get(where=...)`` binds one SQL variable per matched
+        id and overflows SQLite's ``SQLITE_MAX_VARIABLE_NUMBER`` on wings
+        above ~32k drawers (#1619), while an unscoped page walk costs
+        O(total palace drawers) on every mine, pegging the CPU for
+        minutes on large palaces (#2466). A bounded page never binds more
+        than ``batch_size`` ids. Fake collections and alternate backends
+        must implement this shape. If ``None``, returns ``[]`` (caller
+        didn't supply a backing store, so nothing to compute against).
+        Tests pass a controlled MagicMock.
     min_count: minimum co-occurrence count required to materialize a
         hallway between two entities. Default 2 — single co-occurrences
         are noise (entities mentioned together once in one drawer);

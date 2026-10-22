@@ -568,6 +568,28 @@
     ]
   },
   {
+    "text": "searcher",
+    "collapsed": true,
+    "items": [
+      {
+        "text": "mempalace.searcher.cli_search",
+        "link": "/reference/python-api/searcher/cli_search"
+      },
+      {
+        "text": "mempalace.searcher.filters",
+        "link": "/reference/python-api/searcher/filters"
+      },
+      {
+        "text": "mempalace.searcher.query",
+        "link": "/reference/python-api/searcher/query"
+      },
+      {
+        "text": "mempalace.searcher.render",
+        "link": "/reference/python-api/searcher/render"
+      }
+    ]
+  },
+  {
     "text": "sources",
     "collapsed": true,
     "items": [

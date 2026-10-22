@@ -173,7 +173,7 @@ Returns:
 ### `add_to_known_entities`
 
 ```python
-def add_to_known_entities(entities_by_category: dict, wing: str = None) -> str
+def add_to_known_entities(entities_by_category: dict, wing: str = None) -> Optional[str]
 ```
 
 Union ``entities_by_category`` into ``~/.mempalace/known_entities.json``.
@@ -202,7 +202,9 @@ The in-process cache is invalidated on write so same-process callers
 (notably ``cmd_init`` → ``cmd_mine`` in sequence) see the update
 immediately instead of waiting for a mtime re-check.
 
-Returns the registry path as a string for logging.
+Returns the registry path as a string for logging, or ``None`` when the
+registry was left alone and nothing was written, so a caller does not
+report an update that did not happen.
 
 ### `get_topics_by_wing`
 

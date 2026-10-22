@@ -508,6 +508,24 @@ def pgvector_namespace(self)
 
 Optional pgvector table namespace/prefix for multi-tenant isolation.
 
+#### `pgvector_shared_namespace`
+
+```python
+def pgvector_shared_namespace(self)
+```
+
+Optional shared table namespace for a pgvector palace spanning hosts.
+
+By default the pgvector backend derives each table name from a hash of
+the palace's *local* path, so several machines pointed at one Postgres
+silently write to separate tables instead of sharing memory. Set this to
+any name the whole fleet agrees on (letters, digits and ``_ - . / :``
+or spaces) and every node resolves the same tables.
+
+Leave unset — the default — for single-machine palaces; table naming is
+then exactly as before and no migration is needed. It is orthogonal to
+``pgvector_namespace``, which stays the tenant-isolation dimension.
+
 #### `people_map`
 
 ```python
@@ -687,6 +705,37 @@ Read from env ``MEMPALACE_EMBEDDINGGEMMA_BATCH_SIZE`` first, then
 default. Unset, non-numeric, or non-positive values fall back to the
 default rather than raising; ``EmbeddinggemmaONNX.__init__`` still
 raises on an explicitly-passed non-positive ``batch_size``.
+
+#### `hybrid_rank_vector_weight`
+
+```python
+def hybrid_rank_vector_weight(self) -> float
+```
+
+Weight of the vector (embedding-similarity) signal in the hybrid
+re-rank (``searcher._hybrid_rank``).
+
+Read from env ``MEMPALACE_HYBRID_VECTOR_WEIGHT`` first, then
+``hybrid_rank_vector_weight`` in ``config.json``, then the built-in
+default (``0.6``). Unset, non-numeric, infinite, or negative values
+fall back to the default rather than raising — a hand-edited
+``config.json`` shouldn't take retrieval down. The default reproduces
+the previously-hardcoded weight, so leaving it unset is a
+byte-identical blend (#2298).
+
+#### `hybrid_rank_bm25_weight`
+
+```python
+def hybrid_rank_bm25_weight(self) -> float
+```
+
+Weight of the BM25 (lexical) signal in the hybrid re-rank
+(``searcher._hybrid_rank``).
+
+Read from env ``MEMPALACE_HYBRID_BM25_WEIGHT`` first, then
+``hybrid_rank_bm25_weight`` in ``config.json``, then the built-in
+default (``0.4``). Unset, non-numeric, infinite, or negative values
+fall back to the default rather than raising (#2298).
 
 #### `set_embedding_model`
 
@@ -1070,6 +1119,29 @@ other URI-reserved characters — common in real home directories (a Windows
 user folder like ``First Last``, many macOS paths). ``pathname2url``
 percent-encodes the path and normalizes separators so the database opens on
 every platform.
+
+### `connect_sqlite_read`
+
+```python
+def connect_sqlite_read(db_path: str, *, timeout: 'float | None' = None)
+```
+
+Open ``db_path`` for reading, and keep reading when ``mode=ro`` cannot.
+
+A WAL database whose ``-wal`` and ``-shm`` sidecars are absent cannot be
+read through a read-only connection on every SQLite build: Apple's system
+library, which CPython links on macOS, accepts the connect and then fails
+the first statement with ``SQLITE_CANTOPEN``, because a read-only
+connection may not create the shared-memory index that WAL needs. The
+sidecars are absent exactly when nothing holds the palace open, which is
+the ordinary state before this process opens chroma, so a healthy palace
+came back as unreadable and the integrity gate refused every tool (#2489).
+
+Only that case takes a normal open, which creates the sidecars the
+read-only connection may not and takes SQLite's usual locks. ``immutable=1``
+would also open, but it disables locking and can read a torn page set from
+under a live writer, so it is not a substitute. Everything else keeps the
+read-only connection it had.
 
 ### `get_configured_collection_name`
 

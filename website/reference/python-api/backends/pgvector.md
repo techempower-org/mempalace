@@ -20,6 +20,17 @@ Isolation model (RFC 001 isolation contract): one table per
 table name, so this backend advertises ``supports_namespace_isolation`` and
 satisfies the cross-namespace conformance arm.
 
+Shared multi-node databases: the per-palace component of a table name is a
+hash of ``PalaceRef.id``, which is the palace's *local filesystem path*. That
+is the right default (two palaces on one host never collide), but it makes a
+palace shared by several machines shard silently — a laptop at
+``/Users/ada/.mempalace/palace`` and a server at ``/srv/mempalace/palace``
+pointed at one Postgres hash to different prefixes, so each node writes and
+reads its own private tables and no error is ever raised. Setting
+``pgvector_shared_namespace`` (see :func:`_shared_namespace_slug`) replaces
+that path hash with a name every node can agree on, so a fleet converges on
+one set of tables. Unset — the default — nothing changes.
+
 Dependency posture: the live client needs the optional ``psycopg`` dependency
 (``pip install mempalace[pgvector]``), imported lazily so the package imports
 fine without it. CI runs against an in-memory fake client; the live Postgres

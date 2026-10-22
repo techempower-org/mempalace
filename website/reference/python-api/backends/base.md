@@ -515,3 +515,11 @@ Returns the resolved state and raises on a hard, unforced conflict:
 
 A ``dimension`` of ``0`` on either side means "unknown" and is skipped, so
 a model-name-only check (cheap read path) still works.
+
+### `initialize_last_modified_metadata`
+
+```python
+def initialize_last_modified_metadata(metadatas)
+```
+
+Initialize last_modified from filed_at without mutating caller data.

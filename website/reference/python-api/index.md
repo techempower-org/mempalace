@@ -158,6 +158,13 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.mcp_server.tools_read`](./mcp_server/tools_read)
 - [`mempalace.mcp_server.tools_write`](./mcp_server/tools_write)
 
+### searcher
+
+- [`mempalace.searcher.cli_search`](./searcher/cli_search)
+- [`mempalace.searcher.filters`](./searcher/filters)
+- [`mempalace.searcher.query`](./searcher/query)
+- [`mempalace.searcher.render`](./searcher/render)
+
 ### sources
 
 - [`mempalace.sources.aider`](./sources/aider) — Aider source adapter (RFC 002).

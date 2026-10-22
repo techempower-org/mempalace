@@ -261,7 +261,7 @@ def quarantine_stale_hnsw(palace_path: str, stale_seconds: float = 300.0) -> lis
 
 Rename HNSW segment dirs that look unsafe to open.
 
-This catches two classes of HNSW corruption before ChromaDB opens the
+This catches three classes of HNSW corruption before ChromaDB opens the
 native segment reader:
 
 1. stale-by-mtime segments whose ``index_metadata.pickle`` fails the
