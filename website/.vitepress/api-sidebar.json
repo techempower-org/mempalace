@@ -212,6 +212,10 @@
         "link": "/reference/python-api/logsync"
       },
       {
+        "text": "mempalace.mcp_light_server",
+        "link": "/reference/python-api/mcp_light_server"
+      },
+      {
         "text": "mempalace.mcp_proxy",
         "link": "/reference/python-api/mcp_proxy"
       },
@@ -282,6 +286,10 @@
       {
         "text": "mempalace.provenance",
         "link": "/reference/python-api/provenance"
+      },
+      {
+        "text": "mempalace.query_parser",
+        "link": "/reference/python-api/query_parser"
       },
       {
         "text": "mempalace.query_sanitizer",
@@ -464,8 +472,54 @@
         "link": "/reference/python-api/backends/registry"
       },
       {
+        "text": "mempalace.backends.rust_exact",
+        "link": "/reference/python-api/backends/rust_exact"
+      },
+      {
         "text": "mempalace.backends.sqlite_exact",
         "link": "/reference/python-api/backends/sqlite_exact"
+      }
+    ]
+  },
+  {
+    "text": "cli",
+    "collapsed": true,
+    "items": [
+      {
+        "text": "mempalace.cli.cmd_coord",
+        "link": "/reference/python-api/cli/cmd_coord"
+      },
+      {
+        "text": "mempalace.cli.cmd_init",
+        "link": "/reference/python-api/cli/cmd_init"
+      },
+      {
+        "text": "mempalace.cli.cmd_mine",
+        "link": "/reference/python-api/cli/cmd_mine"
+      },
+      {
+        "text": "mempalace.cli.cmd_query",
+        "link": "/reference/python-api/cli/cmd_query"
+      },
+      {
+        "text": "mempalace.cli.cmd_repair",
+        "link": "/reference/python-api/cli/cmd_repair"
+      },
+      {
+        "text": "mempalace.cli.cmd_serve",
+        "link": "/reference/python-api/cli/cmd_serve"
+      },
+      {
+        "text": "mempalace.cli.cmd_sync",
+        "link": "/reference/python-api/cli/cmd_sync"
+      },
+      {
+        "text": "mempalace.cli.cmd_update",
+        "link": "/reference/python-api/cli/cmd_update"
+      },
+      {
+        "text": "mempalace.cli.parser",
+        "link": "/reference/python-api/cli/parser"
       }
     ]
   },
@@ -476,6 +530,40 @@
       {
         "text": "mempalace.integrations.hermes",
         "link": "/reference/python-api/integrations/hermes"
+      }
+    ]
+  },
+  {
+    "text": "mcp_server",
+    "collapsed": true,
+    "items": [
+      {
+        "text": "mempalace.mcp_server.protocol",
+        "link": "/reference/python-api/mcp_server/protocol"
+      },
+      {
+        "text": "mempalace.mcp_server.runtime",
+        "link": "/reference/python-api/mcp_server/runtime"
+      },
+      {
+        "text": "mempalace.mcp_server.tools_coord",
+        "link": "/reference/python-api/mcp_server/tools_coord"
+      },
+      {
+        "text": "mempalace.mcp_server.tools_diary",
+        "link": "/reference/python-api/mcp_server/tools_diary"
+      },
+      {
+        "text": "mempalace.mcp_server.tools_kg",
+        "link": "/reference/python-api/mcp_server/tools_kg"
+      },
+      {
+        "text": "mempalace.mcp_server.tools_read",
+        "link": "/reference/python-api/mcp_server/tools_read"
+      },
+      {
+        "text": "mempalace.mcp_server.tools_write",
+        "link": "/reference/python-api/mcp_server/tools_write"
       }
     ]
   },

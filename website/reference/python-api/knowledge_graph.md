@@ -128,6 +128,14 @@ Get all relationships for an entity.
 direction: "outgoing" (entity → ?), "incoming" (? → entity), "both"
 as_of: ISO date or canonical UTC datetime — only return facts valid then
 
+#### `find_entity_candidates`
+
+```python
+def find_entity_candidates(self, name: str) -> list
+```
+
+Return token/prefix entity matches for disambiguation (never substring).
+
 #### `query_relationship`
 
 ```python

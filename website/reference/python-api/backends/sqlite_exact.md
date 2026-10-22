@@ -54,7 +54,7 @@ def update(self, *, ids, documents = None, metadatas = None, embeddings = None)
 #### `query`
 
 ```python
-def query(self, *, query_texts = None, query_embeddings = None, n_results = 10, where = None, where_document = None, include = None) -> QueryResult
+def query(self, **kwargs) -> QueryResult
 ```
 
 #### `get`

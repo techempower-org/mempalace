@@ -84,7 +84,7 @@ the exact state being repaired — can be opened at all.
 ### `get_closets_collection`
 
 ```python
-def get_closets_collection(palace_path: str, create: bool = True, backend: Optional[str] = None)
+def get_closets_collection(palace_path: str, create: bool = True, backend: Optional[str] = None, *, read_only: bool = False)
 ```
 
 Get the closets collection — the searchable index layer.

@@ -61,6 +61,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.llm_refine`](./llm_refine) — llm_refine.py — Optional LLM refinement of regex-detected entities.
 - [`mempalace.logstream`](./logstream) — logstream.py — Agent coordination event log for MemPalace (RFC 003)
 - [`mempalace.logsync`](./logsync) — logsync.py — Anti-entropy sync engine for the logstream (RFC 004 step 0)
+- [`mempalace.mcp_light_server`](./mcp_light_server) — MemPalace Lightweight MCP Server
 - [`mempalace.mcp_proxy`](./mcp_proxy) — Thin stdio front end for the MemPalace MCP server.
 - [`mempalace.mcp_server`](./mcp_server) — MemPalace MCP Server — read/write palace access for Claude Code
 - [`mempalace.migrate`](./migrate) — mempalace migrate — Recover a palace created with a different ChromaDB version.
@@ -79,6 +80,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.pending_queue`](./pending_queue) — Append-only journal for mine requests that couldn't reach the daemon.
 - [`mempalace.project_scanner`](./project_scanner) — project_scanner.py — Detect projects and people from real signal.
 - [`mempalace.provenance`](./provenance) — Source provenance and staleness for search hits.
+- [`mempalace.query_parser`](./query_parser) — query_parser.py — Parser for Palace Query Language (PQL) and Command DSL.
 - [`mempalace.query_sanitizer`](./query_sanitizer) — query_sanitizer.py — Mitigate system prompt contamination in search queries.
 - [`mempalace.ratings`](./ratings) — Feedback ratings for search results (#159, Tier 1).
 - [`mempalace.recency`](./recency) — Recency weighting for search results (#158).
@@ -127,11 +129,34 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.backends.postgres`](./backends/postgres) — Optional PostgreSQL-backed MemPalace storage backend.
 - [`mempalace.backends.qdrant`](./backends/qdrant) — Qdrant REST backend for MemPalace.
 - [`mempalace.backends.registry`](./backends/registry) — Backend registry + entry-point discovery (RFC 001 §3).
+- [`mempalace.backends.rust_exact`](./backends/rust_exact) — Rust exact-vector backend for MemPalace.
 - [`mempalace.backends.sqlite_exact`](./backends/sqlite_exact) — SQLite exact-vector backend for MemPalace.
+
+### cli
+
+- [`mempalace.cli.cmd_coord`](./cli/cmd_coord)
+- [`mempalace.cli.cmd_init`](./cli/cmd_init)
+- [`mempalace.cli.cmd_mine`](./cli/cmd_mine)
+- [`mempalace.cli.cmd_query`](./cli/cmd_query)
+- [`mempalace.cli.cmd_repair`](./cli/cmd_repair)
+- [`mempalace.cli.cmd_serve`](./cli/cmd_serve)
+- [`mempalace.cli.cmd_sync`](./cli/cmd_sync)
+- [`mempalace.cli.cmd_update`](./cli/cmd_update)
+- [`mempalace.cli.parser`](./cli/parser)
 
 ### integrations
 
 - [`mempalace.integrations.hermes`](./integrations/hermes) — MemPalace memory provider for Hermes.
+
+### mcp_server
+
+- [`mempalace.mcp_server.protocol`](./mcp_server/protocol)
+- [`mempalace.mcp_server.runtime`](./mcp_server/runtime)
+- [`mempalace.mcp_server.tools_coord`](./mcp_server/tools_coord)
+- [`mempalace.mcp_server.tools_diary`](./mcp_server/tools_diary)
+- [`mempalace.mcp_server.tools_kg`](./mcp_server/tools_kg)
+- [`mempalace.mcp_server.tools_read`](./mcp_server/tools_read)
+- [`mempalace.mcp_server.tools_write`](./mcp_server/tools_write)
 
 ### sources
 

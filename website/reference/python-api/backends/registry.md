@@ -15,6 +15,18 @@ MemPalace discovers them at process start. In-tree tests and local development
 can register manually via :func:`register`. Explicit registration wins on
 name conflict (matches RFC 001 §3.2).
 
+## Classes
+
+### `class BackendUnavailableError(KeyError)`
+
+A selected backend is not registered in this Python process.
+
+#### `__init__`
+
+```python
+def __init__(self, name: str, available: list[str])
+```
+
 ## Functions
 
 ### `register`
