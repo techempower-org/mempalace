@@ -948,7 +948,7 @@ def search(  # noqa: C901 — fork delegation + upstream window fence on one CLI
         try:
             backend_name = resolve_backend_name(palace_path)
         except (BackendMismatchError, KeyError):
-            col = _open_collection_or_explain(palace_path, opener=get_collection)
+            col = _open_collection_or_explain(palace_path, opener=get_collection, read_only=True)
             if col is None:
                 raise SearchError(f"No palace found at {palace_path}")
             backend_name = None
@@ -967,7 +967,8 @@ def search(  # noqa: C901 — fork delegation + upstream window fence on one CLI
             # Probe-only call — distinguishes State C (initialized but empty) from
             # State D (corrupt) before search_memories blurs them into a generic
             # "No palace found".
-            get_collection(palace_path, create=False)
+            # read_only (upstream 5a2abffe): a CLI search must not take a writer lock.
+            get_collection(palace_path, create=False, read_only=True)
         except CollectionNotInitializedError as e:
             print(f"\n  Palace at {palace_path} is initialized but empty (no drawers yet).")
             print("  Run: mempalace mine <dir>")
@@ -3045,7 +3046,9 @@ def _vector_disabled_search(
 
 def _open_search_collection(palace_path: str, collection_name: str):
     try:
-        return get_collection(palace_path, collection_name=collection_name, create=False), None
+        return get_collection(
+            palace_path, collection_name=collection_name, create=False, read_only=True
+        ), None
     except BackendMismatchError as e:
         return None, _backend_mismatch_result(e)
     except KeyError as e:
@@ -3432,7 +3435,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     # Gather closet hits (best-per-source) to build a boost lookup.
     closet_boost_by_source: dict = {}  # source_file -> (rank, closet_dist, preview)
     try:
-        closets_col = get_closets_collection(palace_path, create=False)
+        closets_col = get_closets_collection(palace_path, create=False, read_only=True)
         closet_boost_by_source = _closet_boosts(
             closets_col, query=query, n_results=n_results, where=where
         )

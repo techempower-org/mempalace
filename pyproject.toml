@@ -67,6 +67,7 @@ Repository = "https://github.com/MemPalace/mempalace"
 mempalace = "mempalace.cli:main"
 mempalace-mcp = "mempalace.mcp_proxy:main"
 mempalace-kg-extract = "mempalace.kg_triple_worker:cli_main"
+mempalace-light-mcp = "mempalace.mcp_light_server:main"
 
 [project.entry-points."mempalace.backends"]
 chroma = "mempalace.backends.chroma:ChromaBackend"
@@ -75,6 +76,7 @@ postgres = "mempalace.backends.postgres:PostgresBackend"
 pgvector = "mempalace.backends.pgvector:PgVectorBackend"
 qdrant = "mempalace.backends.qdrant:QdrantBackend"
 sqlite_exact = "mempalace.backends.sqlite_exact:SQLiteExactBackend"
+rust_exact = "mempalace.backends.rust_exact:RustExactBackend"
 
 # RFC 002 source-adapter entry-point group. First-party adapters land here as
 # they migrate onto ``BaseSourceAdapter``; third-party adapter packages

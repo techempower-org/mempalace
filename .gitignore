@@ -61,3 +61,11 @@ benchmarks/c_beta/*.stdout
 benchmarks/data/
 
 .review-logs
+
+# Rust & Native build artifacts
+target/
+*.pyd
+*.so
+*.dylib
+*.exe
+

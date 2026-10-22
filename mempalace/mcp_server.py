@@ -53,7 +53,7 @@ import hmac  # noqa: E402
 import sqlite3  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
-from datetime import date, datetime  # noqa: E402
+from datetime import date, datetime, timezone  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Optional  # noqa: E402
 from urllib.parse import urlparse  # noqa: E402
@@ -769,7 +769,7 @@ def _acquire_mcp_writer_lock() -> tuple[bool, str]:
     """Acquire this process's per-palace MCP writer lease.
 
     Returns (True, "") when this process may write. Returns (False, reason)
-    when another live writer already owns the per-palace lease.
+    when another writer owns the lease or writer initialization fails.
 
     Self-healing: a server that came up read-only (a peer held the lease at
     startup) RE-ATTEMPTS the non-blocking flock on every subsequent call.
@@ -793,6 +793,10 @@ def _acquire_mcp_writer_lock() -> tuple[bool, str]:
     # backend mismatch can be corrected, and lock-directory permissions can be
     # repaired while this long-lived stdio host remains alive. Each mutating
     # request therefore gets a fresh ownership attempt.
+
+    _MCP_WRITER_READ_ONLY = False
+    _MCP_WRITER_LOCK_FAILED = False
+    _MCP_WRITER_LOCK_ERROR = ""
 
     try:
         from .palace import (
@@ -861,12 +865,18 @@ def _mcp_peer_writer_refusal(req_id, tool_name: str):
         "id": req_id,
         "error": {
             "code": -32001,
-            "message": "Peer MCP writer active; this server is read-only for mutating tools",
+            "message": (
+                "MCP writer initialization failed; this server is read-only for mutating tools"
+                if _MCP_WRITER_LOCK_FAILED
+                else "Peer MCP writer active; this server is read-only for mutating tools"
+            ),
             "data": {
                 "tool": tool_name,
                 "palace": _config.palace_path,
                 "reason": reason,
-                "override_env": _MCP_ALLOW_PEER_WRITER_ENV,
+                "failure_kind": (
+                    "initialization_failed" if _MCP_WRITER_LOCK_FAILED else "peer_contention"
+                ),
             },
         },
     }
@@ -1693,7 +1703,7 @@ def _get_collection(create=False):
         # with a daemon/HTTP writer. _acquire_mcp_writer_lock() discards this
         # cached read-only collection before a promoted mutation is handled.
         collection_read_only = _READ_ONLY or (
-            backend_name == "sqlite_exact"
+            backend_name in {"sqlite_exact", "rust_exact"}
             and getattr(_args, "transport", "stdio") == "stdio"
             and _MCP_WRITER_LOCK_CM is None
         )
@@ -2181,6 +2191,7 @@ _taxonomy_cache = None
 _taxonomy_cache_time = 0.0
 _TAXONOMY_CACHE_TTL = 5.0  # seconds — same idea as the palace-graph cache
 _MAX_RESULTS = 100  # upper bound for search/list limit params
+_DIARY_READ_PAGE_SIZE = 1000
 
 # IDF table cache for auto-tag extraction (#201). One entry per (wing, room).
 # Built lazily on first auto-tagged write; refreshed when the TTL expires so a
@@ -2490,7 +2501,7 @@ def _sqlite_taxonomy():
             from .backends.chroma import _sqlite_wing_room_counts
 
             counts = _sqlite_wing_room_counts(_config.palace_path, _config.collection_name)
-        elif _selected_backend_name() == "sqlite_exact":
+        elif _selected_backend_name() in {"sqlite_exact", "rust_exact"}:
             from .backends.sqlite_exact import sqlite_wing_room_counts
 
             counts = sqlite_wing_room_counts(_config.palace_path, _config.collection_name)
@@ -2543,7 +2554,7 @@ def _sqlite_graph_stats():
     try:
         if _is_chroma_backend():
             rows = _chroma_room_wing_hall_counts()
-        elif _selected_backend_name() == "sqlite_exact":
+        elif _selected_backend_name() in {"sqlite_exact", "rust_exact"}:
             from .backends.sqlite_exact import sqlite_room_wing_hall_counts
 
             rows = sqlite_room_wing_hall_counts(_config.palace_path, _config.collection_name)
@@ -5016,6 +5027,25 @@ def tool_list_tags(wing: str = None, room: str = None, min_count: int = 1):
 # ==================== KNOWLEDGE GRAPH ====================
 
 
+def _temporal_bound_key(value, *, end: bool = False) -> Optional[str]:
+    if not value:
+        return None
+    text = str(value)
+    if "T" in text:
+        return text
+    return f"{text}T23:59:59Z" if end else f"{text}T00:00:00Z"
+
+
+def _fact_interval_bucket(row: dict, now_key: str) -> str:
+    start_key = _temporal_bound_key(row.get("valid_from"), end=False)
+    end_key = _temporal_bound_key(row.get("valid_to"), end=True)
+    if start_key and start_key > now_key:
+        return "future"
+    if end_key and end_key < now_key:
+        return "historical"
+    return "active"
+
+
 def tool_kg_query(entity: str, as_of: str = None, direction: str = "both"):
     """Query the knowledge graph for an entity's relationships."""
     try:
@@ -5028,7 +5058,48 @@ def tool_kg_query(entity: str, as_of: str = None, direction: str = "both"):
         return {"error": "direction must be 'outgoing', 'incoming', or 'both'"}
 
     results = _call_kg(lambda kg: kg.query_entity(entity, as_of=as_of, direction=direction))
-    return {"entity": entity, "as_of": as_of, "facts": results, "count": len(results)}
+    if as_of is None:
+        now_key = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        active = []
+        historical = []
+        future = []
+        for row in results:
+            bucket = _fact_interval_bucket(row, now_key)
+            if bucket == "future":
+                future.append(row)
+            elif bucket == "historical":
+                historical.append(row)
+            else:
+                active.append(row)
+    else:
+        active = results
+        historical = []
+        future = []
+    payload = {
+        "entity": entity,
+        "as_of": as_of,
+        "active_facts": active,
+        "historical_facts": historical,
+        "future_facts": future,
+        "facts": results,
+        "count": len(results),
+    }
+    if results:
+        resolved_names = {
+            r.get("subject") if r.get("direction") == "outgoing" else r.get("object")
+            for r in results
+        }
+        resolved_names.discard(None)
+        if len(resolved_names) == 1:
+            resolved = next(iter(resolved_names))
+            if resolved != entity:
+                payload["resolved_from"] = entity
+                payload["entity"] = resolved
+    else:
+        candidates = _call_kg(lambda kg: kg.find_entity_candidates(entity))
+        if candidates:
+            payload["candidates"] = candidates
+    return payload
 
 
 def tool_kg_add(
@@ -5576,44 +5647,65 @@ def tool_diary_read(agent_name: str = "", last_n: int = 10, wing: str = ""):
     where = conditions[0] if len(conditions) == 1 else {"$and": conditions}
 
     try:
-        results = col.get(
-            where=where,
-            include=["documents", "metadatas"],
-            limit=_DIARY_SCAN_LIMIT,
-        )
-
-        if not results["ids"]:
-            return {"agent": agent_name or None, "entries": [], "message": "No diary entries yet."}
-
-        # Combine and sort by timestamp
+        # Page through the diary room (upstream #2464) instead of one capped
+        # ``get``: the old single ``limit=_DIARY_SCAN_LIMIT`` read silently
+        # dropped entries past the cap. Only the newest ``last_n`` candidates
+        # survive each page, so memory stays bounded however large the room is.
         entries = []
-        for drawer_id, doc, meta in zip(results["ids"], results["documents"], results["metadatas"]):
-            meta = _safe_meta(meta)
-            entries.append(
-                {
-                    "drawer_id": drawer_id,
-                    "date": meta.get("date", ""),
-                    "timestamp": meta.get("filed_at", ""),
-                    "topic": meta.get("topic", ""),
-                    # Always present, not only in the agent-less mode: a
-                    # mixed listing is unusable if the reader cannot tell
-                    # which name to ask for next.
-                    "agent": meta.get("agent", ""),
-                    "wing": meta.get("wing", ""),
-                    "content": doc,
-                }
-            )
+        total = 0
+        offset = 0
 
-        entries.sort(key=lambda x: x["timestamp"], reverse=True)
-        entries = entries[:last_n]
+        while True:
+            results = col.get(
+                where=where,
+                include=["documents", "metadatas"],
+                limit=_DIARY_READ_PAGE_SIZE,
+                offset=offset,
+            )
+            batch_ids = _chroma_field(results, "ids", []) or []
+            if not batch_ids:
+                break
+
+            documents = _chroma_field(results, "documents", []) or []
+            metadatas = _chroma_field(results, "metadatas", []) or []
+            total += len(batch_ids)
+
+            for index, drawer_id in enumerate(batch_ids):
+                doc = documents[index] if index < len(documents) else ""
+                meta = _safe_meta(metadatas[index] if index < len(metadatas) else None)
+                entries.append(
+                    {
+                        "drawer_id": drawer_id,
+                        "date": meta.get("date", ""),
+                        "timestamp": meta.get("filed_at", ""),
+                        "topic": meta.get("topic", ""),
+                        # Always present, not only in the agent-less mode: a
+                        # mixed listing is unusable if the reader cannot tell
+                        # which name to ask for next.
+                        "agent": meta.get("agent", ""),
+                        "wing": meta.get("wing", ""),
+                        "content": doc,
+                    }
+                )
+
+            entries.sort(key=lambda x: x["timestamp"], reverse=True)
+            del entries[last_n:]
+
+            offset += len(batch_ids)
+            if len(batch_ids) < _DIARY_READ_PAGE_SIZE:
+                break
+
+        if total == 0:
+            return {"agent": agent_name or None, "entries": [], "message": "No diary entries yet."}
 
         return {
             "agent": agent_name or None,
             "wing": wing or None,
             "entries": entries,
-            "total": len(results["ids"]),
+            "total": total,
             "showing": len(entries),
-            "truncated": len(results["ids"]) >= _DIARY_SCAN_LIMIT,
+            # Paging reads the whole room, so the total is exact.
+            "truncated": False,
         }
     except Exception:
         logger.exception("diary_read failed")
@@ -8120,7 +8212,7 @@ def _mcp_stale_library_refusal(req_id, tool_name: str):
     }
 
 
-def _mcp_tool_preflight_refusal(req_id, tool_name: str):
+def _mcp_tool_preflight_refusal(req_id, tool_name: str, *, check_writer: bool = True):
     """Run MCP request preflight gates outside handle_request complexity."""
 
     read_only_error = _mcp_read_only_refusal(req_id, tool_name)
@@ -8149,7 +8241,7 @@ def _mcp_tool_preflight_refusal(req_id, tool_name: str):
     if diverged_index_error is not None:
         return diverged_index_error
 
-    return _mcp_peer_writer_refusal(req_id, tool_name)
+    return _mcp_peer_writer_refusal(req_id, tool_name) if check_writer else None
 
 
 def _decorate_mcp_tool_result(tool_name: str, result):
