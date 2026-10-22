@@ -29,7 +29,7 @@ from .backends import (
 )
 from .backends.embedding_wrapper import EmbeddingCollection
 from .backends.chroma import ChromaBackend
-from .config import DEFAULT_COLLECTION_NAME, MempalaceConfig
+from .config import MempalaceConfig
 from .entity_detector import (
     _apply_known_systems_prepass,
     _collapse_long_ascii_runs,
@@ -332,15 +332,13 @@ def get_collection(
     initialization, migrations, or metadata writes. Backends that support a
     genuine read-only mode receive it through the backend ``options`` mapping.
 
-    `collection_name=None` (the fork-side convention) and
-    `collection_name=DEFAULT_COLLECTION_NAME` (#665's convention) both mean
-    "use the configured default collection." Either resolves through
-    `MempalaceConfig().collection_name` (env `MEMPALACE_COLLECTION_NAME`
-    overrides the config file). Fork-side callers in `searcher.py`,
-    `convo_miner.py`, `sweeper.py`, etc. pass None explicitly; #665 was
-    written assuming all callers omitted the keyword and got the default,
-    which broke the None path. Accepting both forms is the minimal shim
-    until fork-side callers migrate to the new convention.
+    `collection_name=None` means "the configured drawers collection" and resolves through
+    `mempalace.config.get_configured_collection_name()` (env `MEMPALACE_COLLECTION_NAME` overrides the config file).
+    An explicit name must be one the wrapper owns (upstream #2347): the configured drawers name or the closets
+    collection. An explicit "mempalace_drawers" is therefore rejected when a custom name is configured (the
+    silent-miss case #2347 exists for). Callers that mean the drawers collection pass None. (The fork used to
+    map an explicit default name onto the configured one, the #665 shim; nothing relies on it after the 2026-10
+    upstream sync.)
 
     ``backend`` explicitly selects a backend (CLI ``--backend`` / RFC 001);
     when omitted, resolution follows ``resolve_backend_name`` (config, env,
@@ -358,14 +356,14 @@ def get_collection(
     check exists to prevent never uses this flag and still fails loudly.
     """
     config = MempalaceConfig()
-    if collection_name is None or collection_name == DEFAULT_COLLECTION_NAME:
-        collection_name = config.collection_name
-    # Upstream #2347: fail loudly on a name the wrapper does not own. Checked after the fork maps the
-    # default name onto the configured one, so literal "mempalace_drawers" callers keep working.
+    if collection_name is None:
+        from .config import get_configured_collection_name
+
+        collection_name = get_configured_collection_name()
+    # Upstream #2347: fail loudly on a name the wrapper does not own. An explicit default name is rejected when a custom
+    # name is configured (the silent-miss case); callers that mean "the drawers collection" pass None.
     if not _skip_name_check:
-        # The configured drawers collection + closets (upstream's set), from the SAME config read as the mapping
-        # above: get_configured_collection_name() caches, and a stale value would reject the configured name.
-        allowed = list(dict.fromkeys([config.collection_name, CLOSETS_COLLECTION_NAME]))
+        allowed = _allowed_wrapper_collection_names()
         if collection_name not in allowed:
             raise CollectionNameMismatchError(collection_name, allowed, palace_path)
     backend_name = resolve_backend_name(palace_path, explicit=backend)

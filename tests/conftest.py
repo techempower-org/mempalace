@@ -516,3 +516,14 @@ def _reset_postgres_status_cache():
     mcp = sys.modules.get("mempalace.mcp_server")
     if mcp is not None and hasattr(mcp, "_pg_status_cache"):
         mcp._pg_status_cache = None
+
+
+@pytest.fixture(autouse=True)
+def _clear_configured_collection_name_cache():
+    """``get_configured_collection_name()`` is lru_cached for the process, so a test that changes
+    MEMPALACE_COLLECTION_NAME (or the config file) would otherwise leak its name into every later test."""
+    from mempalace.config import get_configured_collection_name
+
+    get_configured_collection_name.cache_clear()
+    yield
+    get_configured_collection_name.cache_clear()

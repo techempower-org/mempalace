@@ -2773,6 +2773,7 @@ def test_palace_get_collection_uses_configured_collection_name(monkeypatch):
         return object()
 
     monkeypatch.setenv("MEMPALACE_COLLECTION_NAME", "custom_drawers")
+    # conftest clears the lru_cached get_configured_collection_name() around every test.
     monkeypatch.setattr(palace.get_backend("chroma"), "get_collection", fake_get_collection)
 
     palace.get_collection("/palace", create=False)
