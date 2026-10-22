@@ -6,7 +6,7 @@ The Python package that powers MemPalace. All modules, all logic.
 
 | Module | What it does |
 |--------|-------------|
-| `cli.py` | CLI entry point — routes to mine, search, init, compress, wake-up |
+| `cli/` | CLI package — commands, parser; public import is still `mempalace.cli` |
 | `config.py` | Configuration loading — `~/.mempalace/config.json`, env vars, defaults |
 | `normalize.py` | Converts 6 chat formats (Claude Code JSONL, OpenAI Codex CLI JSONL, Claude.ai JSON, ChatGPT JSON, Slack JSON, plain text) to standard transcript format. Captures tool_use/tool_result blocks from Claude Code JSONL with per-tool formatting. |
 | `miner.py` | Project file ingest — scans directories, chunks by paragraph, stores to ChromaDB |
