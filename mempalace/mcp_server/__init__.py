@@ -120,7 +120,6 @@ from ..logstream import LOGSTREAM_DB_FILENAME, Logstream  # noqa: E402
 from ..collision_scan import assert_no_collisions  # noqa: E402
 from ..ids import ID_RECIPE, make_drawer_id_from_content  # noqa: E402
 
-
 # ==================== WRITE-AHEAD LOG ====================
 # Every write operation is logged to a JSONL file before execution.
 # This provides an audit trail for detecting memory poisoning and
