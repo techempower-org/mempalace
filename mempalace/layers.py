@@ -126,62 +126,47 @@ class Layer1:
 
     MAX_DRAWERS = 15  # at most 15 moments in wake-up
     MAX_CHARS = 3200  # hard cap on total L1 text (~800 tokens)
-    MAX_SCAN = 2000  # don't scan more than this for L1 generation
+    MAX_SCAN = 2000  # size of the candidate window pulled for L1 generation
 
     def __init__(self, palace_path: str = None, wing: str = None):
         cfg = MempalaceConfig()
         self.palace_path = palace_path or cfg.palace_path
         self.wing = wing
 
-    def _fetch_drawers(self, col) -> tuple:
-        """Fetch drawers for L1 generation.
+    def _fetch_candidates(self, col) -> tuple[list, list]:
+        """Fetch the L1 candidate window: the MAX_SCAN most recently filed drawers.
 
-        Tries a pre-filtered query for high-importance drawers first (fast path).
-        Falls back to a full scan only if too few results come back.
+        Uses the backend's ``get_recent`` capability, which pushes
+        ``ORDER BY filed_at DESC LIMIT n`` into storage where the backend can
+        (pgvector today) and otherwise falls back to the scan-then-sort default
+        in ``BaseCollection``. That default is what this method used to do
+        inline, so backends without pushdown behave exactly as before.
+
+        Third-party collections predating ``get_recent`` (or any backend error)
+        degrade to the inline paged scan below rather than failing wake-up.
         """
+        where = {"wing": self.wing} if self.wing else None
+        getter = getattr(col, "get_recent", None)
+        if getter is not None:
+            try:
+                result = getter(
+                    limit=self.MAX_SCAN,
+                    where=where,
+                    order_field="filed_at",
+                    include=["documents", "metadatas"],
+                )
+                return list(result.documents or []), list(result.metadatas or [])
+            except Exception:
+                pass  # capability missing or backend hiccup — page it manually
+
+        # Fetch in batches to avoid SQLite variable limit (~999)
         _BATCH = 500
-
-        # Fast path: only fetch drawers with importance >= 3
-        importance_filter = {"importance": {"$gte": 3}}
-        if self.wing:
-            where = {"$and": [{"wing": self.wing}, importance_filter]}
-        else:
-            where = importance_filter
-
-        docs, metas = [], []
-        offset = 0
-        try:
-            while True:
-                kwargs = {
-                    "include": ["documents", "metadatas"],
-                    "limit": _BATCH,
-                    "offset": offset,
-                    "where": where,
-                }
-                batch = col.get(**kwargs)
-                batch_docs = batch.get("documents", [])
-                batch_metas = batch.get("metadatas", [])
-                if not batch_docs:
-                    break
-                docs.extend(batch_docs)
-                metas.extend(batch_metas)
-                offset += len(batch_docs)
-                if len(batch_docs) < _BATCH or len(docs) >= self.MAX_SCAN:
-                    break
-        except Exception:
-            docs, metas = [], []
-
-        # If enough high-importance drawers, use them
-        if len(docs) >= self.MAX_DRAWERS:
-            return docs, metas
-
-        # Slow fallback: scan without importance filter
         docs, metas = [], []
         offset = 0
         while True:
             kwargs = {"include": ["documents", "metadatas"], "limit": _BATCH, "offset": offset}
-            if self.wing:
-                kwargs["where"] = {"wing": self.wing}
+            if where:
+                kwargs["where"] = where
             try:
                 batch = col.get(**kwargs)
             except Exception:
@@ -198,13 +183,15 @@ class Layer1:
         return docs, metas
 
     def generate(self) -> str:
-        """Pull top drawers from ChromaDB and format as compact L1 text."""
+        """Pull top drawers from the palace and format as compact L1 text."""
         try:
             col = _get_collection(self.palace_path, create=False)
         except Exception:
             return "## L1 — No palace found. Run: mempalace mine <dir>"
 
-        docs, metas = self._fetch_drawers(col)
+        # Upstream #2168's recency window. The fork's importance>=3 pre-filter fast path was dropped in the
+        # 2026-10 sync: 0 of 1,216,771 production drawers carry `importance`, so it never paid for its query.
+        docs, metas = self._fetch_candidates(col)
 
         if not docs:
             return "## L1 — No memories yet."
@@ -219,6 +206,10 @@ class Layer1:
         # newest first. This keeps importance as the primary key for the day a
         # scoring pass populates it, while making the "recent filing" half of
         # the promise true today with data we already have.
+        # The candidate window this sorts is now the MAX_SCAN *most recently
+        # filed* drawers rather than the first MAX_SCAN the backend happened to
+        # hand back, so on a palace larger than MAX_SCAN the newest drawers are
+        # actually in the running (#1630's known limitation).
         scored = []
         for doc, meta in zip(docs, metas):
             meta = meta or {}
