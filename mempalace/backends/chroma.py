@@ -18,9 +18,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 import chromadb
+from chromadb.config import Settings as _ChromaSettings
 from chromadb.errors import NotFoundError as _ChromaNotFoundError
 
 from ..config import connect_sqlite_read
+from ._magic import has_sqlite_magic
 from ._sidecar import EMBEDDER_SIDECAR_FILENAME, read_embedder_sidecar, write_embedder_sidecar
 from .base import (
     BaseBackend,
@@ -39,6 +41,15 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ChromaDB's own default is ``anonymized_telemetry=True``. In the 1.x line we
+# support its posthog client is a no-op stub and posthog is not a dependency, so
+# nothing is transmitted today — but that default belongs to ChromaDB, not to us,
+# and MemPalace promises the data never leaves the machine. Every client this
+# backend opens says no explicitly, so a future ChromaDB release cannot turn
+# collection back on underneath us. (GHSA-8h77)
+_CLIENT_SETTINGS = _ChromaSettings(anonymized_telemetry=False)
 
 
 _REQUIRED_OPERATORS = frozenset({"$eq", "$ne", "$in", "$nin", "$and", "$or", "$contains"})
@@ -3312,7 +3323,7 @@ class ChromaBackend(BaseBackend):
                 _close_client(self._clients.pop(palace_path, None))
 
             ChromaBackend._prepare_palace_for_open(palace_path)
-            cached = chromadb.PersistentClient(path=palace_path)
+            cached = chromadb.PersistentClient(path=palace_path, settings=_CLIENT_SETTINGS)
             self._clients[palace_path] = cached
             # Re-stat after the client constructor runs: chromadb creates
             # chroma.sqlite3 lazily, so the stat captured before the call
@@ -3422,7 +3433,7 @@ class ChromaBackend(BaseBackend):
         disk change. See :attr:`_quarantined_paths` for the gate logic.
         """
         ChromaBackend._prepare_palace_for_open(palace_path)
-        return chromadb.PersistentClient(path=palace_path)
+        return chromadb.PersistentClient(path=palace_path, settings=_CLIENT_SETTINGS)
 
     @staticmethod
     def backend_version() -> str:
@@ -3565,15 +3576,13 @@ class ChromaBackend(BaseBackend):
         as chromadb's ``PersistentClient`` does any work, so this check
         accepts every real chroma palace while rejecting empty / garbage
         files. See #1893.
+
+        Probed through :func:`mempalace.backends._magic.has_sqlite_magic`,
+        which never opens a plain descriptor on the file -- see that module for
+        why a plain open+close of a live database drops the process's POSIX
+        locks on it.
         """
-        db_path = os.path.join(path, "chroma.sqlite3")
-        if not os.path.isfile(db_path):
-            return False
-        try:
-            with open(db_path, "rb") as f:
-                return f.read(16) == b"SQLite format 3\x00"
-        except OSError:
-            return False
+        return has_sqlite_magic(os.path.join(path, "chroma.sqlite3"))
 
     # ------------------------------------------------------------------
     # Legacy (pre-RFC 001) surface — retained while callers migrate.

@@ -53,29 +53,25 @@ def cmd_mine(args):
         )
         sys.exit(2)
 
-    # Explicit --daemon submits to the opt-in local job-queue daemon
-    # (upstream #1783 family). This is a deliberate user request and takes
-    # precedence over the ambient PALACE_DAEMON_URL HTTP routing below — the
-    # two are different daemons; the flag names the one the user asked for.
-    # Two different daemons answer to "background" here: --daemon is the
-    # opt-in local job queue, and daemon-strict routing is the palace daemon
-    # over HTTP. Both can take the mine off this terminal's hands, so the
-    # flag is valid on either route -- and only an error when neither applies
-    # (#456).
+    # Two different daemons can take this mine (both can take it off this terminal's hands):
+    #  * upstream's local job-queue daemon, selected by the CLI write-routing policy (#2033): --daemon / --direct,
+    #    or MEMPALACE_CLI_WRITE_ROUTING=prefer|require. An explicit flag or policy for it wins.
+    #  * the fork's palace daemon over HTTP (PALACE_DAEMON_URL, daemon-strict), below.
+    # Upstream's resolver rejects --background on a direct route, but the palace-daemon route accepts it (#456),
+    # so with that route active and no --daemon, --background is left for the palace-daemon path.
     routes_to_palace_daemon = _daemon_strict() and not args.palace
-    if (
-        getattr(args, "background", False)
-        and not getattr(args, "daemon", False)
-        and not routes_to_palace_daemon
-    ):
-        print("mempalace: --background requires --daemon", file=sys.stderr)
-        sys.exit(2)
-    if getattr(args, "daemon", False):
+    background = bool(getattr(args, "background", False))
+    if routes_to_palace_daemon and background and not getattr(args, "daemon", False):
+        routing = None
+    else:
+        routing = _resolve_cli_write_routing_or_exit(args, "mine")
+    if routing is not None and routing.use_daemon:
         include_ignored = []
         for raw in args.include_ignored or []:
             include_ignored.extend(part.strip() for part in raw.split(",") if part.strip())
         payload = {
-            "source": args.dir,
+            # Absolute, so the daemon resolves it against the caller's cwd, not its own (upstream #2467).
+            "source": os.path.abspath(os.path.expanduser(args.dir)),
             "mode": mode,
             "wing": args.wing,
             "agent": args.agent,
@@ -91,7 +87,7 @@ def cmd_mine(args):
             payload["source_adapter"] = source_adapter
         if getattr(args, "no_tunnels", False):
             # The job-queue daemon's mine payload has no tunnels field, and
-            # service.execute_job calls mine() without compute_derived — so
+            # service.execute_job calls mine() without compute_derived, so
             # the flag would be accepted here and the expensive derived-graph
             # rebuild would run anyway. This branch returns before the
             # daemon-strict warning below, so it needs its own (#474).
@@ -100,7 +96,9 @@ def cmd_mine(args):
                 "carries no tunnels field, so the derived-graph rebuild will still run",
                 file=sys.stderr,
             )
-        _submit_daemon_cli_job("mine", payload, args, background=getattr(args, "background", False))
+        _submit_daemon_cli_job(
+            "mine", payload, args, background=background, auto_start=routing.decision.auto_start_daemon
+        )
         return
 
     if _daemon_strict() and not args.palace:
@@ -432,6 +430,19 @@ def cmd_sweep(args):
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     target = os.path.expanduser(args.target)
 
+    routing = _resolve_cli_write_routing_or_exit(
+        args,
+        "sweep",
+    )
+    if routing.use_daemon:
+        _submit_daemon_cli_job(
+            "sweep",
+            {"target": target},
+            args,
+            background=bool(getattr(args, "background", False)),
+            auto_start=routing.decision.auto_start_daemon,
+        )
+        return
     if os.path.isfile(target):
         result = sweep(target, palace_path)
         print(

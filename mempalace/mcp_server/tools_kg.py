@@ -257,14 +257,19 @@ def tool_kg_supersede(
     }
 
 
-def tool_kg_timeline(entity: str = None, as_of: str = None):
+def tool_kg_timeline(entity: str = None, as_of: str = None, limit: int = 100, offset: int = 0):
     """Get chronological timeline of facts, optionally for one entity.
 
     ``as_of`` (techempower-org/mempalace#161) filters to facts whose
     temporal interval contains the given date/datetime; NULL ends are
     treated as open intervals (same semantics as ``mempalace_kg_query``).
     Omit ``as_of`` to see the full timeline including expired facts.
+
+    Paginated with ``limit``/``offset`` following the ``tool_list_drawers``
+    convention; defaults match the historical behavior (first 100 facts).
     """
+    limit = max(1, min(limit, _MAX_RESULTS))
+    offset = max(0, offset)
     if entity is not None:
         try:
             entity = sanitize_kg_value(entity, "entity")
@@ -276,22 +281,30 @@ def tool_kg_timeline(entity: str = None, as_of: str = None):
         except ValueError as e:
             return {"error": str(e)}
 
-    def _timeline(kg):
-        # AGE backend grew an ``as_of`` parameter (#161); the SQLite
-        # backend's ``timeline()`` accepts only ``entity_name``. Pass the
-        # extra kwarg conditionally so SQLite callers don't TypeError.
+    def _query(kg):
+        # The AGE backend takes ``as_of`` (#161); the SQLite backend's timeline() and timeline_total() do not, so
+        # pass it only to AGE. Both paginate.
         from ..knowledge_graph_age import KnowledgeGraphAGE
 
         if isinstance(kg, KnowledgeGraphAGE):
-            return kg.timeline(entity, as_of=as_of)
-        return kg.timeline(entity)
+            return {
+                "timeline": kg.timeline(entity, limit=limit, offset=offset, as_of=as_of),
+                "total": kg.timeline_total(entity, as_of=as_of),
+            }
+        return {
+            "timeline": kg.timeline(entity, limit=limit, offset=offset),
+            "total": kg.timeline_total(entity),
+        }
 
-    results = _call_kg(_timeline)
+    result = _call_kg(_query)
     return {
         "entity": entity or "all",
         "as_of": as_of,
-        "timeline": results,
-        "count": len(results),
+        "timeline": result["timeline"],
+        "count": len(result["timeline"]),
+        "total": result["total"],
+        "offset": offset,
+        "limit": limit,
     }
 
 

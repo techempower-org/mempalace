@@ -56,6 +56,11 @@ from typing import NamedTuple
 
 from ..auto_wake import urlopen_with_wake
 from ..config import MempalaceConfig
+from ..cli_write_routing import (
+    add_cli_write_routing_flags,
+    resolve_cli_write_routing,
+)
+from ..write_routing import WriteRoutingError
 from ..corpus_origin import detect_origin_heuristic, detect_origin_llm
 from ..llm_client import LLMError, get_provider
 from ..provenance import (

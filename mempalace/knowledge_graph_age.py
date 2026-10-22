@@ -828,12 +828,14 @@ class KnowledgeGraphAGE:
         self,
         entity_name: Optional[str] = None,
         limit: int = 100,
+        offset: int = 0,
         as_of: Optional[str] = None,
     ) -> list:
         """Return triples in chronological order, optionally filtered by entity.
 
-        Mirrors SQLite ``KnowledgeGraph.timeline``. Limit defaults to 100
-        for parity. AGE ``ORDER BY ... LIMIT`` works inside cypher() so no
+        Mirrors SQLite ``KnowledgeGraph.timeline``, including ``limit``/``offset`` pagination (upstream added it to
+        SQLite in the 2026-10 sync). Limit defaults to 100 for parity; ``id(r)`` breaks ``valid_from`` ties so pages
+        are stable, like SQLite's ``t.id`` tie-break. AGE ``ORDER BY ... LIMIT`` works inside cypher() so no
         workaround needed.
 
         ``as_of`` (P5 / #161) filters to triples whose temporal interval
@@ -862,10 +864,11 @@ class KnowledgeGraphAGE:
                        o.name AS object,
                        r.valid_from AS valid_from, r.valid_to AS valid_to,
                        r.context AS context
-                ORDER BY r.valid_from
+                ORDER BY r.valid_from, id(r)
+                SKIP $offset
                 LIMIT $limit
                 """,
-                {"name": entity_name, "limit": limit, **temporal_params},
+                {"name": entity_name, "limit": limit, "offset": offset, **temporal_params},
                 fetch=True,
             )
         else:
@@ -878,10 +881,11 @@ class KnowledgeGraphAGE:
                        o.name AS object,
                        r.valid_from AS valid_from, r.valid_to AS valid_to,
                        r.context AS context
-                ORDER BY r.valid_from
+                ORDER BY r.valid_from, id(r)
+                SKIP $offset
                 LIMIT $limit
                 """,
-                {"limit": limit, **temporal_params},
+                {"limit": limit, "offset": offset, **temporal_params},
                 fetch=True,
             )
         return [
@@ -896,6 +900,34 @@ class KnowledgeGraphAGE:
             }
             for r in rows
         ]
+
+    def timeline_total(self, entity_name: Optional[str] = None, as_of: Optional[str] = None) -> int:
+        """Total number of triples a :meth:`timeline` query matches (all pages), with the same entity/as_of filters."""
+        if as_of is not None:
+            as_of = sanitize_iso_temporal(as_of, "as_of")
+        temporal_where = ""
+        params: dict = {}
+        if as_of is not None:
+            temporal_where = (
+                " AND (r.valid_from IS NULL OR r.valid_from <= $as_of)"
+                " AND (r.valid_to IS NULL OR r.valid_to >= $as_of)"
+            )
+            params["as_of"] = as_of
+        if entity_name is not None:
+            params["name"] = sanitize_kg_value(entity_name, "entity_name")
+            where = f"WHERE (s.name = $name OR o.name = $name) {temporal_where}"
+        else:
+            where = f"WHERE 1=1 {temporal_where}".rstrip() if temporal_where else ""
+        rows = self._run_cypher(
+            f"""
+            MATCH (s:Entity)-[r:RELATION]->(o:Entity)
+            {where}
+            RETURN count(r) AS n
+            """,
+            params,
+            fetch=True,
+        )
+        return int(self._unwrap_agtype(rows[0][0])) if rows else 0
 
     def add_mention(
         self,
