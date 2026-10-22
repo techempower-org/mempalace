@@ -3,6 +3,7 @@
 import os
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -36,6 +37,17 @@ def test_init_filters_sys_path_from_leaked_pythonpath(pythonpath):
     cases additionally exercise the early-return / collision paths
     without crashing.
 
+    The subprocess runs from a neutral directory (the temp dir) rather
+    than inheriting pytest's CWD. When the CWD is the repo checkout,
+    the local ``mempalace/`` source directory shadows the installed
+    package, so ``mempalace.__file__`` resolves to the checkout and its
+    parent directory is only reachable through the empty-string CWD
+    marker on sys.path -- which the ``if p`` filter excludes. Running
+    from the temp dir makes the parent resolve to the installed
+    location consistently, so the over-strip assertion below is
+    layout-agnostic (a check on the actual filter behavior, not on
+    whatever happens to be in the CWD).
+
     The parent-retained assertion resolves relative ``sys.path`` entries
     against the child's cwd before comparing (#454). ``python -c`` puts the
     cwd on ``sys.path`` as the empty string, and that entry is what actually
@@ -67,6 +79,7 @@ def test_init_filters_sys_path_from_leaked_pythonpath(pythonpath):
     result = subprocess.run(
         [sys.executable, "-c", code],
         env=env,
+        cwd=tempfile.gettempdir(),
         capture_output=True,
         text=True,
         check=False,
@@ -108,6 +121,7 @@ def test_init_preserves_cwd_marker_when_pythonpath_collides():
     result = subprocess.run(
         [sys.executable, "-c", code],
         env=env,
+        cwd=tempfile.gettempdir(),
         capture_output=True,
         text=True,
         check=False,

@@ -22,7 +22,9 @@ def _chunk_index(meta):
 
 
 def _response_safe_meta(meta):
-    safe_meta = _safe_meta(meta)
+    safe_meta = dict(_safe_meta(meta))
+    if not safe_meta.get("last_modified") and safe_meta.get("filed_at"):
+        safe_meta["last_modified"] = safe_meta["filed_at"]
     if safe_meta.get("source_file"):
         safe_meta["source_file"] = Path(safe_meta["source_file"]).name
     return safe_meta
@@ -465,6 +467,7 @@ def tool_add_drawer(
     if novelty_tag is not None:
         base_meta["novelty_tag"] = novelty_tag
 
+    base_meta["last_modified"] = base_meta["filed_at"]
     # Idempotency. Three cases to detect a prior committed write:
     # (a) Single-doc path: drawer_id row exists (the only id used).
     # (b) Chunked path: probe the LAST chunk id — its presence implies
@@ -1261,6 +1264,7 @@ def tool_update_drawer(
         if tags is not None:
             apply_tags_to_metadata(new_meta, normalise_tags(tags))
 
+        new_meta["last_modified"] = datetime.now().isoformat()
         _wal_log(
             "update_drawer",
             {
