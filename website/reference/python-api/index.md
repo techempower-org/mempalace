@@ -74,7 +74,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.novelty`](./novelty) — novelty.py — Gzip-based novelty scoring for drawers
 - [`mempalace.novelty_wiring`](./novelty_wiring) — novelty_wiring.py — write-time novelty tagging
 - [`mempalace.onboarding`](./onboarding) — onboarding.py — MemPalace first-run setup.
-- [`mempalace.palace`](./palace) — palace.py — Shared palace operations.
+- [`mempalace.palace`](./palace) — mempalace.palace — Shared palace operations.
 - [`mempalace.palace_graph`](./palace_graph) — palace_graph.py — Graph traversal layer for MemPalace
 - [`mempalace.palace_graph_age`](./palace_graph_age) — Palace structure (Wing → Room → Drawer) as native AGE graph nodes.
 - [`mempalace.pending_queue`](./pending_queue) — Append-only journal for mine requests that couldn't reach the daemon.
@@ -157,6 +157,15 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.mcp_server.tools_kg`](./mcp_server/tools_kg)
 - [`mempalace.mcp_server.tools_read`](./mcp_server/tools_read)
 - [`mempalace.mcp_server.tools_write`](./mcp_server/tools_write)
+
+### palace
+
+- [`mempalace.palace.backend`](./palace/backend)
+- [`mempalace.palace.closets`](./palace/closets)
+- [`mempalace.palace.collection`](./palace/collection)
+- [`mempalace.palace.mine_lock`](./palace/mine_lock)
+- [`mempalace.palace.mined`](./palace/mined)
+- [`mempalace.palace.palace_lock`](./palace/palace_lock)
 
 ### searcher
 

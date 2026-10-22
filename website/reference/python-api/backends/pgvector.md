@@ -114,6 +114,59 @@ def query(self, *, query_texts = None, query_embeddings = None, n_results = 10, 
 def get(self, *, ids = None, where = None, where_document = None, limit = None, offset = None, include = None) -> GetResult
 ```
 
+#### `get_recent`
+
+```python
+def get_recent(self, *, limit, where = None, order_field = 'filed_at', include = None)
+```
+
+Newest-first fetch with the ordering pushed into SQL.
+
+The base implementation scans a window in storage order and sorts it
+locally, so on a collection larger than ``limit`` the genuinely newest
+records can be missing from the window entirely (#1630). Postgres can
+do the whole thing: ``ORDER BY metadata->>'filed_at' DESC ... LIMIT n``
+picks the true top ``limit`` under that ordering at any table size,
+which is why this backend advertises ``supports_recency_order``.
+
+Filters that ``metadata @> ...`` cannot express exactly ($or,
+comparisons, ...) keep the local post-filter contract that ``get``
+uses, but they do *not* fetch the table to do it: the ordering is
+still pushed into SQL and :meth:`_scroll_recent_local` walks the
+result newest-first a page at a time, stopping as soon as ``limit``
+rows match.
+
+**This is the one case where ``supports_recency_order`` is weaker than
+it sounds.** That walk is capped, so a non-pushdown filter matching
+very little in a very large table returns fewer than ``limit`` records
+rather than reading the table. The token covers the filters this
+backend can push down, which is every filter Layer 1 uses (``None`` or
+``&#123;"wing": ...}``) and everything built from ``$eq``/``$ne``/``$in``/
+``$nin``/``$and``. See :meth:`_scroll_recent_local` for the bound and
+for what the capped answer still guarantees.
+
+``limit=None`` is outside the contract (the signature is ``int``). The
+pushdown branch treats it as unbounded; the local branch cannot, and
+treats it as the scan cap.
+
+Ordering is on the JSON *text* of ``order_field``, matching the text
+ordering :func:`recency_sort_key` already applies in Layer 1. See that
+function for what text ordering does and does not promise; this method
+inherits those limits rather than introducing them. At least three
+places where the SQL order and ``recency_sort_key`` differ, none of
+them reachable through anything that writes ``filed_at``:
+
+* a JSON value that is not a string sorts by its text form here but
+  sorts last there;
+* an empty string sorts above SQL NULL here but ties with a missing
+  key there;
+* both ``metadata->>%s`` and the ``id`` tiebreak sort under the
+  database collation, while ``recency_sort_key`` sorts by Python
+  codepoint. Under a collation such as ``en_US.UTF-8`` punctuation is
+  weighted differently, so the two can disagree on timestamps that
+  differ only in punctuation (``+00:00`` against ``Z``). The test
+  double emulates the ordering in Python and so cannot catch this.
+
 #### `delete`
 
 ```python

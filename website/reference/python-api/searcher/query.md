@@ -18,6 +18,13 @@ Hybrid search: BM25 keyword matching + vector semantic similarity.
 The drawer query is the floor — always runs — and closet hits add a
 rank-based boost when they agree.
 
+Each hit exposes ``filed_at`` (also retained as ``created_at``), plus
+the legacy ``authored_at`` value and ``authored_at_source`` indicating
+whether it came from stored ``authored_at``, the ``filed_at`` fallback,
+or is ``unknown``. ``content_date`` is a separate inferred date with
+``content_date_source`` (filename/frontmatter/body/mtime when recorded,
+otherwise ``unknown``). Neither inference nor filing proves authorship.
+
 Args:
     query: Natural language search query.
     palace_path: Path to the ChromaDB palace directory.

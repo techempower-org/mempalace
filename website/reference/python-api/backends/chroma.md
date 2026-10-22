@@ -106,15 +106,7 @@ Returns ``&#123;}`` when metadata is absent so callers can do a plain
 def distance_metric(self) -> str
 ```
 
-Report this collection's actual space from ``hnsw:space``.
-
-MemPalace sets ``hnsw:space=cosine`` on every creation path, so a
-healthy palace reports ``"cosine"``. When the key is absent, empty, or
-an unrecognized value, the collection is genuinely using Chroma's HNSW
-default — **L2** (Euclidean) — because cosine was never set on it. We
-report ``"l2"`` in that case so core ranking maps the distances
-correctly; reporting ``"cosine"`` here would reintroduce the
-floor-every-result-to-zero misranking this property exists to fix.
+Report HNSW space from legacy metadata or live schema.
 
 #### `get_stored_embedder_identity`
 

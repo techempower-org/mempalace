@@ -116,6 +116,12 @@ def health(self)
 def lexical_search(self, *, query: str, n_results: int = 10, where: Optional[dict] = None)
 ```
 
+#### `get_recent`
+
+```python
+def get_recent(self, *, limit: int, where: Optional[dict] = None, order_field: str = 'filed_at', include: Optional[list[str]] = None)
+```
+
 #### `facet_counts`
 
 ```python
@@ -132,6 +138,12 @@ def count_where(self, where: Optional[dict] = None) -> Optional[int]
 
 ```python
 def get_all_metadata(self, where: Optional[dict] = None) -> list[dict]
+```
+
+#### `get_all_rows`
+
+```python
+def get_all_rows(self, where: Optional[dict] = None, include: Optional[list[str]] = None) -> GetResult
 ```
 
 #### `update`

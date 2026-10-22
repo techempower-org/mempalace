@@ -68,7 +68,7 @@ def __init__(self, palace_path: str = None, wing: str = None)
 def generate(self) -> str
 ```
 
-Pull top drawers from ChromaDB and format as compact L1 text.
+Pull top drawers from the palace and format as compact L1 text.
 
 ### `class Layer2`
 

@@ -568,6 +568,36 @@
     ]
   },
   {
+    "text": "palace",
+    "collapsed": true,
+    "items": [
+      {
+        "text": "mempalace.palace.backend",
+        "link": "/reference/python-api/palace/backend"
+      },
+      {
+        "text": "mempalace.palace.closets",
+        "link": "/reference/python-api/palace/closets"
+      },
+      {
+        "text": "mempalace.palace.collection",
+        "link": "/reference/python-api/palace/collection"
+      },
+      {
+        "text": "mempalace.palace.mine_lock",
+        "link": "/reference/python-api/palace/mine_lock"
+      },
+      {
+        "text": "mempalace.palace.mined",
+        "link": "/reference/python-api/palace/mined"
+      },
+      {
+        "text": "mempalace.palace.palace_lock",
+        "link": "/reference/python-api/palace/palace_lock"
+      }
+    ]
+  },
+  {
     "text": "searcher",
     "collapsed": true,
     "items": [
