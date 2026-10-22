@@ -29,6 +29,7 @@ import urllib.error
 from unittest.mock import patch
 
 import pytest
+from _module_source import module_source  # cli is an exec-fragment package
 
 CLI = pathlib.Path(__file__).resolve().parents[1] / "mempalace" / "cli.py"
 
@@ -161,7 +162,7 @@ class TestTheJsonShapeIsOneShape:
         Enumerated from the source, so a new writer with an undocumented key
         fails here rather than reaching a caller that cannot branch on it.
         """
-        tree = ast.parse(CLI.read_text())
+        tree = ast.parse(module_source("cli"))
         emitted = set()
         for node in ast.walk(tree):
             if not isinstance(node, ast.Dict):
@@ -179,7 +180,7 @@ class TestTheJsonShapeIsOneShape:
     def test_the_window_family_keeps_message_for_one_release(self):
         """Deprecated, not deleted — removing it in the same release that adds
         `code` would break the readers #512 created."""
-        src = CLI.read_text()
+        src = module_source("cli")
         assert '"message"' in src, "the window family's deprecated `message` key is gone"
 
 

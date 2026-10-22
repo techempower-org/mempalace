@@ -31,6 +31,7 @@ import pathlib
 from unittest.mock import patch
 
 import pytest
+from _module_source import module_source  # cli is an exec-fragment package
 
 CLI = pathlib.Path(__file__).resolve().parents[1] / "mempalace" / "cli.py"
 
@@ -173,7 +174,7 @@ class TestOptimisationsDegradeWithTheDaemonsWords:
 
 class TestBusyIsDocumentedAndEmittedAsALiteral:
     def test_daemon_busy_is_in_the_header_contract_block(self):
-        header = CLI.read_text().split("\n", 200)[:200]
+        header = module_source("cli").split("\n", 200)[:200]
         block = "\n".join(header)
         assert "daemon_busy" in block, "the documented set in cli.py's header must name it"
 
@@ -182,7 +183,7 @@ class TestBusyIsDocumentedAndEmittedAsALiteral:
         by a dict literal the AST walker can see, so documenting it is not dead
         vocabulary. Computed emitters are invisible to that walker by design."""
         emitted = set()
-        for node in ast.walk(ast.parse(CLI.read_text())):
+        for node in ast.walk(ast.parse(module_source("cli"))):
             if isinstance(node, ast.Dict):
                 for k, v in zip(node.keys, node.values):
                     if isinstance(k, ast.Constant) and k.value == "code":

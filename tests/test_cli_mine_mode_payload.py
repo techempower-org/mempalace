@@ -37,6 +37,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from mempalace import cli
+from _module_source import module_source  # cli is an exec-fragment package
 
 
 # ── a stub daemon that records what it is sent ─────────────────────────
@@ -192,7 +193,7 @@ class TestNoPayloadBuilderReadsArgsModeRaw:
         `ctx` is what separates them — hence the isinstance check rather
         than a name match.
         """
-        tree = ast.parse(inspect.getsource(cli))
+        tree = ast.parse(module_source("cli"))
         reads = [
             n.lineno
             for n in ast.walk(tree)

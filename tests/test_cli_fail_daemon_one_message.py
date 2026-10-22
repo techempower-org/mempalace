@@ -33,6 +33,7 @@ from unittest.mock import patch
 import pytest
 
 from mempalace import cli
+from _module_source import module_source  # cli is an exec-fragment package
 
 
 def _run_json(fn, args):
@@ -213,7 +214,7 @@ class TestTheMessageIsWrittenOnce:
         """
         import inspect
 
-        src = inspect.getsource(cli)
+        src = module_source("cli")
         assert src.count("palace daemon unreachable at") == 2
 
     def test_cmd_wings_no_longer_has_its_own_shape(self):
