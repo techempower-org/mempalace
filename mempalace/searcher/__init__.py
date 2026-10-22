@@ -75,9 +75,14 @@ _FRAGMENTS = (
 
 
 def _exec_fragment(filename: str) -> None:
+    # Load through SourceFileLoader so the fragment's bytecode is cached in __pycache__ like any module's.
+    # exec(compile(read_text())) recompiled every fragment on every process start: ~74 ms for cli alone
+    # (fork, 2026-10-22), on the Stop/PreCompact hook path and its 100 ms startup budget.
+    from importlib.machinery import SourceFileLoader
+
     path = _FRAGMENT_DIR / filename
-    source = path.read_text(encoding="utf-8")
-    exec(compile(source, str(path), "exec"), globals())
+    name = f"{__name__}.{filename[:-3]}"
+    exec(SourceFileLoader(name, str(path)).get_code(name), globals())
 
 
 for _fragment in _FRAGMENTS:
