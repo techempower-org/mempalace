@@ -607,6 +607,9 @@ def test_mine_convos_skips_same_content_under_new_filename(capsys):
         out = capsys.readouterr().out
         assert "duplicate of export_2026-01-01.txt" in out
 
+        # The fork releases chroma's shared system after a mine (#262 lock release), so a client opened before
+        # mine_convos is stale afterwards; reopen it, as any caller must.
+        client = chromadb.PersistentClient(path=palace_path)
         col = client.get_collection("mempalace_drawers")
         docs = col.get(include=["documents"])["documents"]
         dup_hits = sum(1 for d in docs if "Migration ordering is the main one" in d)
@@ -664,6 +667,9 @@ def test_mine_convos_skips_same_conversation_within_re_exported_bundle(capsys):
 
         mine_convos(tmpdir, palace_path, wing="test")
 
+        # The fork releases chroma's shared system after a mine (#262 lock release), so a client opened before
+        # mine_convos is stale afterwards; reopen it, as any caller must.
+        client = chromadb.PersistentClient(path=palace_path)
         col = client.get_collection("mempalace_drawers")
         docs = col.get(include=["documents"])["documents"]
         a_hits = sum(1 for d in docs if "CONVO_A_MARKER" in d)
@@ -1187,6 +1193,9 @@ def test_mine_convos_grown_file_embeds_only_new_exchanges(tmp_path, capsys, monk
     out = capsys.readouterr().out
     assert "unchanged drawer(s) kept" in out
 
+    # The fork releases chroma's shared system after a mine (#262 lock release), so a client opened before
+    # mine_convos is stale afterwards; reopen it, as any caller must.
+    col = chromadb.PersistentClient(path=palace_path).get_collection("mempalace_drawers")
     after = col.get(include=["metadatas", "documents"])
     new_ids = set(after["ids"]) - before_ids
     assert counter["texts"] == len(new_ids), (
@@ -1213,6 +1222,7 @@ def test_mine_convos_grown_file_embeds_only_new_exchanges(tmp_path, capsys, monk
     mine_convos(str(convo_dir), palace_path, wing="test")
     capsys.readouterr()
     assert counter["texts"] == 0
+    col = chromadb.PersistentClient(path=palace_path).get_collection("mempalace_drawers")
     final = col.get(include=["metadatas"])
     assert set(final["ids"]) == set(after["ids"])
     finals = [m for m in final["metadatas"] if m.get("ingest_mode") == "convos"]

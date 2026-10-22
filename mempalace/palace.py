@@ -363,7 +363,9 @@ def get_collection(
     # Upstream #2347: fail loudly on a name the wrapper does not own. Checked after the fork maps the
     # default name onto the configured one, so literal "mempalace_drawers" callers keep working.
     if not _skip_name_check:
-        allowed = _allowed_wrapper_collection_names()
+        # The configured drawers collection + closets (upstream's set), from the SAME config read as the mapping
+        # above: get_configured_collection_name() caches, and a stale value would reject the configured name.
+        allowed = list(dict.fromkeys([config.collection_name, CLOSETS_COLLECTION_NAME]))
         if collection_name not in allowed:
             raise CollectionNameMismatchError(collection_name, allowed, palace_path)
     backend_name = resolve_backend_name(palace_path, explicit=backend)

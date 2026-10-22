@@ -166,14 +166,11 @@ def test_add_drawer_stores_matching_creation_and_modification_time(
 ):
     collection = MagicMock()
 
-    collection.get.side_effect = [
-        {
-            "ids": [],
-        },
-        {
-            "ids": ["stored-drawer"],
-        },
-    ]
+    # Stateful rather than a fixed two-call script: the fork's tool_add_drawer probes the store more than once
+    # before writing, so answer like a real store does (empty until the upsert, the stored row after it).
+    collection.get.side_effect = lambda *a, **kw: (
+        {"ids": ["stored-drawer"]} if collection.upsert.called else {"ids": []}
+    )
 
     monkeypatch.setattr(
         mcp_server,
@@ -190,6 +187,8 @@ def test_add_drawer_stores_matching_creation_and_modification_time(
         "_config",
         SimpleNamespace(
             chunk_size=800,
+            # The fork's tool_add_drawer resolves room aliases first; identity keeps this test on last_modified.
+            resolve_room=lambda room: room,
         ),
     )
 
@@ -240,6 +239,8 @@ def test_update_drawer_stamps_last_modified_and_preserves_filed_at(
         "_config",
         SimpleNamespace(
             chunk_size=800,
+            # The fork's tool_add_drawer resolves room aliases first; identity keeps this test on last_modified.
+            resolve_room=lambda room: room,
         ),
     )
 

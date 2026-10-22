@@ -133,8 +133,13 @@ class _FakeCol:
     def count(self):
         return len(self._metadatas)
 
-    def get(self, limit=None, offset=0, include=None):
-        return {"metadatas": self._metadatas[offset : offset + (limit or len(self._metadatas))]}
+    def get(self, where=None, limit=None, offset=0, include=None):
+        # compute_hallways_for_wing scopes the fetch server-side (upstream #2477), so a fake must honour
+        # ``where={"wing": ...}`` the way the real backends do.
+        rows = self._metadatas
+        if where and "wing" in where:
+            rows = [m for m in rows if m.get("wing") == where["wing"]]
+        return {"metadatas": rows[offset : offset + (limit or len(rows))]}
 
 
 def test_compute_reads_dynamics_for_one_wing_not_the_whole_store(recording):

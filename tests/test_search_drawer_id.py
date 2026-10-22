@@ -331,7 +331,9 @@ def test_union_results_use_parent_or_lexical_hit_id():
     )
 
 
-def test_cli_scoped_search_uses_existing_filter_fallback(capsys):
+def test_cli_scoped_search_uses_existing_filter_fallback(capsys, tmp_path):
+    # The fork's CLI search() checks the filesystem first (palace dir + chroma.sqlite3), so give it a real one.
+    (tmp_path / "chroma.sqlite3").write_bytes(b"")
     drawers_col = MagicMock()
     drawers_col.distance_metric = "cosine"
     drawers_col.metadata = {"hnsw:space": "cosine"}
@@ -362,13 +364,16 @@ def test_cli_scoped_search_uses_existing_filter_fallback(capsys):
         "mempalace.searcher.resolve_backend_name",
         return_value="sqlite_exact",
     ):
-        with patch(
-            "mempalace.searcher._open_collection_or_explain",
-            return_value=drawers_col,
+        # The fork's CLI search() delegates retrieval to search_memories(), which opens its
+        # collection via _open_search_collection after a read-only get_collection probe; patch
+        # those seams (upstream #2380 patched the old inline path's _open_collection_or_explain).
+        with patch("mempalace.searcher.get_collection", return_value=drawers_col), patch(
+            "mempalace.searcher._open_search_collection",
+            return_value=(drawers_col, None),
         ):
             search(
                 "needle",
-                "/unused",
+                str(tmp_path),
                 wing="keep",
                 room="notes",
                 n_results=2,
