@@ -8,7 +8,7 @@ from mempalace.mcp_light_server import LIGHT_TOOLS
 
 
 def test_schema_reduction_benchmark():
-    """Measure the exact JSON payload size of legacy 45 tools vs 3 light tools."""
+    """Measure the exact JSON payload size of the full legacy tool set vs the 3 light tools."""
     legacy_schema = [
         {"name": n, "description": t["description"], "inputSchema": t["input_schema"]}
         for n, t in LEGACY_TOOLS.items()
@@ -27,7 +27,7 @@ def test_schema_reduction_benchmark():
     reduction_pct = ((legacy_bytes - light_bytes) / legacy_bytes) * 100
 
     print("\n--- MCP Tool Schema Benchmark ---")
-    print(f"Legacy 45 Tools Schema : {legacy_bytes:,} bytes (~{legacy_est_tokens:,} tokens)")
+    print(f"Legacy {len(LEGACY_TOOLS)} Tools Schema : {legacy_bytes:,} bytes (~{legacy_est_tokens:,} tokens)")
     print(f"Lightweight 3 Tools     : {light_bytes:,} bytes (~{light_est_tokens:,} tokens)")
     print(f"Reduction Ratio         : {reduction_pct:.1f}% reduction")
     print("---------------------------------")
@@ -35,4 +35,6 @@ def test_schema_reduction_benchmark():
     # Completeness of structured fields costs some of the original >80% headline.
     assert reduction_pct > 70.0
     assert len(LIGHT_TOOLS) == 3
-    assert len(LEGACY_TOOLS) == 45
+    # Upstream ships 45 legacy tools; this fork registers more (tool_diary_agents, tool_walk_palace, ...),
+    # so pin the floor rather than upstream's exact count.
+    assert len(LEGACY_TOOLS) >= 45
