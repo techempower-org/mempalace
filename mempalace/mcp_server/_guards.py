@@ -97,7 +97,15 @@ def _is_server_entrypoint(argv0=None, main_spec_name=None) -> bool:
     if main_spec_name is None:
         spec = getattr(sys.modules.get("__main__"), "__spec__", None)
         main_spec_name = getattr(spec, "name", None) or ""
-    if main_spec_name in {"mempalace.mcp_server", "mempalace.mcp_proxy"}:
+    # mcp_server is a package since the 2026-10 upstream sync, so ``python -m mempalace.mcp_server`` runs its
+    # ``__main__.py`` and the spec name is ``mempalace.mcp_server.__main__``. Missing that silently dropped --palace
+    # and --backend for every ``python -m`` launch.
+    if main_spec_name in {
+        "mempalace.mcp_server",
+        "mempalace.mcp_server.__main__",
+        "mempalace.mcp_proxy",
+        "mempalace.mcp_proxy.__main__",
+    }:
         return True
     return os.path.basename(str(argv0)) in _SERVER_ARGV0_BASENAMES
 
@@ -116,29 +124,45 @@ def _default_args():
     )
 
 
-_args = _parse_args() if _is_server_entrypoint() else _default_args()
+_SERVER_ARGV_APPLIED = False
 
-if _args.palace:
-    os.environ["MEMPALACE_PALACE_PATH"] = os.path.abspath(_args.palace)
-if _args.backend:
-    backend_name = str(_args.backend).strip().lower()
-    from ..backends import get_backend_class  # noqa: E402
 
-    get_backend_class(backend_name)
-    os.environ["MEMPALACE_BACKEND_EXPLICIT"] = backend_name
-    os.environ["MEMPALACE_BACKEND"] = backend_name
+def _apply_server_argv(args) -> None:
+    """Apply the server's command-line flags: --palace/--backend into the environment, then the config and
+    read-only mode built from them. Runs at import for a recognised entrypoint, and again via
+    _ensure_server_argv() from __main__.py, because ``python -m mempalace.mcp_server`` (and runpy) import the
+    package BEFORE its __main__ is visible, when argv[0] is still ``-m``/``-c``."""
+    global _args, _config, _READ_ONLY, _palace_flag_given, _SERVER_ARGV_APPLIED
+    _args = args
+    if _args.palace:
+        os.environ["MEMPALACE_PALACE_PATH"] = os.path.abspath(_args.palace)
+    if _args.backend:
+        backend_name = str(_args.backend).strip().lower()
+        from ..backends import get_backend_class  # noqa: E402
 
-_config = MempalaceConfig()
+        get_backend_class(backend_name)
+        os.environ["MEMPALACE_BACKEND_EXPLICIT"] = backend_name
+        os.environ["MEMPALACE_BACKEND"] = backend_name
+    _config = MempalaceConfig()
+    # Read-only server mode: when on, the tools in _READ_ONLY_REFUSED_TOOLS (defined below) are hidden from
+    # tools/list and refused at dispatch (-32003), a wider set than the _MUTATING_TOOLS the peer-writer guard uses.
+    # Resolved at startup from --read-only or MEMPALACE_MCP_READ_ONLY.
+    _READ_ONLY = bool(getattr(_args, "read_only", False)) or os.environ.get(
+        "MEMPALACE_MCP_READ_ONLY", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    _palace_flag_given = bool(_args.palace)
 
-# Read-only server mode: when on, the tools in _READ_ONLY_REFUSED_TOOLS (defined
-# below) are hidden from tools/list and refused at dispatch (-32003). That is a
-# wider set than the _MUTATING_TOOLS the peer-writer guard uses. Resolved once at
-# startup from --read-only or MEMPALACE_MCP_READ_ONLY. Computed inline (not via
-# _truthy_env, defined below) so it is available to the request path regardless
-# of import order.
-_READ_ONLY = bool(getattr(_args, "read_only", False)) or os.environ.get(
-    "MEMPALACE_MCP_READ_ONLY", ""
-).strip().lower() in {"1", "true", "yes", "on"}
+
+def _ensure_server_argv() -> None:
+    """Called by __main__.py: parse the real argv if the import could not tell it was the server."""
+    if not _SERVER_ARGV_APPLIED:
+        _apply_server_argv(_parse_args())
+        globals()["_SERVER_ARGV_APPLIED"] = True
+
+
+_SERVER_ARGV_APPLIED = _is_server_entrypoint()
+_apply_server_argv(_parse_args() if _SERVER_ARGV_APPLIED else _default_args())
+
 
 _kg_by_path: dict = {}  # KG instance cache; KnowledgeGraph or KnowledgeGraphAGE
 _kg_cache_lock = threading.Lock()
@@ -149,7 +173,6 @@ _logstream_cache_lock = threading.Lock()
 # Keep that entire scope single-threaded even when tool_search is invoked
 # outside the HTTP dispatch lock (tests, embedded hosts, future transports).
 _cli_search_capture_lock = threading.Lock()
-_palace_flag_given: bool = bool(_args.palace)
 
 # MCP server idle auto-exit (#1552).  Stale MCP servers from ended Claude
 # Code sessions do not self-terminate, accumulating ChromaDB/HNSW file

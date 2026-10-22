@@ -47,6 +47,17 @@ from mempalace.hooks_cli import (
 
 
 @pytest.fixture(autouse=True)
+def _hooks_default_palace_is_per_test(monkeypatch, tmp_path):
+    """Hooks run here for real start DETACHED `mempalace mine` children and write diary entries through the
+    module config. Without a pin those land in the SESSION's default palace and outlive the test, so later test
+    files found a chroma DB there. A per-test MEMPALACE_PALACE_PATH, which detached children inherit, keeps
+    every such write inside this test's tmp dir. A test that sets its own path (patch.dict / setenv) still wins."""
+    default = tmp_path / "default-palace"
+    default.mkdir(exist_ok=True)
+    monkeypatch.setenv("MEMPALACE_PALACE_PATH", str(default))
+
+
+@pytest.fixture(autouse=True)
 def _isolated_existing_palace_root(monkeypatch, tmp_path):
     """Give every test an isolated, *existing* PALACE_ROOT/STATE_DIR.
 
@@ -551,7 +562,11 @@ def test_stop_hook_tracks_save_point(tmp_path):
 
     # First call saves silently with systemMessage notification
     save_result = {"count": 15, "themes": ["hooks"]}
-    with patch("mempalace.hooks_cli._save_diary_direct", return_value=save_result):
+    # The fork's Stop hook also starts a DETACHED transcript mine (_ingest_transcript). Unmocked, it outlived the test
+    # and mined into the session's default palace, which later test files found holding a chroma DB.
+    with patch("mempalace.hooks_cli._save_diary_direct", return_value=save_result), patch(
+        "mempalace.hooks_cli._ingest_transcript"
+    ):
         result = _capture_hook_output(hook_stop, data, state_dir=tmp_path)
     assert "systemMessage" in result
 
@@ -615,9 +630,11 @@ def test_stop_hook_files_checkpoint_under_harness_agent(tmp_path, harness, expec
         transcript,
         [{"message": {"role": "user", "content": f"msg {i}"}} for i in range(SAVE_INTERVAL)],
     )
+    # The fork's Stop hook also starts a DETACHED transcript mine (_ingest_transcript). Unmocked, it outlived the test
+    # and mined into the session's default palace, which later test files found holding a chroma DB.
     with patch(
         "mempalace.hooks_cli._save_diary_direct", return_value={"count": 5, "themes": []}
-    ) as mock_save:
+    ) as mock_save, patch("mempalace.hooks_cli._ingest_transcript"):
         _capture_hook_output(
             hook_stop,
             {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)},
@@ -2481,7 +2498,11 @@ def test_stop_hook_rejects_injected_stop_hook_active(tmp_path):
         transcript,
         [{"message": {"role": "user", "content": f"msg {i}"}} for i in range(SAVE_INTERVAL)],
     )
-    with patch("mempalace.hooks_cli._ingest_transcript") as mock_ingest:
+    # _save_diary_direct is mocked too: the real one writes a diary entry through mcp_server's module config, i.e.
+    # the session's DEFAULT palace, and later test files then found a chroma DB there.
+    with patch("mempalace.hooks_cli._ingest_transcript") as mock_ingest, patch(
+        "mempalace.hooks_cli._save_diary_direct", return_value={"count": 5, "themes": []}
+    ):
         _capture_hook_output(
             hook_stop,
             {

@@ -17,6 +17,8 @@ def test_predicate_recognizes_server_entrypoints():
     assert mcp_server._is_server_entrypoint("/x/bin/mempalace-mcp", "")
     assert mcp_server._is_server_entrypoint("/x/mempalace/mcp_server.py", "")
     assert mcp_server._is_server_entrypoint("python", "mempalace.mcp_server")
+    # `python -m mempalace.mcp_server` runs the package's __main__.py (mcp_server became a package).
+    assert mcp_server._is_server_entrypoint("python", "mempalace.mcp_server.__main__")
     assert mcp_server._is_server_entrypoint("python", "mempalace.mcp_proxy")
 
 
