@@ -1428,6 +1428,9 @@ def cmd_rooms(args):
     tools that wrap the same SQL the local path runs. When daemon-strict
     is off, falls back to direct postgres via ``MEMPALACE_POSTGRES_DSN``.
     """
+    if getattr(args, "rooms_action", None) in {"propose", "apply"}:
+        cmd_rooms_maintenance(args)
+        return
     cmd = getattr(args, "rooms_cmd", None)
 
     if _daemon_strict():
@@ -3617,6 +3620,70 @@ def _build_overlap_cypher(wing_a: str, wing_b: str, limit: int) -> str:
     )
 
 
+def _hallways_maintenance(args) -> bool:
+    """Run ``hallways --rebuild`` / ``--prune-spellings`` if asked; True when one ran (upstream #2576).
+
+    Both write the palace's hallway file locally under the repair lock, so they stay on the plural verb rather
+    than the daemon-routed ``hallway list`` the read path delegates to.
+    """
+    palace_path = (
+        os.path.expanduser(args.palace)
+        if getattr(args, "palace", None)
+        else MempalaceConfig().palace_path
+    )
+    config = MempalaceConfig(palace_path=palace_path)
+    if getattr(args, "rebuild", False):
+        from ..hallways import compute_hallways_for_wing
+        from ..palace import get_collection
+        from ..palace_graph import sqlite_grouped_counts_reader
+
+        col = get_collection(palace_path, create=False, read_only=True)
+        wing_filter = getattr(args, "wing", None)
+        if wing_filter:
+            wings = [wing_filter]
+        else:
+            reader = sqlite_grouped_counts_reader(config)
+            rows = reader(palace_path, config.collection_name) if reader else None
+            if rows is None:
+                print("  --rebuild without --wing needs a sqlite-readable palace.")
+                sys.exit(1)
+            wings = sorted({str(r[1]) for r in rows if r[1]})
+        # Scan and replace under the palace writer lock, like the other repair
+        # commands: the hallway-file lock alone lets a mine add drawers and
+        # save a newer snapshot between this scan and its save, which would
+        # then be overwritten with stale results.
+        total = 0
+        with _repair_lock(palace_path):
+            for w in wings:
+                created = compute_hallways_for_wing(w, col=col, config=config)
+                total += len(created)
+                print(f"  {w:<36} {len(created):>7} hallways")
+        print(f"  Rebuilt {total} hallways across {len(wings)} wing(s).")
+        return True
+    if getattr(args, "prune_spellings", False):
+        from ..hallways import prune_spelling_hallways
+
+        apply = getattr(args, "yes", False)
+        report = prune_spelling_hallways(config=config, apply=apply)
+        doomed = report["self_links"] + report["duplicates"]
+        print(
+            f"  {doomed} of {report['total']} hallways are spelling artifacts: "
+            f"{report['self_links']} self-links, {report['duplicates']} duplicate spellings."
+        )
+        for wing, n in list(report["by_wing"].items())[:8]:
+            print(f"    {wing}: {n}")
+        for label in report["sample"][:5]:
+            print(f"    e.g. {label}")
+        if not doomed:
+            return True
+        if apply:
+            print(f"  Removed {report['removed']}.")
+        else:
+            print("  Dry run. Re-run with --yes to remove them.")
+        return True
+    return False
+
+
 def cmd_hallways(args):
     """Deprecated alias for ``mempalace hallway list`` (#407).
 
@@ -3635,6 +3702,8 @@ def cmd_hallways(args):
     a ``deprecated`` marker inside the payload instead (#438's choice,
     kept: nothing then has to parse stderr to notice).
     """
+    if _hallways_maintenance(args):
+        return
     if _resolve_read_format(args) != "json":
         print(
             "mempalace: `hallways` is deprecated — use `mempalace hallway list` "
@@ -4170,6 +4239,9 @@ def cmd_tunnels(args):
 
     Daemon unreachable → exit 1; inner-error envelope → exit 2.
     """
+    if getattr(args, "tunnels_action", None) in {"propose", "prune"}:
+        cmd_tunnels_maintenance(args)
+        return
     if getattr(args, "rebuild", False):
         # Local operation — deliberately ahead of the daemon check below,
         # which only the listing path needs.

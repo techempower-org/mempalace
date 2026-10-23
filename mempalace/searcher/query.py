@@ -209,6 +209,33 @@ def _closet_boosts(closets_col, *, query: str, n_results: int, where: dict) -> d
     return boosts
 
 
+# Folding copies can leave fewer distinct passages than asked for while the
+# vector pool was full, so more candidates exist. The search then repeats with
+# a pool four times larger, up to _MAX_POOL_SCALE times the normal pool and
+# never past _MAX_FOLD_POOL candidates.
+_MAX_POOL_SCALE = 16
+_MAX_FOLD_POOL = 500
+
+
+def _scaled_pool_limits(limits: tuple, scale: int) -> tuple:
+    if scale <= 1:
+        return limits
+    pool_size, pre_enrichment_limit = limits
+    return (
+        min(pool_size * scale, max(_MAX_FOLD_POOL, pool_size)),
+        min(pre_enrichment_limit * scale, max(_MAX_FOLD_POOL, pre_enrichment_limit)),
+    )
+
+
+def _copies_left_results_short(hits, n_results, candidates_fetched, pool_size) -> bool:
+    """Whether folded copies left the page short while the pool was full."""
+    return (
+        len(hits) < n_results
+        and candidates_fetched >= pool_size
+        and any(hit.get("also_in") for hit in hits)
+    )
+
+
 def search_memories(  # noqa: C901 — fork-only fallback orchestration; complexity above ceiling is the cost of the BM25-top-up + warnings + closet-boost branches
     query: str,
     palace_path: str,
@@ -225,6 +252,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     fusion_mode: str = "convex",
     collection_name: str = None,
     lang: Optional[str] = None,
+    _pool_scale: int = 1,
 ) -> dict:
     """Programmatic search — returns a dict instead of printing.
 
@@ -350,10 +378,9 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     # This avoids the "weak-closets regression" where narrative content
     # produces low-signal closets (regex extraction matches few topics)
     # and closet-first routing hides drawers that direct search would find.
-    pool_size, pre_enrichment_limit = _candidate_pool_limits(
-        candidate_strategy,
-        n_results,
-        date_window_active,
+    pool_size, pre_enrichment_limit = _scaled_pool_limits(
+        _candidate_pool_limits(candidate_strategy, n_results, date_window_active),
+        _pool_scale,
     )
     pull_size = pool_size  # fork paths reuse upstream's window-aware pool
     warnings: list[str] = []
@@ -562,6 +589,33 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
             top_n=_cer_cfg["top_n"],
         )
 
+    # The candidates arrive folded (upstream #2593: _finalize_candidate_hits lists a passage's other copies under
+    # ``also_in``). Counted with those copies, this is what the vector pool actually ranked.
+    unfolded = len(hits) + sum(len(h.get("also_in") or ()) for h in hits)
+    # Folding can leave the page short while the vector pool came back full: widen the pool and search again
+    # (upstream #2593), before the sqlite fallback below can fill those slots with weaker keyword matches.
+    candidates_fetched = len(_first_or_empty(drawer_results, "documents"))
+    copies_left_short = _copies_left_results_short(hits, n_results, candidates_fetched, pool_size)
+    if copies_left_short and _pool_scale < _MAX_POOL_SCALE and pool_size < _MAX_FOLD_POOL:
+        return search_memories(
+            query,
+            palace_path,
+            wing=wing,
+            room=room,
+            tags=tags,
+            source_file=source_file,
+            since=since,
+            before=before,
+            n_results=n_results,
+            max_distance=max_distance,
+            vector_disabled=vector_disabled,
+            candidate_strategy=candidate_strategy,
+            fusion_mode=fusion_mode,
+            collection_name=collection_name,
+            lang=lang,
+            _pool_scale=_pool_scale * 4,
+        )
+
     # Apply the result-size contract after every reordering stage has
     # had a chance to influence the top of the list.
     hits = hits[:n_results]
@@ -588,7 +642,8 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     # warning fire correctly even when the BM25 fallback happened to fill
     # the request — the vector index still underdelivered, which is the
     # real signal pointing at `mempalace repair`.
-    vector_hit_count = len(hits)
+    # Counted before the fold: copies folded into one hit are not the vector index underdelivering.
+    vector_hit_count = min(unfolded, n_results)
     vector_underdelivered = vector_hit_count < n_results
 
     # Capture vector hit count before BM25 may extend hits. The scope warning
@@ -635,13 +690,15 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
         since=since,
         before=before,
         hits=hits,
-        candidates_fetched=len(_first_or_empty(drawer_results, "documents")),
+        candidates_fetched=candidates_fetched,
         pool_size=pool_size,
         date_window_active=date_window_active,
     )
     # Fork-only response fields upstream's envelope doesn't carry.
     result["available_in_scope"] = available_in_scope
     result["warnings"] = warnings
+    if copies_left_short:                                        # could not widen any further
+        result["distinct_results_truncated"] = True
     return result
 
 

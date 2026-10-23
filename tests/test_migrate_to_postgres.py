@@ -172,7 +172,7 @@ def test_dry_run_exits_after_preflight(tmp_path, capsys):
 @pgmark
 def test_phase_1_creates_extensions_and_checkpoint_table(capsys):
     """phase_1_schema installs vector + age and creates the meta table."""
-    import psycopg2
+    import psycopg as psycopg2  # psycopg 3, as migrate_to_postgres imports it
     from mempalace.migrate_to_postgres import (
         CHECKPOINT_TABLE,
         phase_1_schema,
@@ -295,7 +295,7 @@ def test_phase_2_idempotent(fixture_chroma_palace):
     phase_2_drawers(palace_path, POSTGRES_DSN, batch_size=4)
     # Reset the per-collection done marker so the second pass actually runs
     # the loop (vs short-circuiting via checkpoint).
-    import psycopg2
+    import psycopg as psycopg2  # psycopg 3, as migrate_to_postgres imports it
 
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute(
@@ -325,7 +325,7 @@ def test_phase_2_skips_collection_when_marked_done(fixture_chroma_palace, capsys
 
     palace_path, test_table = fixture_chroma_palace
     phase_1_schema(POSTGRES_DSN)
-    import psycopg2
+    import psycopg as psycopg2  # psycopg 3, as migrate_to_postgres imports it
 
     with psycopg2.connect(POSTGRES_DSN) as conn:
         _set_checkpoint(conn, f"migration_drawer_done::{test_table}", "done")
@@ -402,7 +402,7 @@ def test_phase_5_no_sqlite_kg_marks_done(tmp_path, capsys):
     # via checkpoint). Without this, a previous test run that completed
     # phase_5 leaves the checkpoint set and the assert below misfires.
     from mempalace.migrate_to_postgres import phase_1_schema
-    import psycopg2
+    import psycopg as psycopg2  # psycopg 3, as migrate_to_postgres imports it
 
     phase_1_schema(POSTGRES_DSN)
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
@@ -420,7 +420,7 @@ def test_phase_5_no_sqlite_kg_marks_done(tmp_path, capsys):
     assert "nothing to migrate" in out.lower() or "no sqlite" in out.lower()
 
     # Verify checkpoint was set
-    import psycopg2
+    import psycopg as psycopg2  # psycopg 3, as migrate_to_postgres imports it
     from mempalace.migrate_to_postgres import _get_checkpoint
 
     with psycopg2.connect(POSTGRES_DSN) as conn:
@@ -464,7 +464,7 @@ def test_phase_5_copies_triples(tmp_path, capsys):
     phase_1_schema(POSTGRES_DSN)
 
     # Reset state for a clean test
-    import psycopg2
+    import psycopg as psycopg2  # psycopg 3, as migrate_to_postgres imports it
 
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute(
@@ -514,7 +514,7 @@ def test_phase_5_skips_when_done_checkpoint(tmp_path, capsys):
     )
 
     phase_1_schema(POSTGRES_DSN)
-    import psycopg2
+    import psycopg as psycopg2  # psycopg 3, as migrate_to_postgres imports it
 
     with psycopg2.connect(POSTGRES_DSN) as conn:
         _set_checkpoint(conn, _KG_DONE_KEY, "done")
@@ -542,7 +542,7 @@ def test_phase_6_verify_reports_match(fixture_chroma_palace, tmp_path, capsys):
     palace_path, test_table = fixture_chroma_palace
     # Reset state for a clean test
     phase_1_schema(POSTGRES_DSN)
-    import psycopg2
+    import psycopg as psycopg2  # psycopg 3, as migrate_to_postgres imports it
 
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_%%'")
@@ -574,7 +574,7 @@ def test_phase_6_verify_detects_drawer_mismatch(fixture_chroma_palace, capsys):
 
     palace_path, test_table = fixture_chroma_palace
     phase_1_schema(POSTGRES_DSN)
-    import psycopg2
+    import psycopg as psycopg2  # psycopg 3, as migrate_to_postgres imports it
 
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM mempalace_backend_meta WHERE key LIKE 'migration_%%'")
@@ -615,7 +615,7 @@ def test_phase_7_done_prints_cutover_and_records_timestamp(fixture_chroma_palace
     assert "MEMPALACE_KG_BACKEND=age" in out
     assert "systemctl" in out
 
-    import psycopg2
+    import psycopg as psycopg2  # psycopg 3, as migrate_to_postgres imports it
 
     with psycopg2.connect(POSTGRES_DSN) as conn:
         ts = _get_checkpoint(conn, "migrated_from_chroma_at")
@@ -677,7 +677,7 @@ def test_phase_5_skips_bad_temporal_data(tmp_path, capsys):
     )
 
     phase_1_schema(POSTGRES_DSN)
-    import psycopg2
+    import psycopg as psycopg2  # psycopg 3, as migrate_to_postgres imports it
 
     with psycopg2.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
         cur.execute(

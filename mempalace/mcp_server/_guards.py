@@ -18,7 +18,7 @@ def _get_result_ids(result) -> list:
     return []
 
 
-def _parse_args():
+def _parse_args(argv=None):
     parser = argparse.ArgumentParser(description="MemPalace MCP Server")
     parser.add_argument(
         "--palace",
@@ -64,105 +64,63 @@ def _parse_args():
         help="Serve a read-only tool surface: the tools that change state are hidden "
         "from tools/list and refused at dispatch (env MEMPALACE_MCP_READ_ONLY)",
     )
-    args, unknown = parser.parse_known_args()
+    args, unknown = parser.parse_known_args(argv)
     if unknown:
         logger.debug("Ignoring unknown args: %s", unknown)
     return args
 
 
-# Only the MCP-server entrypoints own the process's argv. Every other importer
-# — the CLI's local-path tool handlers, the daemon, tests, a hook — has its own
-# flags, and parsing THEIR argv here used to (a) set MEMPALACE_PALACE_PATH
-# process-wide from a stray ``--palace`` and silently redirect the caller's
-# later commands, and (b) raise KeyError out of an ``import`` line on a bad
-# ``--backend`` (techempower-org/mempalace#409).
-_SERVER_ARGV0_BASENAMES = frozenset(
-    {"mempalace-mcp", "mempalace-mcp.py", "mcp_server.py", "mempalace-mcp.exe"}
-)
+# Defaults only. Programs other than this server import this package too (the
+# light server, the daemon, the hook runner, integrations), so parsing a command
+# line is left to the entry points, which apply their flags with
+# _apply_server_flags() before serving (#2528). A reload keeps what they applied,
+# here and in _READ_ONLY and _palace_flag_given below.
+_args = globals().get("_args") or _parse_args([])
 
 
-def _is_server_entrypoint(argv0=None, main_spec_name=None) -> bool:
-    """True when this module (or its proxy) is the program being run.
+def _apply_server_flags(palace=None, backend=None, read_only=False) -> None:
+    """Apply ``--palace`` / ``--backend`` / ``--read-only`` to this process.
 
-    ``python -m mempalace.mcp_server`` / ``python -m mempalace.mcp_proxy``
-    make ``__main__.__spec__.name`` the module name; the ``mempalace-mcp``
-    console script shows up as ``argv[0]``'s basename. Anything else is an
-    importer whose argv is not ours. ``MEMPALACE_MCP_PARSE_ARGV=1`` forces
-    parsing for unusual launchers.
+    Call it before the server handles a request: everything the import derived
+    from these flags' defaults is derived again here.
     """
-    if os.environ.get("MEMPALACE_MCP_PARSE_ARGV", "").strip() in {"1", "true", "yes"}:
-        return True
-    if argv0 is None:
-        argv0 = sys.argv[0] if sys.argv else ""
-    if main_spec_name is None:
-        spec = getattr(sys.modules.get("__main__"), "__spec__", None)
-        main_spec_name = getattr(spec, "name", None) or ""
-    # mcp_server is a package since the 2026-10 upstream sync, so ``python -m mempalace.mcp_server`` runs its
-    # ``__main__.py`` and the spec name is ``mempalace.mcp_server.__main__``. Missing that silently dropped --palace
-    # and --backend for every ``python -m`` launch.
-    if main_spec_name in {
-        "mempalace.mcp_server",
-        "mempalace.mcp_server.__main__",
-        "mempalace.mcp_proxy",
-        "mempalace.mcp_proxy.__main__",
-    }:
-        return True
-    return os.path.basename(str(argv0)) in _SERVER_ARGV0_BASENAMES
+    global _READ_ONLY, _palace_flag_given
+    global _STALE_LIBRARY_WATCHED_DISTS, _STARTUP_DIST_STATE
+    global _STARTUP_DIST_VERSIONS, _STARTUP_DIST_ERRORS
 
-
-def _default_args():
-    """The Namespace a non-entrypoint importer gets: every flag at its default."""
-    return argparse.Namespace(
-        palace=None,
-        backend=None,
-        transport="stdio",
-        host="127.0.0.1",
-        port=8765,
-        tls_cert=None,
-        tls_key=None,
-        read_only=False,
-    )
-
-
-_SERVER_ARGV_APPLIED = False
-
-
-def _apply_server_argv(args) -> None:
-    """Apply the server's command-line flags: --palace/--backend into the environment, then the config and
-    read-only mode built from them. Runs at import for a recognised entrypoint, and again via
-    _ensure_server_argv() from __main__.py, because ``python -m mempalace.mcp_server`` (and runpy) import the
-    package BEFORE its __main__ is visible, when argv[0] is still ``-m``/``-c``."""
-    global _args, _config, _READ_ONLY, _palace_flag_given, _SERVER_ARGV_APPLIED
-    _args = args
-    if _args.palace:
-        os.environ["MEMPALACE_PALACE_PATH"] = os.path.abspath(_args.palace)
-    if _args.backend:
-        backend_name = str(_args.backend).strip().lower()
-        from ..backends import get_backend_class  # noqa: E402
+    if backend:
+        backend_name = str(backend).strip().lower()
+        from ..backends import get_backend_class
 
         get_backend_class(backend_name)
         os.environ["MEMPALACE_BACKEND_EXPLICIT"] = backend_name
         os.environ["MEMPALACE_BACKEND"] = backend_name
-    _config = MempalaceConfig()
-    # Read-only server mode: when on, the tools in _READ_ONLY_REFUSED_TOOLS (defined below) are hidden from
-    # tools/list and refused at dispatch (-32003), a wider set than the _MUTATING_TOOLS the peer-writer guard uses.
-    # Resolved at startup from --read-only or MEMPALACE_MCP_READ_ONLY.
-    _READ_ONLY = bool(getattr(_args, "read_only", False)) or os.environ.get(
-        "MEMPALACE_MCP_READ_ONLY", ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    _palace_flag_given = bool(_args.palace)
+        # The stale-library gate's watch list follows _config.backend, which
+        # --backend sets through MEMPALACE_BACKEND unless config.json names a
+        # backend, and its baseline was read at import for the list watched then.
+        watched = _stale_library_watched_dists()
+        if watched != _STALE_LIBRARY_WATCHED_DISTS:
+            _STALE_LIBRARY_WATCHED_DISTS = watched
+            _STARTUP_DIST_STATE = _initial_dist_state()
+            _STARTUP_DIST_VERSIONS, _STARTUP_DIST_ERRORS = _STARTUP_DIST_STATE
+    if palace:
+        os.environ["MEMPALACE_PALACE_PATH"] = os.path.abspath(palace)
+        _palace_flag_given = True
+    if read_only:
+        _READ_ONLY = True
 
 
-def _ensure_server_argv() -> None:
-    """Called by __main__.py: parse the real argv if the import could not tell it was the server."""
-    if not _SERVER_ARGV_APPLIED:
-        _apply_server_argv(_parse_args())
-        globals()["_SERVER_ARGV_APPLIED"] = True
+_config = MempalaceConfig()
 
-
-_SERVER_ARGV_APPLIED = _is_server_entrypoint()
-_apply_server_argv(_parse_args() if _SERVER_ARGV_APPLIED else _default_args())
-
+# Read-only server mode: when on, the tools in _READ_ONLY_REFUSED_TOOLS (defined
+# below) are hidden from tools/list and refused at dispatch (-32003). That is a
+# wider set than the _MUTATING_TOOLS the peer-writer guard uses. Resolved at
+# startup: from MEMPALACE_MCP_READ_ONLY here, and from --read-only by
+# _apply_server_flags(). Computed inline (not via _truthy_env, defined below) so it
+# is available to the request path regardless of import order.
+_READ_ONLY = globals().get("_READ_ONLY", False) or os.environ.get(
+    "MEMPALACE_MCP_READ_ONLY", ""
+).strip().lower() in {"1", "true", "yes", "on"}
 
 _kg_by_path: dict = {}  # KG instance cache; KnowledgeGraph or KnowledgeGraphAGE
 _kg_cache_lock = threading.Lock()
@@ -173,6 +131,8 @@ _logstream_cache_lock = threading.Lock()
 # Keep that entire scope single-threaded even when tool_search is invoked
 # outside the HTTP dispatch lock (tests, embedded hosts, future transports).
 _cli_search_capture_lock = threading.Lock()
+# Raised by _apply_server_flags() for --palace; _resolve_kg_path() reads it.
+_palace_flag_given: bool = globals().get("_palace_flag_given", False)
 
 # MCP server idle auto-exit (#1552).  Stale MCP servers from ended Claude
 # Code sessions do not self-terminate, accumulating ChromaDB/HNSW file
@@ -267,6 +227,7 @@ _MUTATING_TOOLS = frozenset(
         "mempalace_delete_hallway",
         "mempalace_add_drawer",
         "mempalace_delete_drawer",
+        "mempalace_delete_drawers",
         "mempalace_checkpoint",
         "mempalace_delete_by_source",
         "mempalace_mine",
@@ -281,11 +242,24 @@ _MUTATING_TOOLS = frozenset(
     }
 )
 
+# Tools exempt from the peer-writer lease.
+#
 # Logstream mutating tools (RFC 003) write only to logstream.sqlite3 — an
 # independent WAL database with no Chroma/HNSW in-memory state — so the
 # peer-writer lease that protects Chroma does not apply to them. Exempting
 # them keeps agent coordination alive while a CLI mine or a peer stdio
-# writer holds the palace lock. They remain in _MUTATING_TOOLS so operator
+# writer holds the palace lock.
+#
+# Knowledge-graph tools (#2297): KnowledgeGraph opens its own
+# knowledge_graph.sqlite3 in WAL mode with its own threading.Lock.
+# None of these paths touch Chroma or the HNSW segment, so the
+# peer-writer lease — which exists to serialise two Chroma
+# PersistentClients against the same palace — has no claim on them.
+# Gate them through the lease and a second session loses the ability
+# to record durable facts for the lifetime of the other session,
+# even though the write is provably safe.
+#
+# All exempted tools remain in _MUTATING_TOOLS so operator
 # read-only mode (--read-only / MEMPALACE_MCP_READ_ONLY) still hides and
 # refuses them.
 _PEER_WRITER_EXEMPT_TOOLS = frozenset(
@@ -295,6 +269,9 @@ _PEER_WRITER_EXEMPT_TOOLS = frozenset(
         "mempalace_event_ack",
         "mempalace_artifact_put",
         "mempalace_patch_submit",
+        "mempalace_kg_add",
+        "mempalace_kg_invalidate",
+        "mempalace_kg_supersede",
     }
 )
 
@@ -313,6 +290,7 @@ _VECTOR_WRITE_TOOLS = frozenset(
         "mempalace_add_drawer",
         "mempalace_update_drawer",
         "mempalace_delete_drawer",
+        "mempalace_delete_drawers",
         "mempalace_delete_by_source",
         "mempalace_diary_write",
         "mempalace_checkpoint",
@@ -392,9 +370,9 @@ _READ_ONLY_REFUSED_TOOLS = _MUTATING_TOOLS | {
 # chromadb is a hard dependency rather than an extra, so it is installed even
 # for someone serving from pgvector, and watching it unconditionally would
 # refuse that person's writes over an upgrade to a library that touches nothing
-# they own. The backend is read once here, at import, from the same config the
-# server goes on to serve with. One that cannot be resolved counts as chroma:
-# watching a distribution that turns out not to matter costs a restart, while
+# they own. The backend is read from _config here at import, and again when
+# _apply_server_flags() applies --backend. One that cannot be resolved counts as
+# chroma: watching a distribution that turns out not to matter costs a restart, while
 # not watching the one that does costs the silent corruption this exists to
 # prevent.
 #
@@ -1201,6 +1179,8 @@ _collection_cache_palace = None
 _collection_open_error = None
 _palace_db_inode = 0  # inode of chroma.sqlite3 at cache time
 _palace_db_mtime = 0.0  # mtime of chroma.sqlite3 at cache time
+# System generation the session client was opened on. -1 until the first open.
+_client_system_generation = -1
 
 
 def _is_transient_index_error(result) -> bool:
@@ -1269,14 +1249,10 @@ def _force_chroma_cache_reset() -> None:
             logger.debug(
                 "Failed to close MCP-local Chroma client during cache reset", exc_info=True
             )
-    try:
-        from chromadb.api.client import SharedSystemClient
-
-        clear_system_cache = getattr(SharedSystemClient, "clear_system_cache", None)
-        if callable(clear_system_cache):
-            clear_system_cache()
-    except Exception:
-        logger.debug("Failed to clear Chroma shared system cache during cache reset", exc_info=True)
+    # Hook closes any session client this reset did not already drop, and the
+    # generation advances so the reopen is not treated as the same System.
+    if not _clear_chroma_system_cache():
+        logger.debug("Failed to clear Chroma shared system cache during cache reset")
 
 
 # ── Vector-search disabled flag (#1222) ──────────────────────────────────

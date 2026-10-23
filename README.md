@@ -95,6 +95,7 @@ uv sync --extra dev          # recommended; or: python -m venv venv && pip insta
 uv run mempalace init ~/Projects --yes
 uv run mempalace mine ~/Projects/myproject
 uv run mempalace search "why did we switch to GraphQL"
+uv run mempalace audit                     # score how well organized the palace is (read-only)
 ```
 
 ### MCP bridge on PATH

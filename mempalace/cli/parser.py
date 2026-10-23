@@ -233,6 +233,9 @@ def cmd_wings(args):
     returns counts only and no timestamp is available anywhere on the
     read path, so the table carries a share-of-palace percentage instead.
     """
+    if getattr(args, "wings_action", None) == "split":
+        cmd_wings_maintenance(args)
+        return
     want_json = _resolve_read_format(args) == "json"
     sort = getattr(args, "sort", "name") or "name"
     limit = max(0, int(getattr(args, "limit", 0) or 0))
@@ -1354,7 +1357,7 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         help="Output skill instructions to stdout",
     )
     instructions_sub = p_instructions.add_subparsers(dest="instructions_name")
-    for instr_name in ["init", "search", "mine", "help", "status"]:
+    for instr_name in ["init", "search", "mine", "help", "status", "audit"]:
         instructions_sub.add_parser(instr_name, help=f"Output {instr_name} instructions")
 
     # rules
@@ -1388,7 +1391,7 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         choices=["full", "light"],
         default="full",
         help=(
-            "Tool names in the block: 'full' (default, the 45-tool mempalace-mcp) or "
+            "Tool names in the block: 'full' (default, the 47-tool mempalace-mcp) or "
             "'light' (palace_query / palace_exec / palace_coordinate)"
         ),
     )
@@ -1729,6 +1732,35 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
     p_hallways = sub.add_parser("hallways", help="List entity hallways (associative graph)")
     p_hallways.add_argument("--wing", default=None, help="Filter to one wing")
     p_hallways.add_argument("--limit", type=int, default=50, help="Max hallways to show")
+    p_hallways.add_argument(
+        "--prune-spellings",
+        action="store_true",
+        help="Remove hallways older mines wrote per entity spelling: self-links "
+        "(main.zig / src/main.zig) and duplicate spellings of one association; "
+        "dry run unless --yes",
+    )
+    p_hallways.add_argument("--yes", action="store_true", help="Apply --prune-spellings")
+    p_hallways.add_argument(
+        "--rebuild",
+        action="store_true",
+        help="Recompute hallways from drawer entities for --wing (or every wing); use after "
+        "`wings split`, which drops the split wing's records",
+    )
+    p_audit = sub.add_parser(
+        "audit",
+        help="Score how well organized the palace is (rooms, naming, tunnels, hallways, KG)",
+    )
+    p_audit.add_argument("--json", action="store_true", help="Emit the full report as JSON")
+    p_audit.add_argument(
+        "--quiet", action="store_true", help="Suppress the per-step progress lines on stderr"
+    )
+    p_audit.add_argument(
+        "--fail-under",
+        type=int,
+        default=None,
+        metavar="SCORE",
+        help="Exit 2 when the overall score is below SCORE (for CI or cron checks)",
+    )
     p_status = sub.add_parser("status", help="Show what's been filed")
     p_status.add_argument(
         "--backend",
@@ -2920,6 +2952,112 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         help="Output format (default table; --json is shorthand for --format json)",
     )
 
+    # ── upstream #2576 maintenance verbs, attached to the fork's own rooms / wings / kg / tunnels commands ──
+    # Upstream added these as new top-level commands; the fork already had a command of each name (canonical
+    # rooms, the wing listing, kg facts, the tunnel listing), and argparse refuses a second subparser of one
+    # name. Each fork dispatcher hands these actions to upstream's handler (cmd_<name>_maintenance).
+    p_rooms_propose = rooms_sub.add_parser(
+        "propose", help="Sample a wing and ask the LLM for a closed room set (saved for review)"
+    )
+    p_rooms_propose.add_argument("--wing", required=True, help="Wing to design rooms for")
+    p_rooms_propose.add_argument(
+        "--sample", type=int, default=60, help="Drawers to sample (default 60)"
+    )
+    p_rooms_propose.add_argument("--seed", type=int, default=0, help="Sampling seed (default 0)")
+    p_rooms_propose.add_argument(
+        "--max-rooms", type=int, default=12, help="Upper bound on proposed rooms (default 12)"
+    )
+    p_rooms_propose.add_argument(
+        "--llm-provider", default="ollama", choices=["ollama", "openai-compat", "anthropic"]
+    )
+    p_rooms_propose.add_argument("--llm-model", default="gemma4:e4b")
+    p_rooms_propose.add_argument("--llm-endpoint", default=None)
+    p_rooms_propose.add_argument("--llm-api-key", default=None)
+    p_rooms_propose.add_argument(
+        "--llm-timeout",
+        type=int,
+        default=600,
+        help="Seconds to wait for the LLM; a local model labelling 60 excerpts can take minutes "
+        "(default 600)",
+    )
+    p_rooms_propose.add_argument(
+        "--accept-external-llm",
+        action="store_true",
+        help="Allow the sampled excerpts to be sent to a non-local LLM endpoint",
+    )
+    p_rooms_apply = rooms_sub.add_parser(
+        "apply", help="Assign every drawer in the wing to its nearest room (dry run unless --yes)"
+    )
+    p_rooms_apply.add_argument("--wing", required=True, help="Wing whose room set to apply")
+    p_rooms_apply.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="Minimum cosine similarity to move a drawer; below it the drawer keeps its room "
+        "(default 0.30)",
+    )
+    p_rooms_apply.add_argument(
+        "--from",
+        dest="from_rooms",
+        default=None,
+        metavar="ROOMS",
+        help="Comma-separated rooms whose drawers may move (default: the miner's generic rooms "
+        "general,technical,architecture,planning,problems); 'all' reclassifies every drawer",
+    )
+    p_rooms_apply.add_argument(
+        "--show",
+        type=int,
+        default=0,
+        metavar="N",
+        help="On a dry run, print N example drawers per destination room",
+    )
+    p_rooms_apply.add_argument("--yes", action="store_true", help="Write the room changes")
+    p_rooms_propose.set_defaults(rooms_action="propose")
+    p_rooms_apply.set_defaults(rooms_action="apply")
+    wings_sub = p_wings.add_subparsers(dest="wings_action")
+    p_wings_split = wings_sub.add_parser(
+        "split",
+        help="Re-key a machine-level transcript wing into one wing per source project "
+        "(plan file first; --yes applies)",
+    )
+    p_wings_split.add_argument("--wing", required=True, help="Wing to split")
+    p_wings_split.add_argument(
+        "--yes", action="store_true", help="Apply the saved plan (<palace>/wings/split-<wing>.json)"
+    )
+    p_kg_norm = kg_sub.add_parser(
+        "normalize",
+        help="Map one-off predicates onto a closed vocabulary with the LLM (plan first; "
+        "--yes applies, keeping history)",
+    )
+    p_kg_norm.add_argument(
+        "--vocabulary",
+        default=None,
+        help="Comma-separated allowed predicates (default: works_on,owns,depends_on,uses,"
+        "decided,status,located_in,measured)",
+    )
+    p_kg_norm.add_argument("--yes", action="store_true", help="Apply <palace>/kg/normalize.json")
+    p_kg_norm.add_argument(
+        "--llm-provider", default="ollama", choices=["ollama", "openai-compat", "anthropic"]
+    )
+    p_kg_norm.add_argument("--llm-model", default="gemma4:e4b")
+    p_kg_norm.add_argument("--llm-endpoint", default=None)
+    p_kg_norm.add_argument("--llm-api-key", default=None)
+    p_kg_norm.add_argument("--llm-timeout", type=int, default=600)
+    p_kg_norm.add_argument("--accept-external-llm", action="store_true")
+    tunnels_sub = p_tunnels.add_subparsers(dest="tunnels_action")
+    p_tunnels_propose = tunnels_sub.add_parser(
+        "propose",
+        help="Rank shared entities across wings into a reviewable tunnel plan (--yes creates them)",
+    )
+    p_tunnels_propose.add_argument("--max", type=int, default=60, help="Cap on proposed tunnels")
+    p_tunnels_propose.add_argument("--yes", action="store_true", help="Create the saved plan")
+    p_tunnels_prune = tunnels_sub.add_parser(
+        "prune",
+        help="Remove tunnels on generic tokens, missing wings or duplicate spellings (dry run "
+        "unless --yes)",
+    )
+    p_tunnels_prune.add_argument("--yes", action="store_true", help="Apply the prune")
+
     # ── Propagate --json/--quiet to every subparser (issue #44) ─────
     # argparse parses pre-subcommand flags into ``args.json`` /
     # ``args.quiet`` only if they appear BEFORE the subcommand. To let
@@ -2927,31 +3065,37 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
     # same flags to each subparser so post-subcommand usage parses too.
     # Help is suppressed on the per-subparser copies to keep ``--help``
     # output uncluttered — the canonical docs live on the top-level parser.
-    for _sp in sub.choices.values():
+    for _sp_name, _sp in sub.choices.items():
         # Skip the two-level parents (hook, instructions, rooms) — their
         # actions are owned by nested sub-parsers and the leaf parsers
         # don't need JSON output (hook/instructions write their own JSON;
         # rooms is operator-only). Detect them by the presence of a
         # registered subparsers action.
         has_nested = any(isinstance(a, argparse._SubParsersAction) for a in _sp._actions)
-        if has_nested:
+        # wings and tunnels are listings first; their optional maintenance subcommands (upstream #2576) must not
+        # cost the listing its --json.
+        if has_nested and _sp_name not in ("wings", "tunnels"):
             continue
-        _sp.add_argument(
-            "--json",
-            "-j",
-            dest="json",
-            action="store_true",
-            default=False,
-            help=argparse.SUPPRESS,
-        )
-        _sp.add_argument(
-            "--quiet",
-            "-q",
-            dest="quiet",
-            action="store_true",
-            default=False,
-            help=argparse.SUPPRESS,
-        )
+        # A subparser that declares one of these itself keeps its own (upstream's ``audit --json``).
+        _own = {o for a in _sp._actions for o in a.option_strings}
+        if "--json" not in _own:
+            _sp.add_argument(
+                "--json",
+                "-j",
+                dest="json",
+                action="store_true",
+                default=False,
+                help=argparse.SUPPRESS,
+            )
+        if "--quiet" not in _own:
+            _sp.add_argument(
+                "--quiet",
+                "-q",
+                dest="quiet",
+                action="store_true",
+                default=False,
+                help=argparse.SUPPRESS,
+            )
 
     args = parser.parse_args()
     _apply_backend_arg(args)
@@ -3081,6 +3225,7 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         "rooms": cmd_rooms,
         "migrate-wings": cmd_migrate_wings,
         "hallways": cmd_hallways,
+        "audit": cmd_audit,
         "status": cmd_status,
         "doctor": cmd_doctor,
         "update": cmd_update,

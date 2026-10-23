@@ -164,8 +164,23 @@ def tool_kg_add(
             source_drawer_id=source_drawer_id,
         )
 
-    triple_id = _call_kg(_add)
-    return {"success": True, "triple_id": triple_id, "fact": f"{subject} → {predicate} → {object}"}
+    try:
+        triple_id = _call_kg(_add)
+    except Exception as e:
+        # Preserve the dispatcher-visible exception contract (tool_kg_add lets
+        # KG write errors bubble through _call_kg, which the MCP dispatcher
+        # turns into a -32000 response with context). Record the intent's
+        # outcome in the WAL before re-raising so the audit trail shows the
+        # error instead of a bare ``result: null``.
+        _wal_result("kg_add", {"success": False, "error": str(e)})
+        raise
+    outcome = {
+        "success": True,
+        "triple_id": triple_id,
+        "fact": f"{subject} → {predicate} → {object}",
+    }
+    _wal_result("kg_add", outcome)
+    return outcome
 
 
 def tool_kg_invalidate(subject: str, predicate: str, object: str, ended: str = None):

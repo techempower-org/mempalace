@@ -17,3 +17,6 @@ body: |
   — fixed in palace-daemon#250 (resolve ``--palace`` before the import) plus
   an explicit env var on the host.
 tests: 5 (test_mcp_server_argv_guard, incl. subprocess imports both ways)
+# superseded: 2026-10-22 upstream sync (techempower-org/mempalace#578) adopted upstream #2528/#2534; importing the
+# package parses no argv, main() applies flags via _apply_server_flags(). _is_server_entrypoint and
+# MEMPALACE_MCP_PARSE_ARGV were removed; tests/test_mcp_server_argv_guard.py keeps the #409 guarantee.

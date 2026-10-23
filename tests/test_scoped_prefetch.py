@@ -12,6 +12,7 @@ import pytest
 
 import mempalace.convo_miner as convo_miner
 from mempalace.palace import (
+    CONVO_CHUNKER_VERSION,
     NORMALIZE_VERSION,
     _iter_scoped_metadata,
     prefetch_content_hashes,
@@ -29,6 +30,7 @@ def _meta(src, wing="alpha", **extra):
         "chunk_index": 0,
         "extract_mode": "exchange",
         "normalize_version": NORMALIZE_VERSION,
+        "convo_chunker_version": CONVO_CHUNKER_VERSION,   # an exchange drawer without it is stale (upstream #2591)
         "source_mtime": MTIME,
     }
     meta.update(extra)

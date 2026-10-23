@@ -1238,6 +1238,9 @@ def cmd_kg(args):
     received rather than implying the requested window was searched. Seen
     live: ``kg timeline JP --limit 200`` returns ``count: 100``.
     """
+    if getattr(args, "kg_action", None) == "normalize":
+        cmd_kg_maintenance(args)
+        return
     fmt = _resolve_tool_format(args)
     want_json = fmt == "json"
     action = getattr(args, "kg_action", None)

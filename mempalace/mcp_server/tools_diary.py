@@ -530,6 +530,15 @@ def tool_reconnect():
     or replace ``knowledge_graph.sqlite3`` directly, which can leave the
     in-memory HNSW index stale or pin a closed-on-disk SQLite connection.
     """
+    # Serialize against HTTP embedding windows that temporarily drop the
+    # request lock. HTTP dispatch already holds this lock, taken before the
+    # request lease; the nested enter is a no-op on that thread.
+    with _http_embedding_lifecycle():
+        return _tool_reconnect_locked()
+
+
+def _tool_reconnect_locked():
+    """Reconnect body; caller holds the embedding lifecycle lock."""
     global \
         _client_cache, \
         _collection_cache, \
@@ -575,23 +584,9 @@ def tool_reconnect():
         except Exception as exc:
             logger.debug("Failed to close MCP-local Chroma client during reconnect", exc_info=True)
             close_errors.append(f"local Chroma client close failed: {exc}")
-    if _is_chroma_backend():
-        try:
-            from chromadb.api.client import SharedSystemClient
-
-            clear_system_cache = getattr(SharedSystemClient, "clear_system_cache", None)
-            if callable(clear_system_cache):
-                clear_system_cache()
-            else:
-                logger.debug(
-                    "SharedSystemClient.clear_system_cache is unavailable; skipping shared Chroma cache clear during reconnect"
-                )
-        except Exception as exc:
-            logger.debug(
-                "Failed to clear Chroma shared system cache during reconnect",
-                exc_info=True,
-            )
-            close_errors.append(f"shared Chroma cache clear failed: {exc}")
+    if _is_chroma_backend() and not _clear_chroma_system_cache():
+        logger.debug("Failed to clear Chroma shared system cache during reconnect")
+        close_errors.append("shared Chroma cache clear failed")
     _client_cache = None
     _collection_cache = None
     _collection_cache_backend = None

@@ -36,6 +36,7 @@ from .palace import (
     get_collection,
     mine_lock,
     mine_palace_lock,
+    mine_yield_point,
     purge_file_closets,
     upsert_closet_lines,
 )
@@ -47,6 +48,7 @@ from .palace import (
 from .collision_scan import assert_no_collisions
 from .hallways import compute_hallways_for_wing
 from .ids import ID_RECIPE, make_drawer_id_from_chunk
+from .source_identity import source_directory_identity
 
 logger = logging.getLogger("mempalace_mcp")
 
@@ -1785,6 +1787,7 @@ def _build_drawer_metadata(
     novelty_tag: Optional[str] = None,
     chunk_total: Optional[int] = None,
     content_date_source: Optional[str] = None,
+    source_dir_ino: Optional[str] = None,
 ) -> dict:
     """Build the metadata dict for one drawer without upserting.
 
@@ -1804,6 +1807,14 @@ def _build_drawer_metadata(
     ``content_date_source`` records which extraction tier supplied the
     date: filename, frontmatter, body, or mtime. A supplied date with no
     recorded source is marked ``unknown``, never inferred retroactively.
+
+    ``source_dir_ino`` — the inode of the directory this file was read
+    from, as ``source_identity`` takes it. ``sync`` compares it against the
+    inode answering at the moment the verdict is formed, so a volume that is
+    away, a volume mounted in its place, and a bind mount over it all fail to
+    corroborate a removal. ``None`` when the directory could not be stat'ed,
+    and the key is then absent, which leaves that drawer exactly where it
+    was.
 
     ``chunk_total`` — the total number of chunks this mining pass expects
     to write for ``source_file`` (see #21). Every chunk of the same pass
@@ -1834,6 +1845,8 @@ def _build_drawer_metadata(
         metadata["content_date_source"] = content_date_source or "unknown"
     if chunk_total is not None:
         metadata["chunk_total"] = chunk_total
+    if source_dir_ino:
+        metadata["source_dir_ino"] = source_dir_ino
     metadata["hall"] = detect_hall(content)
     entities = _extract_entities_for_metadata(content)
     if entities:
@@ -1863,6 +1876,9 @@ def add_drawer(
     except OSError:
         source_mtime = None
     novelty_tag = compute_novelty_tag(collection, wing, room, content)
+    # An external caller's drawer names a source file the same way a mined one
+    # does, and ``sync`` decides both by the same rule (#2320).
+    source_dir_ino = source_directory_identity(source_file)
     metadata = _build_drawer_metadata(
         wing,
         room,
@@ -1872,6 +1888,7 @@ def add_drawer(
         content,
         source_mtime,
         novelty_tag=novelty_tag,
+        source_dir_ino=source_dir_ino,
     )
     collection.upsert(
         documents=[content],
@@ -2074,6 +2091,13 @@ def process_file(
         # and silently, permanently skips the appended tail.
         source_mtime = read_mtime
 
+        # Which directory this file is being read from, taken as its inode
+        # so ``sync`` can ask the same question later. Nothing is written to
+        # the source tree for this. A directory that cannot be stat'ed answers
+        # None and the drawers carry no identity, which is what every drawer
+        # filed before this looked like.
+        source_dir_ino = source_directory_identity(filepath)
+
         # Tier 6a content-date: extract once per file (not per chunk) and
         # share across all chunks. Reads filename / frontmatter / content /
         # mtime hierarchy. Returns None when nothing usable found → caller
@@ -2114,6 +2138,7 @@ def process_file(
                             novelty_tag=file_novelty_tag,
                             chunk_total=len(chunks),
                             content_date_source=file_content_date_source,
+                            source_dir_ino=source_dir_ino,
                         )
                     )
                 assert_no_collisions(list(zip(batch_ids, batch_metas)), collection)
@@ -3107,6 +3132,7 @@ def _mine_impl(  # noqa: C901 — injected-handle branches push complexity one t
     try:
         if not use_workers:
             for i, filepath in enumerate(files, 1):
+                mine_yield_point()
                 try:
                     drawers, room, skip_reason = process_file(
                         filepath=filepath,

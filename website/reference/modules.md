@@ -9,7 +9,7 @@ mempalace/
 ├── README.md                  ← project documentation
 ├── mempalace/                 ← core package
 │   ├── cli/                   ← CLI package (commands, parser)
-│   ├── mcp_server/            ← MCP server package (50 tools; tools, protocol, HTTP)
+│   ├── mcp_server/            ← MCP server package (52 tools; tools, protocol, HTTP)
 │   ├── knowledge_graph.py     ← temporal entity graph
 │   ├── palace_graph.py        ← room navigation graph
 │   ├── dialect.py             ← AAAK compression
@@ -57,7 +57,7 @@ Argparse-based CLI with subcommands: `init`, `mine`, `split`, `search`, `compres
 
 ### `mcp_server/` — MCP Server
 
-JSON-RPC over stdin/stdout. Implements the MCP protocol with 50 tools covering palace read/write, drawer CRUD, knowledge graph, navigation, tunnels, agent diary, and system operations. Includes the Memory Protocol and AAAK Spec in status responses.
+JSON-RPC over stdin/stdout. Implements the MCP protocol with 52 tools covering palace read/write, drawer CRUD, knowledge graph, navigation, tunnels, agent diary, and system operations. Includes the Memory Protocol and AAAK Spec in status responses.
 
 ### `searcher/` — Semantic Search
 
