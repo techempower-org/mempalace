@@ -758,6 +758,19 @@ def _selected_backend_name() -> str:
     )
 
 
+def _backend_label() -> str:
+    """The backend name for a status payload. Resolution can refuse (a palace whose files belong to another backend
+    raises BackendMismatchError); a status report then names the configured backend instead of failing."""
+    try:
+        return _selected_backend_name()
+    except Exception:
+        return (
+            os.environ.get("MEMPALACE_BACKEND_EXPLICIT")
+            or os.environ.get("MEMPALACE_BACKEND")
+            or "unknown"
+        )
+
+
 def _is_chroma_backend() -> bool:
     try:
         return _selected_backend_name() == "chroma"

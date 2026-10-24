@@ -107,7 +107,11 @@ Return True when a path or one of its ancestors/descendants was explicitly inclu
 def load_config(project_dir: str) -> dict
 ```
 
-Load mempalace.yaml from project directory (falls back to mempal.yaml).
+Load the project config from ``project_dir``.
+
+Resolution order is :data:`PROJECT_CONFIG_FILENAMES`: ``mempalace.yaml``,
+``mempalace.yml``, then the legacy ``mempal.yaml`` and ``mempal.yml``.
+Without any of them the auto-detected defaults are returned.
 
 ### `detect_room`
 
@@ -264,7 +268,7 @@ sufficient — no per-drawer fan-out.
 ### `process_file`
 
 ```python
-def process_file(filepath: Path, project_path: Path, collection, wing: str, rooms: list, agent: str, dry_run: bool, closets_col = None, chunk_size: int = None, chunk_overlap: int = None, min_chunk_size: int = None, max_chunks_per_file: Optional[int] = None, room_resolver: Optional[callable] = None) -> tuple
+def process_file(filepath: Path, project_path: Path, collection, wing: str, rooms: list, agent: str, dry_run: bool, closets_col = None, chunk_size: int = None, chunk_overlap: int = None, min_chunk_size: int = None, max_chunks_per_file: Optional[int] = None, room_resolver: Optional[callable] = None, mined_mtimes: Optional[dict] = None) -> tuple
 ```
 
 Read, chunk, route, and file one file.
@@ -274,7 +278,13 @@ Returns ``(drawer_count, room_name, skip_reason)``. ``skip_reason`` is
 filed (pre- or post-lock re-check), unreadable (``OSError``), or
 too-short content (below ``min_chunk_size``). It is ``"chunk_cap"``
 when the per-file chunk cap aborted the file. Callers use the tag to
-surface a separate counter in the mine summary (see #1455).
+surface a separate counter in the mine summary (see #1455). It is
+``"purge_failed"`` when the stale-drawer purge raised: the file was not
+mined, and the mine counts it as an error rather than a skip.
+
+``mined_mtimes`` is :func:`prefetch_complete_mtimes`'s map for this
+mine. A file it proves already filed is skipped without querying the
+palace; any other file goes through ``file_already_mined()``.
 
 ### `file_passes_scan_gates`
 

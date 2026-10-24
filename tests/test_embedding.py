@@ -99,7 +99,10 @@ def test_embeddinggemma_near_miss_raises_instead_of_falling_back(monkeypatch, ca
     message = str(excinfo.value)
     assert repr(model.strip().lower()) in message
     assert "did you mean 'embeddinggemma' or 'embeddinggemma2'?" in message
-    assert "Valid values: adaptmem_ft, embeddinggemma, embeddinggemma2, minilm, openai-compat" in message
+    assert (
+        "Valid values: adaptmem_ft, embeddinggemma, embeddinggemma2, minilm, openai-compat"
+        in message
+    )
     assert isinstance(excinfo.value, ValueError)
     assert not _FakeMiniLM.built
     assert not _fallback_warnings(caplog)
@@ -121,7 +124,10 @@ def test_openai_compat_near_miss_raises_instead_of_falling_back(monkeypatch, cap
     assert repr(model.strip().lower()) in message
     assert "did you mean 'openai-compat'?" in message
     assert "embeddinggemma' or" not in message
-    assert "Valid values: adaptmem_ft, embeddinggemma, embeddinggemma2, minilm, openai-compat" in message
+    assert (
+        "Valid values: adaptmem_ft, embeddinggemma, embeddinggemma2, minilm, openai-compat"
+        in message
+    )
     assert "Not falling back to 'minilm'" in message
     assert not _FakeMiniLM.built
     assert not _fallback_warnings(caplog)

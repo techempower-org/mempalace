@@ -20,6 +20,12 @@ wrapper computes vectors locally before delegating to the backend.
 def __init__(self, inner: BaseCollection)
 ```
 
+#### `upsert_merges_metadata`
+
+```python
+def upsert_merges_metadata(self)
+```
+
 #### `distance_metric`
 
 ```python

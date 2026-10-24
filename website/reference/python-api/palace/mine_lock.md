@@ -51,3 +51,28 @@ lifecycle/holder tracking; this targets only the per-source-file locks
 
 Returns ``(reaped, skipped)`` counts, for logging/testing — callers
 don't need to act on them.
+
+### `mine_yield_hook`
+
+```python
+def mine_yield_hook(fn)
+```
+
+Call ``fn`` at every :func:`mine_yield_point` reached in this thread.
+
+### `mine_yield_point`
+
+```python
+def mine_yield_point() -> bool
+```
+
+Mark a file boundary in a mine.
+
+No file is half-written and no per-file lock is held here, so a host that
+serializes the mine may briefly hand its lock to waiting requests. A no-op
+unless :func:`mine_yield_hook` is active in this thread.
+
+Returns True when the hook let other requests run. A request in that
+window may have closed the palace backend (the hub's search retry after a
+transient index error resets the Chroma caches), so the miner must reopen
+the collections it holds before writing again.

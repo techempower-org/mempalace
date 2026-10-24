@@ -203,11 +203,17 @@ def test_the_json_store_uses_the_module_that_created_it(tmp_path, monkeypatch):
     import mempalace.hallways as orphan
 
     monkeypatch.delitem(sys.modules, "mempalace.hallways")
-    monkeypatch.setattr(mempalace, "hallways", orphan)          # restored after the fresh import replaces it
-    fresh = importlib.import_module("mempalace.hallways")   # the package attribute now points at the fresh copy
+    monkeypatch.setattr(
+        mempalace, "hallways", orphan
+    )  # restored after the fresh import replaces it
+    fresh = importlib.import_module(
+        "mempalace.hallways"
+    )  # the package attribute now points at the fresh copy
     assert fresh is not orphan and mempalace.hallways is fresh
 
-    monkeypatch.setattr(orphan, "_get_hallway_file", lambda *a, **k: str(tmp_path / "hallways.json"))
+    monkeypatch.setattr(
+        orphan, "_get_hallway_file", lambda *a, **k: str(tmp_path / "hallways.json")
+    )
     monkeypatch.setattr(fresh, "_get_hallway_file", lambda *a, **k: str(tmp_path / "wrong.json"))
     orphan._save_hallways([{"id": "x", "wing": "w", "entity_a": "a", "entity_b": "b"}])
     assert [h["id"] for h in orphan._hallway_store(None).iter()] == ["x"]

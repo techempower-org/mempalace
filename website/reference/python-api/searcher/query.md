@@ -7,7 +7,7 @@ Source: [`mempalace/searcher/query.py`](https://github.com/techempower-org/mempa
 ### `search_memories`
 
 ```python
-def search_memories(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, source_file: str = None, since: str = None, before: str = None, n_results: int = 5, max_distance: float = 0.0, vector_disabled: bool = False, candidate_strategy: str = 'vector', fusion_mode: str = 'convex', collection_name: str = None, lang: Optional[str] = None) -> dict
+def search_memories(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, source_file: str = None, since: str = None, before: str = None, n_results: int = 5, max_distance: float = 0.0, vector_disabled: bool = False, candidate_strategy: str = 'vector', fusion_mode: str = 'convex', collection_name: str = None, lang: Optional[str] = None, _pool_scale: int = 1, include_media: bool = False, query_task: str = 'search') -> dict
 ```
 
 Programmatic search — returns a dict instead of printing.

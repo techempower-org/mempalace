@@ -74,6 +74,23 @@ Raised when the embedding dimension on write does not match the collection.
 
 Raised when the stored embedder model name differs from the current one.
 
+### `class EmbeddingFunctionMismatchError(BackendError, ValueError)`
+
+Raised when a backend's persisted embedding function differs from the current one.
+
+Chroma stores the embedding function's name on each collection and
+refuses to open it with another. A ``ValueError`` subclass, as the bare
+error used to be, so existing ``except ValueError`` callers still see it.
+
+### `class EmbedderIdentityRecordError(BackendError)`
+
+The embedder identity could not be recorded for a collection.
+
+Raised on write paths only (a brand-new collection's first write open,
+``palace set-embedder``): writing on without a recorded identity would
+leave the palace unprotected against a later same-dimension model swap.
+Reads never record an identity, so they never raise it.
+
 ### `class EmbedderIdentityUnknownWarning(UserWarning)`
 
 Emitted on first open of a collection with no recorded embedder identity.
@@ -554,6 +571,14 @@ def detect(cls, path: str) -> bool
 ```
 
 ## Functions
+
+### `model_mismatch_error_kind`
+
+```python
+def model_mismatch_error_kind(exc: BaseException) -> Optional[str]
+```
+
+The result ``error`` value for a model mismatch error, else None.
 
 ### `check_embedder_identity`
 

@@ -32,7 +32,9 @@ def _upstream_shape(result):
     if not isinstance(result, dict) or "entries" not in result:
         return result
     out = {k: v for k, v in result.items() if k not in _FORK_ENVELOPE_KEYS}
-    out["entries"] = [{k: v for k, v in e.items() if k not in _FORK_ENTRY_KEYS} for e in result["entries"]]
+    out["entries"] = [
+        {k: v for k, v in e.items() if k not in _FORK_ENTRY_KEYS} for e in result["entries"]
+    ]
     return out
 
 

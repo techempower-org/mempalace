@@ -1200,9 +1200,9 @@ class PostgresCollection(BaseCollection):
         # The exchange chunker's version (upstream #2591): a row written by an older chunker is stale in the exchange
         # scope, so its file re-mines once. Nullable and added in place, so rows from before it read as version 1.
         self._cursor().execute(
-            self._sql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS convo_chunker_version integer").format(
-                self._manifest_id
-            )
+            self._sql.SQL(
+                "ALTER TABLE {} ADD COLUMN IF NOT EXISTS convo_chunker_version integer"
+            ).format(self._manifest_id)
         )
         self._manifest_ready = True
 

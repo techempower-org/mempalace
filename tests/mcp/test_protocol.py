@@ -212,7 +212,6 @@ class TestColdStartDiagnostics:
         check (#1893) accepts it; warmup must still gate on the pre-check
         before any chromadb client open.
         """
-        from _chroma_palace_helper import make_minimal_chroma_sqlite
 
         palace = tmp_path / "palace"
         palace.mkdir()

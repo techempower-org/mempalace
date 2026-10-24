@@ -367,9 +367,12 @@ def test_cli_scoped_search_uses_existing_filter_fallback(capsys, tmp_path):
         # The fork's CLI search() delegates retrieval to search_memories(), which opens its
         # collection via _open_search_collection after a read-only get_collection probe; patch
         # those seams (upstream #2380 patched the old inline path's _open_collection_or_explain).
-        with patch("mempalace.searcher.get_collection", return_value=drawers_col), patch(
-            "mempalace.searcher._open_search_collection",
-            return_value=(drawers_col, None),
+        with (
+            patch("mempalace.searcher.get_collection", return_value=drawers_col),
+            patch(
+                "mempalace.searcher._open_search_collection",
+                return_value=(drawers_col, None),
+            ),
         ):
             search(
                 "needle",

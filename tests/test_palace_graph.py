@@ -7,7 +7,6 @@ import json
 import pytest
 import os
 
-import pytest
 from unittest.mock import MagicMock, patch
 
 from mempalace.palace_graph import invalidate_graph_cache

@@ -2,6 +2,16 @@
 
 Source: [`mempalace/palace/mined.py`](https://github.com/techempower-org/mempalace/blob/main/mempalace/palace/mined.py)
 
+## Classes
+
+### `class MinedSetUnavailable(RuntimeError)`
+
+The palace could not be read to learn which sources are already filed.
+
+Raised instead of returning a partial registry: an incomplete one reads as
+"not mined yet" and "no duplicate", which cannot be told apart from a
+complete answer, so a mine would re-file sources or write duplicates blind.
+
 ## Functions
 
 ### `file_already_mined`
@@ -15,7 +25,9 @@ Check if a file has already been filed in the palace.
 Returns False (so the file gets re-mined) when:
   - no drawers exist for this source_file
   - the stored `normalize_version` is missing or older than the current
-    schema (triggers silent rebuild after a normalization upgrade)
+    schema (triggers silent rebuild after a normalization upgrade), or,
+    for extract_mode="exchange", the stored `convo_chunker_version` is
+    missing or older than CONVO_CHUNKER_VERSION
   - `check_mtime=True` and the file's mtime differs from the stored one
 
 When check_mtime=True (used by the project miner, and by the convo
@@ -26,7 +38,9 @@ rewrite one in place. The convo miner's bulk skip-check uses
 prefetch_mined_set()'s stored mtimes instead of calling this function
 per file (same mtime-aware decision, without the O(n) per-file query
 cost); this function's check_mtime=True path remains its per-file,
-lock-held race-condition recheck.
+lock-held race-condition recheck. The project miner skips a file
+without calling this only when prefetch_complete_mtimes() proves this
+would return True.
 
 When extract_mode is set (used by convo miner), idempotency is scoped to
 that extraction mode so exchange-mode and general-mode drawers can coexist
@@ -86,6 +100,42 @@ pays for every drawer in every wing whatever the target, so a one-file
 drain mine spent 5-10 minutes in it (#548). The
 result is exactly the full scan's, restricted to ``source_files``.
 
+When `source_files` is given and holds at most `_PREFETCH_SCOPE_THRESHOLD`
+paths, the caller already knows the only source_file values that could
+possibly match, so a paged `where={"source_file": {"$in": ...}}` get()
+replaces the full-collection scan. On a one-file mine of a 660k-drawer
+palace that mtime scan was about 42% of the mine; the content-hash scan
+was the rest, and it stays unscoped because a stored hash can be several
+comma-joined values. Above the threshold, or when source_files is
+omitted, the behaviour is unchanged: a bulk sweep still benefits more
+from one full scan than from many filtered queries.
+
+### `prefetch_complete_mtimes`
+
+```python
+def prefetch_complete_mtimes(collection, source_files) -> Optional[dict[str, tuple]]
+```
+
+``source_file -> stored mtimes of its complete drawer groups``, in one
+sqlite pass, for the project miner's skip check (#2684).
+
+``file_already_mined(collection, src, check_mtime=True)`` costs one
+``get(where=&#123;"source_file": src})`` per file, ~0.1 s on a 1M-drawer
+palace, which made a no-op mine of a 1.4k-file project take minutes.
+A source is listed here only when its stored drawers prove that call
+would return True for a matching on-disk mtime: some ``source_mtime``
+group at the current ``normalize_version`` either has a drawer with no
+``chunk_total`` or holds at least the largest ``chunk_total`` any of
+its drawers names. A source with a value that check could not compare
+(a non-numeric ``normalize_version``, ``source_mtime`` or
+``chunk_total``) is left out, since there it returns False. A source
+missing from the result is not "not mined": the caller asks
+``file_already_mined()`` as before.
+
+Only ``source_files`` are tracked. Returns ``None`` on backends without
+Chroma's sqlite stream, or when the stream fails, so the caller keeps
+the per-file check for every file.
+
 ### `prefetch_content_hashes`
 
 ```python
@@ -121,3 +171,18 @@ the point is not to track every alias.
 instead of the whole-palace scan. Every key is ``(wing, hash)``,
 so a miner filing into one wing can never match another wing's drawers.
 The result is exactly the full scan's keys for that wing.
+
+Deliberately NOT scoped by candidate source_files the way
+prefetch_mined_set is: a stored `content_hash` can hold several
+comma-joined hashes (one privacy-export bundle drawer covers several
+conversations), so a `where`-filtered query can only match a document
+whose entire stored value equals one candidate hash and would silently
+miss any bundle row. An incomplete result here is worse than none,
+because a caller reading the returned dict has no way to tell "no
+duplicate" from "the query couldn't see this row". Narrowing this scan
+correctly needs either a schema change (one hash per metadata field
+instead of a joined list) or a second index; out of scope for the fix
+that scoped prefetch_mined_set. See test_mine_convos_skips_same_content_
+under_new_filename and test_mine_convos_skips_same_conversation_within_
+re_exported_bundle, which a source_files-scoped or skipped version of
+this function broke.

@@ -573,8 +573,9 @@ def test_stop_hook_tracks_save_point(tmp_path):
     save_result = {"drawers_filed": 1, "messages_folded": 15, "themes": ["hooks"]}
     # The fork's Stop hook also starts a DETACHED transcript mine (_ingest_transcript). Unmocked, it outlived the test
     # and mined into the session's default palace, which later test files found holding a chroma DB.
-    with patch("mempalace.hooks_cli._save_diary_direct", return_value=save_result), patch(
-        "mempalace.hooks_cli._ingest_transcript"
+    with (
+        patch("mempalace.hooks_cli._save_diary_direct", return_value=save_result),
+        patch("mempalace.hooks_cli._ingest_transcript"),
     ):
         result = _capture_hook_output(hook_stop, data, state_dir=tmp_path)
     assert "systemMessage" in result
@@ -641,9 +642,13 @@ def test_stop_hook_files_checkpoint_under_harness_agent(tmp_path, harness, expec
     )
     # The fork's Stop hook also starts a DETACHED transcript mine (_ingest_transcript). Unmocked, it outlived the test
     # and mined into the session's default palace, which later test files found holding a chroma DB.
-    with patch(
-        "mempalace.hooks_cli._save_diary_direct", return_value={"drawers_filed": 1, "messages_folded": 5, "themes": []}
-    ) as mock_save, patch("mempalace.hooks_cli._ingest_transcript"):
+    with (
+        patch(
+            "mempalace.hooks_cli._save_diary_direct",
+            return_value={"drawers_filed": 1, "messages_folded": 5, "themes": []},
+        ) as mock_save,
+        patch("mempalace.hooks_cli._ingest_transcript"),
+    ):
         _capture_hook_output(
             hook_stop,
             {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)},
@@ -1895,7 +1900,7 @@ def test_ingest_transcript_skips_when_target_running(tmp_path):
                     "--mode",
                     "convos",
                     "--wing",
-                    "sessions",   # upstream _ingest_wing: the project wing without its wing_ prefix
+                    "sessions",  # upstream _ingest_wing: the project wing without its wing_ prefix
                 ]
                 pid_file = _pid_file_for_cmd(expected_cmd)
                 pid_file.parent.mkdir(parents=True, exist_ok=True)
@@ -2174,7 +2179,8 @@ def test_stop_hook_oserror_on_last_save_read(tmp_path):
     with (
         patch("mempalace.hooks_cli._ingest_transcript"),
         patch(
-            "mempalace.hooks_cli._save_diary_direct", return_value={"drawers_filed": 1, "messages_folded": 3, "themes": ["hooks"]}
+            "mempalace.hooks_cli._save_diary_direct",
+            return_value={"drawers_filed": 1, "messages_folded": 3, "themes": ["hooks"]},
         ),
     ):
         result = _capture_hook_output(
@@ -2184,7 +2190,10 @@ def test_stop_hook_oserror_on_last_save_read(tmp_path):
         )
     # Diary checkpoints restored (2026-06-11): woven-count systemMessage.
     assert "systemMessage" in result
-    assert "checkpoint saved" in result["systemMessage"] and "messages woven into the palace" in result["systemMessage"]
+    assert (
+        "checkpoint saved" in result["systemMessage"]
+        and "messages woven into the palace" in result["systemMessage"]
+    )
 
 
 def test_stop_hook_oserror_on_write(tmp_path):
@@ -2291,7 +2300,7 @@ def test_precompact_mines_only_active_transcript(tmp_path, monkeypatch):
     # not re-mined on every compaction.
     assert str(transcript.resolve()) in cmd
     assert cmd[cmd.index("--mode") + 1] == "convos"
-    assert cmd[cmd.index("--wing") + 1] == "sessions"   # upstream _ingest_wing (no wing_ prefix)
+    assert cmd[cmd.index("--wing") + 1] == "sessions"  # upstream _ingest_wing (no wing_ prefix)
 
 
 # --- run_hook ---
@@ -2388,7 +2397,10 @@ def test_stop_hook_enabled_by_default(tmp_path):
                 state_dir=tmp_path,
             )
     assert "systemMessage" in result
-    assert "checkpoint saved" in result["systemMessage"] and "messages woven into the palace" in result["systemMessage"]
+    assert (
+        "checkpoint saved" in result["systemMessage"]
+        and "messages woven into the palace" in result["systemMessage"]
+    )
 
 
 def test_precompact_hook_disabled_by_config(tmp_path):
@@ -2510,8 +2522,12 @@ def test_stop_hook_rejects_injected_stop_hook_active(tmp_path):
     )
     # _save_diary_direct is mocked too: the real one writes a diary entry through mcp_server's module config, i.e.
     # the session's DEFAULT palace, and later test files then found a chroma DB there.
-    with patch("mempalace.hooks_cli._ingest_transcript") as mock_ingest, patch(
-        "mempalace.hooks_cli._save_diary_direct", return_value={"drawers_filed": 1, "messages_folded": 5, "themes": []}
+    with (
+        patch("mempalace.hooks_cli._ingest_transcript") as mock_ingest,
+        patch(
+            "mempalace.hooks_cli._save_diary_direct",
+            return_value={"drawers_filed": 1, "messages_folded": 5, "themes": []},
+        ),
     ):
         _capture_hook_output(
             hook_stop,

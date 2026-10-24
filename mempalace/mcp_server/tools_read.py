@@ -418,7 +418,7 @@ def tool_status():
             "rooms": rooms,
             "protocol": PALACE_PROTOCOL,
             "aaak_dialect": AAAK_SPEC,
-            "backend": _selected_backend_name(),
+            "backend": _backend_label(),
             "embedding_device": _describe_device_safe(),
         }
 
@@ -437,7 +437,7 @@ def tool_status():
         "rooms": rooms,
         "protocol": PALACE_PROTOCOL,
         "aaak_dialect": AAAK_SPEC,
-        "backend": _selected_backend_name(),
+        "backend": _backend_label(),
         "embedding_device": _describe_device_safe(),
     }
     try:

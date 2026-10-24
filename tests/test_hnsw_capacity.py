@@ -1149,8 +1149,6 @@ def test_bm25_fallback_stamps_source_provenance(palace_with_drawers):
     assert all(r["source_kind"] == "file" for r in out["results"])
 
 
-
-
 # ── Stranded indexes: no pickle, and it is not flush-lag ──────────────
 #
 # Two shapes where index_metadata.pickle is absent for a reason that will

@@ -573,7 +573,9 @@ def test_age_timeline_paginates_with_stable_order_and_total():
         assert [len(p) for p in pages] == [3, 3, 2]
         seen = [f["object"] for p in pages for f in p]
         assert len(seen) == len(set(seen)) == 8, "pages must not overlap or skip"
-        assert pages == [kg.timeline("JP", limit=3, offset=o) for o in (0, 3, 6)], "page order must be stable"
+        assert pages == [kg.timeline("JP", limit=3, offset=o) for o in (0, 3, 6)], (
+            "page order must be stable"
+        )
 
         assert kg.timeline_total("JP") == 8
         assert kg.timeline_total("JP", as_of="2026-03-01") == 7

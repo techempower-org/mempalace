@@ -3860,7 +3860,9 @@ class ChromaCollection(BaseCollection):
             rows = self.iter_metadata()
             if rows is not None:
                 try:
-                    return [m if m is not None else {} for m in rows]   # fork: None → {} at the boundary, like get()
+                    return [
+                        m if m is not None else {} for m in rows
+                    ]  # fork: None → {} at the boundary, like get()
                 except sqlite3.Error:
                     logger.debug("sqlite metadata scan failed; paging instead", exc_info=True)
         return super().get_all_metadata(where=where)
@@ -3914,7 +3916,9 @@ class ChromaCollection(BaseCollection):
         return GetResult(
             ids=[record_id for record_id, _, _ in records],
             documents=[document for _, document, _ in records] if spec.documents else [],
-            metadatas=[metadata if metadata is not None else {} for _, _, metadata in records]   # fork: None → {}
+            metadatas=[
+                metadata if metadata is not None else {} for _, _, metadata in records
+            ]  # fork: None → {}
             if spec.metadatas
             else [],
             embeddings=None,

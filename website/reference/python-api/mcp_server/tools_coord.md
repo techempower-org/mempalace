@@ -23,21 +23,30 @@ Create one canonical task request for local or remote MCP clients.
 ### `tool_event_list`
 
 ```python
-def tool_event_list(stream: str = None, room: str = None, topic: str = None, type: str = None, to_agent: str = None, from_agent: str = None, correlation_id: str = None, status: str = None, since_event_id: str = None, before_event_id: str = None, since_created_at: str = None, limit: int = 50, order: str = 'asc', preview: bool = False)
+def tool_event_list(stream: str = None, room: str = None, topic: str = None, type: str = None, to_agent: str = None, from_agent: str = None, correlation_id: str = None, status: str = None, since_event_id: str = None, before_event_id: str = None, since_created_at: str = None, limit: int = 50, order: str = None, preview: bool = False, writer: str = None)
 ```
 
 List coordination events with structured filters.
 
-``order='desc'`` returns newest events first (e.g. for sweeping recent inbox
-or checking recent project history in a single call). Default is ``'asc'``.
+Context-aware ordering default:
+When ``order`` is omitted or None:
+- If ``since_event_id`` is supplied (resuming from a cursor), defaults to ``'asc'``
+  so events replay in forward chronological append order without skipping.
+- Otherwise (inbox sweeps, history checks), defaults to ``'desc'`` so the
+  newest events are returned first rather than ancient events from far back.
+
+Explicit ``order='asc'`` or ``order='desc'`` (case-insensitive) always overrides.
 ``preview=True`` truncates each event's verbatim body to a short excerpt
 (marking ``body_truncated`` + ``body_length``) so scanning many events
 stays cheap.
 
+``writer`` filters by the agent that wrote the event. ``from_agent`` is the
+caller's identity and does not filter (see ``_FROM_AGENT_NOTE``).
+
 ### `tool_event_wait`
 
 ```python
-def tool_event_wait(stream: str = None, room: str = None, topic: str = None, type: str = None, to_agent: str = None, from_agent: str = None, correlation_id: str = None, status: str = None, since_event_id: str = None, since_created_at: str = None, timeout_ms: int = 60000, limit: int = 50)
+def tool_event_wait(stream: str = None, room: str = None, topic: str = None, type: str = None, to_agent: str = None, from_agent: str = None, correlation_id: str = None, status: str = None, since_event_id: str = None, since_created_at: str = None, timeout_ms: int = 60000, limit: int = 50, writer: str = None)
 ```
 
 Block until a matching event exists or the timeout expires.
@@ -45,6 +54,8 @@ Block until a matching event exists or the timeout expires.
 ``limit`` mirrors ``event_list`` so the two tools accept the same
 filter set — agents kept tripping over wait rejecting a parameter
 that list accepts (reported by windows-codex during dogfood).
+``writer`` filters by the agent that wrote the event; ``from_agent`` is the
+caller's identity and does not filter (see ``_FROM_AGENT_NOTE``).
 
 ### `tool_event_ack`
 

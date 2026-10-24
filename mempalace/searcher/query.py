@@ -731,7 +731,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     # Fork-only response fields upstream's envelope doesn't carry.
     result["available_in_scope"] = available_in_scope
     result["warnings"] = warnings
-    if copies_left_short:                                        # could not widen any further
+    if copies_left_short:  # could not widen any further
         result["distinct_results_truncated"] = True
     return result
 

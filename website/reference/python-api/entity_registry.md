@@ -8,7 +8,7 @@ Knows the difference between Riley (a person) and ever (an adverb).
 Built from three sources, in priority order:
   1. Onboarding — what the user explicitly told us
   2. Learned — what we inferred from session history with high confidence
-  3. Researched — what we looked up via Wikipedia for unknown words
+  3. Researched — legacy ``wiki_cache`` entries from older versions, read only
 
 Usage:
     from mempalace.entity_registry import EntityRegistry
@@ -114,32 +114,6 @@ Returns:
      "name": canonical name if found,
      "needs_disambiguation": bool}
 
-#### `research`
-
-```python
-def research(self, word: str, auto_confirm: bool = False, allow_network: bool = False) -> dict
-```
-
-Research an unknown word.
-
-By default this is **local-only**: it checks the wiki cache and
-returns ``"unknown"`` for uncached words.  Pass
-``allow_network=True`` to explicitly opt in to an outbound
-Wikipedia lookup.  This design honours the project's
-*local-first, zero API* and *privacy by architecture* principles
-— no data leaves the machine unless the caller requests it.
-
-Caches result.  If *auto_confirm* is ``False``, marks the entry
-as unconfirmed (needs user review).
-
-#### `confirm_research`
-
-```python
-def confirm_research(self, word: str, entity_type: str, relationship: str = '', context: str = 'personal')
-```
-
-Mark a researched word as confirmed and add to people registry.
-
 #### `learn_from_text`
 
 ```python
@@ -169,7 +143,8 @@ def extract_unknown_candidates(self, query: str) -> list
 ```
 
 Find capitalized words in query that aren't in registry or common words.
-These are candidates for Wikipedia research.
+These are candidates for the caller to resolve — the registry itself
+never looks anything up off the machine.
 
 #### `summary`
 

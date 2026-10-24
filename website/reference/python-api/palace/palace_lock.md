@@ -8,6 +8,20 @@ Source: [`mempalace/palace/palace_lock.py`](https://github.com/techempower-org/m
 
 Raised when another `mempalace mine` already holds the per-palace lock.
 
+### `class MineFileErrors(RuntimeError)`
+
+Raised at the end of a mine when one or more files could not be filed.
+
+The mine finished its loop and printed its summary. Each failed file kept
+whatever drawers it had and is retried by the next mine, but the run is
+not a success, and no caller may report it as one.
+
+#### `__init__`
+
+```python
+def __init__(self, failed_files: list[str], total_files: int) -> None
+```
+
 ### `class MineValidationError(RuntimeError)`
 
 Raised at end of mine when PRAGMA quick_check on the palace reports errors.
@@ -19,6 +33,33 @@ def __init__(self, palace_path: str, errors: list[str]) -> None
 ```
 
 ## Functions
+
+### `print_files_failed`
+
+```python
+def print_files_failed(failed_files: list) -> None
+```
+
+Add the failed-file count to a mine summary; nothing when none failed.
+
+### `raise_if_files_failed`
+
+```python
+def raise_if_files_failed(failed_files: list, total_files: int) -> None
+```
+
+End a mine that could not file every file with :class:`MineFileErrors`.
+
+### `palace_write_serial`
+
+```python
+def palace_write_serial() -> int
+```
+
+A counter that moves whenever this process writes to a Chroma palace.
+
+A miner reads it before its first write and hands it to
+:func:`_validate_palace_fts5_after_mine` as ``writes_since``.
 
 ### `mine_palace_lock`
 

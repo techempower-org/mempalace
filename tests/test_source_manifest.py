@@ -95,15 +95,31 @@ def test_prefetch_reads_a_generator_of_source_files_twice():
         def count(self):
             return 0
 
-    col = Col(rows={"/t/a.jsonl": {"source_mtime": 7.0, "normalize_version": NORMALIZE_VERSION,
-                                   "convo_chunker_version": CONVO_CHUNKER_VERSION}})
+    col = Col(
+        rows={
+            "/t/a.jsonl": {
+                "source_mtime": 7.0,
+                "normalize_version": NORMALIZE_VERSION,
+                "convo_chunker_version": CONVO_CHUNKER_VERSION,
+            }
+        }
+    )
     mined = prefetch_mined_set(col, "exchange", source_files=(p for p in ["/t/a.jsonl"]))
     assert mined == {"/t/a.jsonl": 7.0}
 
 
-@pytest.mark.parametrize("version, mode, current", [(None, "exchange", False), (CONVO_CHUNKER_VERSION - 1, "exchange", False),
-                                                   (CONVO_CHUNKER_VERSION, "exchange", True), (None, "general", True)])
-def test_a_manifest_row_from_an_older_chunker_is_stale_in_the_exchange_scope(version, mode, current):
+@pytest.mark.parametrize(
+    "version, mode, current",
+    [
+        (None, "exchange", False),
+        (CONVO_CHUNKER_VERSION - 1, "exchange", False),
+        (CONVO_CHUNKER_VERSION, "exchange", True),
+        (None, "general", True),
+    ],
+)
+def test_a_manifest_row_from_an_older_chunker_is_stale_in_the_exchange_scope(
+    version, mode, current
+):
     """Upstream #2591 re-mines conversation files whose drawers came from an older exchange chunker. The manifest
     (#576) must agree, or its row would keep saying "current" and block exactly that re-mine."""
 

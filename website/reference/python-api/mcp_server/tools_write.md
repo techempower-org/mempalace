@@ -31,12 +31,15 @@ additive layer over the strict wing/room hierarchy). See
 def tool_delete_drawer(drawer_id: str)
 ```
 
-Delete a single logical drawer by ID.
+Delete one drawer by ID.
+
+A logical handle removes the whole group, including every chunk row.
+A physical chunk id removes that one row.
 
 ### `tool_mine`
 
 ```python
-def tool_mine(source: str, mode: str = 'projects', wing: str = None, agent: str = 'mempalace', limit: int = 0, dry_run: bool = False, extract: str = 'exchange')
+def tool_mine(source: str, mode: str = 'projects', wing: str = None, agent: str = 'mempalace', limit: int = 0, dry_run: bool = False, extract: str = 'exchange', include_ignored: Optional[list[str]] = None, include_subagents: bool = False)
 ```
 
 Mine a directory into the palace — the MCP equivalent of ``mempalace mine``.
@@ -58,11 +61,19 @@ limit:   max files to process (0 = all).
 dry_run: walk + chunk and report, but file nothing.
 extract: convos extraction strategy — ``"exchange"`` (default) or
          ``"general"``; ignored by the other modes.
+include_ignored: project-relative paths to scan even if ignored, matching
+                 the CLI's ``--include-ignored``; projects mode only.
+include_subagents: also mine Claude Code ``subagents/`` transcript dirs,
+                   matching the CLI's ``--include-subagents``; convos mode
+                   only, ignored by the other modes.
 
 Runs synchronously and mirrors the :func:`tool_sync` contract: success
 returns ``&#123;success: True, mode, dry_run, output[, output_truncated]}`` where ``output`` is
 the miner's human-readable summary (captured so it cannot corrupt the
 JSON-RPC stream); failure returns ``&#123;success: False, error[, error_class]}``.
+A mine that ran but could not file some files returns ``success: False``
+with ``error_class: "MineFileErrors"``, ``files_failed``, up to 20
+``failed_files`` and the same ``output``.
 The palace write lock is held by the miners themselves, so a concurrent mine
 surfaces as a structured already-running error. Orphan cleanup is not part of
 mining — use ``mempalace_sync`` for that.
@@ -110,6 +121,24 @@ def tool_get_drawer(drawer_id: str)
 ```
 
 Fetch a single logical drawer by ID. Returns full content and metadata.
+
+### `tool_get_drawers`
+
+```python
+def tool_get_drawers(drawer_ids: list)
+```
+
+Fetch many drawers by ID in one call.
+
+Each id resolves the same way as ``tool_get_drawer``: a logical handle
+reassembles the chunk group, and a physical chunk id returns that row.
+The payload for a hit is the singular tool's payload. An id that does
+not resolve is ``&#123;"drawer_id", "error"}`` and is counted in ``errors``;
+later ids are still fetched.
+
+A list of 1 to 500 ids returns ``&#123;"results", "count", "errors"}``.
+A non-list, an empty list, or more than 500 ids returns ``&#123;"error"}``
+and does not read the palace.
 
 ### `tool_list_drawers`
 
@@ -179,3 +208,21 @@ Results are sorted by count (descending). ``wing`` and ``room`` scope
 the count to a subset of the palace. ``min_count`` drops tags below
 the threshold from the result; default 1 keeps any tag with at least
 one drawer.
+
+### `tool_delete_drawers`
+
+```python
+def tool_delete_drawers(drawer_ids: list)
+```
+
+Delete many drawers by ID in one call. Irreversible.
+
+Ids are resolved together, then each one is removed by ``_delete_record``,
+the same mutation the singular tool runs. A logical handle removes the
+whole group. A physical chunk id removes that one row. Per-item results
+come back in input order. A missing id is an ``error`` slot counted in
+``errors``; later ids are still deleted.
+
+A list of 1 to 500 ids returns ``&#123;"results", "count", "deleted", "errors"}``.
+A non-list, an empty list, or more than 500 ids returns ``&#123;"error"}``
+and deletes nothing.

@@ -1632,7 +1632,9 @@ def test_chroma_get_all_metadata_reads_sqlite_in_one_pass(tmp_path, monkeypatch)
 
     monkeypatch.setattr(col._collection, "get", _no_chroma_get)
     assert col.get_all_metadata() == expected
-    assert expected[-1] == {}  # the "bare" drawer: the fork coerces None to {} at the backend boundary
+    assert (
+        expected[-1] == {}
+    )  # the "bare" drawer: the fork coerces None to {} at the backend boundary
 
 
 def test_chroma_iter_metadata_projects_keys_and_requires_a_key(tmp_path):

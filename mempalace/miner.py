@@ -3187,7 +3187,9 @@ def _mine_impl(  # noqa: C901 — injected-handle branches push complexity one t
                     # The caller owns this collection: never swap it for the module cache.
                     mine_yield_point()
                 else:
-                    collection, closets_col = _yield_and_reopen(palace_path, collection, closets_col)
+                    collection, closets_col = _yield_and_reopen(
+                        palace_path, collection, closets_col
+                    )
                 try:
                     drawers, room, skip_reason = process_file(
                         filepath=filepath,

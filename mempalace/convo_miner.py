@@ -807,7 +807,7 @@ def _extract_authored_at(filepath):
     return latest
 
 
-def _file_chunks_locked(
+def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstream purge-failure accounting
     collection,
     source_file,
     chunks,

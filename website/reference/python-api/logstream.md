@@ -300,6 +300,37 @@ Only single-valued fields push down. Narrowing the query is an
 optimization, never a correctness dependency — whatever stays behind is
 re-checked by :func:`event_matches_watch` on every candidate row.
 
+### `sanitize_watch_state_basename`
+
+```python
+def sanitize_watch_state_basename(agent: str) -> str
+```
+
+Turn an agent identity into a state-file basename (no directories).
+
+RFC 005 identities use colons (``windows:grok:mempalace``), which are
+illegal in Windows filenames. Slashes would escape ``~/.mempalace/watch``.
+
+### `default_watch_state_file`
+
+```python
+def default_watch_state_file(agent: str, *, home: Optional[str] = None) -> str
+```
+
+``~/.mempalace/watch/&lt;sanitized-agent>.json`` for ``logstream watch``.
+
+### `resolve_watch_state_file`
+
+```python
+def resolve_watch_state_file(state_file: Optional[str], agent: Optional[str]) -> Optional[str]
+```
+
+Choose a watch state-file path.
+
+``None`` means "apply the default from ``--agent``". An empty string is
+an explicit disable (tests, or a caller that does not want a cursor).
+A non-empty string is used as-is.
+
 ### `read_watch_state`
 
 ```python

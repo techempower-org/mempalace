@@ -28,6 +28,7 @@ Commands:
     mempalace status                      Show what's been filed
     mempalace mined                       List mined source files grouped by wing
     mempalace purge --source-file &lt;path>  Remove drawers mined from a specific file
+    mempalace audit                       Score how well organized the palace is
 
 Examples:
     mempalace init ~/projects/my_app

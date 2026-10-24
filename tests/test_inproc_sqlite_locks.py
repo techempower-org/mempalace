@@ -473,7 +473,6 @@ def test_linux_uses_ofd_locks_even_when_fcntl_does_not_export_the_constant():
     assert M._ANCHORED is True and M._HOLD_LOCKS is False
 
 
-
 def test_idle_rollback_holder_allows_external_commits_and_fresh_reads(tmp_path, monkeypatch):
     monkeypatch.setattr(_inproc_sqlite, "_HOLD_LOCKS", True)
     monkeypatch.setattr(_inproc_sqlite, "_ANCHORED", False)

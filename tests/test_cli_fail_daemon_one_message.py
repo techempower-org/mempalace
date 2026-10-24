@@ -212,7 +212,6 @@ class TestTheMessageIsWrittenOnce:
         So 22 hand-written occurrences become 2 named ones, and the count is
         asserted rather than grepped so a new copy has to argue for itself here.
         """
-        import inspect
 
         src = module_source("cli")
         assert src.count("palace daemon unreachable at") == 2

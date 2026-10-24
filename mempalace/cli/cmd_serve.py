@@ -238,7 +238,9 @@ def cmd_compress(args):
     # catch the backend exceptions directly; CLI gets the friendly print.
     from ..palace import _open_collection_or_explain
 
-    col = _open_collection_or_explain(palace_path, collection_name=None)  # the configured drawers collection
+    col = _open_collection_or_explain(
+        palace_path, collection_name=None
+    )  # the configured drawers collection
     if col is None:
         sys.exit(1)
 

@@ -2337,7 +2337,9 @@ def _curated_indexed_mtimes(wing: str, palace_path: str) -> tuple:
     try:
         from ..palace import get_collection, prefetch_mined_set
 
-        col = get_collection(palace_path, collection_name=None, create=False)  # the configured drawers collection
+        col = get_collection(
+            palace_path, collection_name=None, create=False
+        )  # the configured drawers collection
         return dict(prefetch_mined_set(col)), ""
     except Exception as exc:  # noqa: BLE001 — a doctor never raises
         return {}, f"palace not readable here ({exc})"

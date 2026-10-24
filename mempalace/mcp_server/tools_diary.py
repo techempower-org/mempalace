@@ -273,8 +273,6 @@ def _sqlite_diary_read(agent_name: str, last_n: int, wing: str):
         return None
 
 
-
-
 # Diary scans read a bounded page rather than the whole room. The palace
 # daemon runs under a 2 GB cgroup cap and sits near it, so an unbounded
 # metadata sweep is a memory hazard, not merely slow (palace-daemon#256).

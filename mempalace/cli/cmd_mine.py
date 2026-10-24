@@ -5,7 +5,7 @@ if __name__ != "mempalace.cli":
 from typing import Optional
 
 
-def cmd_mine(args):
+def cmd_mine(args):  # noqa: C901 — fork daemon/hub routing + upstream model/media guards on one entry point
     from ..backends.base import (
         DimensionMismatchError,
         EmbedderIdentityMismatchError,
@@ -144,7 +144,11 @@ def cmd_mine(args):
                 file=sys.stderr,
             )
         _submit_daemon_cli_job(
-            "mine", payload, args, background=background, auto_start=routing.decision.auto_start_daemon
+            "mine",
+            payload,
+            args,
+            background=background,
+            auto_start=routing.decision.auto_start_daemon,
         )
         return
 

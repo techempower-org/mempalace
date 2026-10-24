@@ -1412,7 +1412,9 @@ def test_cmd_mine_prints_model_mismatch_cleanly(mock_config_cls, capsys, error_i
     mine prints the message (as search does) and exits 1, no traceback."""
     error = _mismatch_errors()[error_index]
     mock_config_cls.return_value.palace_path = "/fake/palace"
-    mock_config_cls.return_value.daemon_url = None  # fork: no palace daemon, so the mine runs locally
+    mock_config_cls.return_value.daemon_url = (
+        None  # fork: no palace daemon, so the mine runs locally
+    )
     mock_config_cls.return_value.daemon_strict = False
     args = argparse.Namespace(
         dir="/src",
@@ -3015,7 +3017,12 @@ def test_cmd_repair_holds_the_palace_lock_before_extracting(mock_config_cls, tmp
 
     def spy_extract(collection, total, batch_size):
         events.append("extract")
-        return ["id1", "id2"], ["doc1", "doc2"], [{"wing": "a"}, {"wing": "b"}], None   # fork: + stored embeddings
+        return (
+            ["id1", "id2"],
+            ["doc1", "doc2"],
+            [{"wing": "a"}, {"wing": "b"}],
+            None,
+        )  # fork: + stored embeddings
 
     with (
         patch("mempalace.backends.chroma.ChromaBackend", return_value=backend),
@@ -3039,7 +3046,12 @@ def test_cmd_repair_confirms_after_releasing_the_palace_lock(mock_config_cls, tm
 
     def spy_extract(collection, total, batch_size):
         events.append("extract")
-        return ["id1", "id2"], ["doc1", "doc2"], [{"wing": "a"}, {"wing": "b"}], None   # fork: + stored embeddings
+        return (
+            ["id1", "id2"],
+            ["doc1", "doc2"],
+            [{"wing": "a"}, {"wing": "b"}],
+            None,
+        )  # fork: + stored embeddings
 
     def spy_confirm(*_args, **_kwargs):
         events.append("confirm")
@@ -3073,7 +3085,12 @@ def test_cmd_repair_refuses_to_extract_when_the_lock_is_taken(mock_config_cls, t
 
     def spy_extract(collection, total, batch_size):
         extracted.append("extract")
-        return ["id1", "id2"], ["doc1", "doc2"], [{"wing": "a"}, {"wing": "b"}], None   # fork: + stored embeddings
+        return (
+            ["id1", "id2"],
+            ["doc1", "doc2"],
+            [{"wing": "a"}, {"wing": "b"}],
+            None,
+        )  # fork: + stored embeddings
 
     with (
         patch("mempalace.backends.chroma.ChromaBackend", return_value=backend),

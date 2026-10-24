@@ -31,7 +31,7 @@ def tool_get_taxonomy()
 ### `tool_search`
 
 ```python
-def tool_search(query: str, limit: int = 15, wing: str = None, room: str = None, tags: list = None, source_file: str = None, since: str = None, before: str = None, max_distance: float = None, min_similarity: float = None, context: str = None, candidate_strategy: str = None, fusion_mode: str = 'convex', include_trace: bool = False, cli_compatible: bool = False)
+def tool_search(query: str, limit: int = 15, wing: str = None, room: str = None, tags: list = None, source_file: str = None, since: str = None, before: str = None, max_distance: float = None, min_similarity: float = None, context: str = None, candidate_strategy: str = None, fusion_mode: str = 'convex', include_trace: bool = False, cli_compatible: bool = False, include_media: bool = False, query_task: str = 'search')
 ```
 
 ### `tool_check_duplicate`
@@ -158,10 +158,14 @@ Delete an explicit tunnel by its ID.
 ### `tool_list_hallways`
 
 ```python
-def tool_list_hallways(wing: str = None)
+def tool_list_hallways(wing: str = None, limit: int = 100, offset: int = 0)
 ```
 
-List within-wing hallway records, optionally filtered by wing.
+List within-wing hallway records, strongest first, one page at a time.
+
+A palace of any size holds hundreds of thousands of hallways; returning
+them all in one response closed the MCP connection. The page is sorted by
+co-occurrence count so the first page is the one worth reading.
 
 ### `tool_delete_hallway`
 
@@ -174,7 +178,13 @@ Delete a hallway record by its ID.
 ### `tool_follow_tunnels`
 
 ```python
-def tool_follow_tunnels(wing: str, room: str)
+def tool_follow_tunnels(wing: str, room: str, record: bool = True)
 ```
 
 Follow explicit tunnels from a room to see connected drawers in other wings.
+
+An agent calling this tool is crossing the tunnel, so the traversal is
+recorded (``access_count`` / ``strength``). Internal callers that only
+decorate another result, such as the light server's search enrichment,
+pass ``record=False``: a search hit is not a crossing. A read-only
+server or a peer without the writer lock never writes the tunnel file.

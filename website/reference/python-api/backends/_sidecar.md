@@ -34,4 +34,13 @@ def write_embedder_sidecar(path: Optional[str], collection_name: Optional[str], 
 Record ``identity`` for ``collection_name`` in the sidecar, creating it if needed.
 
 No-ops for a missing path, missing collection name, or a nameless identity.
-Preserves other collections' entries; never raises on I/O failure.
+Preserves other collections' entries. Creates the palace directory when it
+does not exist yet: qdrant and pgvector record a new palace's identity on
+its first open, before their first upsert creates the folder, and the
+write used to fail there silently, leaving the palace unrecorded for good.
+
+The file is replaced atomically, so a failed write keeps the previous
+one, and a failure raises
+:class:`~mempalace.backends.base.EmbedderIdentityRecordError` instead of
+passing silently. Only write paths record an identity, so read-only opens
+are unaffected.

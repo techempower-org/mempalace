@@ -26,7 +26,6 @@ local variable would have passed throughout the outage.
 """
 
 import ast
-import inspect
 import json
 import os
 import subprocess

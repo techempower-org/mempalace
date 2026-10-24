@@ -15,8 +15,6 @@ import os
 import subprocess
 import sys
 
-from mempalace import mcp_server
-
 
 def _import_with_argv(argv, env_extra=None):
     code = (
@@ -86,20 +84,43 @@ def test_python_dash_m_server_honours_palace_flag(tmp_path):
     home = tmp_path / "home"
     home.mkdir()
     requests = [
-        {"jsonrpc": "2.0", "id": 1, "method": "initialize",
-         "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "0"}}},
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "t", "version": "0"},
+            },
+        },
         {"jsonrpc": "2.0", "method": "notifications/initialized"},
-        {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "mempalace_status", "arguments": {}}},
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "mempalace_status", "arguments": {}},
+        },
     ]
-    env = {k: v for k, v in os.environ.items() if not k.startswith("MEMPALACE_") and k != "XDG_CONFIG_HOME"}
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if not k.startswith("MEMPALACE_") and k != "XDG_CONFIG_HOME"
+    }
     env["HOME"] = str(home)
     env["PYTHONPATH"] = os.getcwd()
     proc = subprocess.run(
         [sys.executable, "-m", "mempalace.mcp_server", "--palace", str(palace)],
         input="".join(json.dumps(r) + "\n" for r in requests),
-        capture_output=True, text=True, env=env, timeout=120,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
     )
-    replies = {r["id"]: r for r in map(json.loads, [ln for ln in proc.stdout.splitlines() if ln.startswith("{")])}
+    replies = {
+        r["id"]: r
+        for r in map(json.loads, [ln for ln in proc.stdout.splitlines() if ln.startswith("{")])
+    }
     status_text = replies[2]["result"]["content"][0]["text"]
     assert str(palace) in status_text, status_text[:400]
     assert str(home) not in status_text, "served the default palace, not --palace"

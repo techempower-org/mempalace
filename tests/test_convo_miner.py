@@ -1098,7 +1098,9 @@ def test_mine_convos_scopes_mined_set_prefetch_to_candidate_files(monkeypatch):
                 collection, extract_mode=extract_mode, source_files=source_files
             )
 
-        def _spy_content_hashes(collection, extract_mode=None, wing=None):   # fork: wing-scoped (#548)
+        def _spy_content_hashes(
+            collection, extract_mode=None, wing=None
+        ):  # fork: wing-scoped (#548)
             seen["content_hashes_called"] = True
             return real_prefetch_content_hashes(collection, extract_mode=extract_mode, wing=wing)
 

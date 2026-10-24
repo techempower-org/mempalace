@@ -109,7 +109,7 @@ The other consumer-side findings the press release glosses:
 
 ## 2. Mapping to mempalace's retrieval pipeline
 
-mempalace's current scoring stack (per [`mempalace/searcher.py`](../../mempalace/searcher.py)):
+mempalace's current scoring stack (per [`mempalace/searcher/`](../../mempalace/searcher/)):
 
 1. **Vector retrieval** — pgvector / chromadb HNSW cosine distance.
    Returns `distance ∈ [0, 2]` per candidate. Default n_results=5 with
@@ -421,7 +421,7 @@ Naming these explicitly so they don't get rediscovered as good ideas:
 * [2026-05-15 multi-encoder RRF analysis](2026-05-15-multi-encoder-rrf.md)
   — same "raw lift vs production-pipeline lift" methodology this doc
   recommends for calibration.
-* [`mempalace/searcher.py`](../../mempalace/searcher.py) — the
+* [`mempalace/searcher/`](../../mempalace/searcher/) — the
   retrieval pipeline this would extend.
 * [`scripts/eval_multi_encoder_rrf.py`](../../scripts/eval_multi_encoder_rrf.py)
   — the eval harness that would gain a Brier-score column.

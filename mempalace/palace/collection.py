@@ -361,7 +361,9 @@ def get_collection(
             get_embedding_function(model="embeddinggemma2")
     backend_obj = get_backend_for_palace(palace_path, explicit=backend)
     # The fork needs the name only to thread the postgres DSN (#665); take it from the backend actually returned.
-    backend_name = getattr(backend_obj, "name", None) or resolve_backend_name(palace_path, explicit=backend)
+    backend_name = getattr(backend_obj, "name", None) or resolve_backend_name(
+        palace_path, explicit=backend
+    )
     palace_ref = PalaceRef(id=palace_path, local_path=palace_path)
     backend_options = {}
     if read_only:

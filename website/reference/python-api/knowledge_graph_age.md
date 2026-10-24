@@ -176,19 +176,28 @@ Mirrors SQLite ``KnowledgeGraph.query_relationship``.
 #### `timeline`
 
 ```python
-def timeline(self, entity_name: Optional[str] = None, limit: int = 100, as_of: Optional[str] = None) -> list
+def timeline(self, entity_name: Optional[str] = None, limit: int = 100, offset: int = 0, as_of: Optional[str] = None) -> list
 ```
 
 Return triples in chronological order, optionally filtered by entity.
 
-Mirrors SQLite ``KnowledgeGraph.timeline``. Limit defaults to 100
-for parity. AGE ``ORDER BY ... LIMIT`` works inside cypher() so no
+Mirrors SQLite ``KnowledgeGraph.timeline``, including ``limit``/``offset`` pagination (upstream added it to
+SQLite in the 2026-10 sync). Limit defaults to 100 for parity; ``id(r)`` breaks ``valid_from`` ties so pages
+are stable, like SQLite's ``t.id`` tie-break. AGE ``ORDER BY ... LIMIT`` works inside cypher() so no
 workaround needed.
 
 ``as_of`` (P5 / #161) filters to triples whose temporal interval
 contains the given date; NULL ends are treated as open intervals
 (same semantics as ``query_triples``). Default (None) returns the
 full timeline including expired facts.
+
+#### `timeline_total`
+
+```python
+def timeline_total(self, entity_name: Optional[str] = None, as_of: Optional[str] = None) -> int
+```
+
+Total number of triples a :meth:`timeline` query matches (all pages), with the same entity/as_of filters.
 
 #### `add_mention`
 

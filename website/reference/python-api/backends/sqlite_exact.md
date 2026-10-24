@@ -158,6 +158,14 @@ behind because the SQLite header is written on the first statement,
 not on connection. The 16-byte ``SQLite format 3\x00`` magic prefix
 accepts every real palace while rejecting empty / garbage files. See #1893.
 
+The probe goes through :func:`mempalace.backends._magic.has_sqlite_magic`
+and never opens a plain descriptor on the file: ``detect()`` runs on
+nearly every MCP tool call, and closing a non-SQLite descriptor on the
+database this backend already holds a WAL connection to drops every
+POSIX lock the process owns on that inode -- including the SHARED lock
+that stops an external ``close()`` from checkpointing and unlinking the
+live ``-wal`` / ``-shm`` sidecars.
+
 #### `create_collection`
 
 ```python
@@ -189,6 +197,21 @@ Tally drawers by wing/room from ``sqlite_exact.sqlite3`` without paging.
 Returns ``(total, &#123;wing: &#123;room: count}})`` or ``None`` when the read
 cannot be trusted. ``None``/missing wing-or-room values are stored as
 ``"?"`` so ``mcp_server._sqlite_taxonomy`` can map them to ``"unknown"``.
+
+### `sqlite_wing_source_counts`
+
+```python
+def sqlite_wing_source_counts(palace_path: str, collection_name: str) -> Optional[list[tuple]]
+```
+
+Grouped ``(wing, source_file, n)`` for transcript-mined drawers, or ``None``.
+
+Scoped to ``collection_name``: drawers and closets share the
+``documents`` table, and counting both would double every project.
+Only rows whose ``source_file`` sits under a Claude Code projects
+directory or a Codex sessions directory are returned; that is what
+``mempalace audit`` needs to see whether one wing mixes several
+projects, and what ``wings split`` plans over.
 
 ### `sqlite_room_wing_hall_counts`
 

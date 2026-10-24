@@ -23,7 +23,7 @@ def cmd_mine(args)
 ### `mine_source_adapter`
 
 ```python
-def mine_source_adapter(*, source_name: str, source_path: str, palace_path: str, dry_run: bool = False) -> int
+def mine_source_adapter(*, source_name: str, source_path: str, palace_path: str, dry_run: bool = False, project: Optional[str] = None, related_drawer_id: Optional[str] = None) -> int
 ```
 
 Run an explicitly selected RFC 002 source adapter through ``PalaceContext``.

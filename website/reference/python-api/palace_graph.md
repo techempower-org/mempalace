@@ -110,6 +110,31 @@ placements, which is the number users naturally compare with ``status``.
 Explicit tunnel records are reported separately so the overview does not
 silently omit agent-created graph connections.
 
+### `tunnel_batch`
+
+```python
+def tunnel_batch(config = None)
+```
+
+Load tunnels once, mutate them in memory, persist once on exit.
+
+Inside the batch, :func:`create_tunnel` calls for the same tunnel file
+insert or update through an id index instead of loading, scanning and
+rewriting the whole file per tunnel (#2683). The mine's tunnel passes
+run inside one; outside a batch every call still loads, mutates and
+saves on its own, so MCP tools and explicit user tunnels are unchanged.
+
+The tunnel file's ``mine_lock`` is held for the whole batch. The save
+runs in ``finally``, so a crash mid-batch persists what was created
+before it, as the per-call save did. Nesting on the same file reuses
+the outer batch.
+
+Only ``create_tunnel`` reads the in-memory state. Other tunnel helpers
+(``list_tunnels``, ``follow_tunnels``, ``delete_tunnel``,
+``record_tunnel_traversal``) read the file and must not be called for
+the same file inside a batch: they would see the pre-batch state, and
+the writers would block on the lock this batch holds.
+
 ### `create_tunnel`
 
 ```python
@@ -224,16 +249,32 @@ def delete_tunnel(tunnel_id: str)
 
 Delete an explicit tunnel by ID. Returns ``&#123;"deleted": &lt;id>}``.
 
+### `record_tunnel_traversal`
+
+```python
+def record_tunnel_traversal(tunnel_ids, config = None) -> int
+```
+
+Potentiate the tunnels an agent just followed; returns how many.
+
+This is the only place a tunnel's ``access_count`` / ``strength`` rises,
+so a palace where nothing ever calls it shows every tunnel as never
+traversed. Best-effort: a lock or write failure is logged and the read
+that triggered it still returns.
+
 ### `follow_tunnels`
 
 ```python
-def follow_tunnels(wing: str, room: str, col = None, config = None)
+def follow_tunnels(wing: str, room: str, col = None, config = None, record: bool = True)
 ```
 
 Follow explicit tunnels from a room — returns connected drawers.
 
 Given a location (wing/room), finds all tunnels leading from or to it,
-and optionally fetches the connected drawer content.
+and optionally fetches the connected drawer content. Following a tunnel
+is a traversal: unless ``record`` is off (a read-only server, a peer
+that does not hold the writer lock), each tunnel crossed is
+potentiated so navigation weights and the audit reflect real use.
 
 ### `topic_room`
 
@@ -288,10 +329,32 @@ Used by the miner to incrementally update tunnels for the wing that
 just finished mining without recomputing pairs that don't involve it.
 Returns the list of tunnels created or refreshed.
 
+### `entity_tunnel_candidates`
+
+```python
+def entity_tunnel_candidates(hallways: list, min_count: int = ENTITY_TUNNEL_MIN_COUNT) -> dict
+```
+
+``&#123;entity: &#123;wing_norm: (display_wing, strength)}}`` for entities in ≥2 wings.
+
+Strength is the entity's strongest hallway co-occurrence in that wing.
+Left out: generic tokens (``content``, ``WebFetch``, ``compose.yml``),
+entities below ``min_count`` in a wing, and ubiquitous entities — present
+in more than a quarter of all wings (and in more than three). A tunnel
+on any of them links nothing.
+
+Spellings of one entity merge under :func:`canonical_spelling`
+(``ChatStore.swift`` / ``ChatStore`` → ``ChatStore``, ``src/main.zig`` /
+``main.zig`` → ``src/main.zig``),
+resolved across every wing the same way the hallway miner resolves them
+inside one. Two files that only share a basename (``src/models/user.py``
+in one wing, ``tests/fixtures/user.py`` in another) are two entities: a
+tunnel between them would link unrelated code.
+
 ### `entity_tunnels_for_wing`
 
 ```python
-def entity_tunnels_for_wing(wing: str, hallways: list, label_prefix: str = 'shared entity', config = None) -> list
+def entity_tunnels_for_wing(wing: str, hallways: list, label_prefix: str = 'shared entity', config = None, min_count: int = ENTITY_TUNNEL_MIN_COUNT, max_per_wing: int = ENTITY_TUNNEL_MAX_PER_WING) -> list
 ```
 
 Compute entity tunnels involving a single wing.

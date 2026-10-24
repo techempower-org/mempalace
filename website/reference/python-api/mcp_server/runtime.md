@@ -12,6 +12,10 @@ def main()
 
 MCP server entry point for the ``mempalace-mcp`` console script.
 
+Parses ``sys.argv`` and applies ``--palace`` / ``--backend`` / ``--read-only``
+to the process, including ``MEMPALACE_PALACE_PATH`` and ``MEMPALACE_BACKEND``
+in ``os.environ``; importing the package parses no argv (#2528).
+
 Side effect: pops ``PYTHONPATH`` from ``os.environ`` (see #1423) so any
 subprocess this server spawns inherits a clean env. Host applications that
 call ``main()`` programmatically should be aware that the parent process

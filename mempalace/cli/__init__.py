@@ -985,7 +985,13 @@ def _truncate_content(text: str, max_lines: int) -> tuple:
 
 
 def _print_search_header(
-    query: str, data: dict, wing, room, warnings, quiet: bool, use_color: bool
+    query: str,
+    data: dict,
+    wing,
+    room,
+    warnings,  # noqa: F811 — the warning list; the module import is for the exec'd fragments
+    quiet: bool,
+    use_color: bool,
 ) -> None:
     """Header chrome for ``table`` / ``full`` formats. Suppressed under --quiet."""
     if quiet:
@@ -1196,7 +1202,7 @@ def _print_daemon_search(
         return
 
     hits = data.get("results") or []
-    warnings = data.get("warnings") or []
+    warnings = data.get("warnings") or []  # noqa: F811 — local list; the module import serves the exec'd fragments
 
     if not hits:
         print(f'\n  No results found for: "{query}"')

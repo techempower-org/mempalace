@@ -51,6 +51,11 @@ in ``~/.mempalace/config.json``):
 * ``coreml`` — Apple Neural Engine (macOS)
 * ``dml`` — DirectML (Windows / AMD / Intel GPUs)
 
+``embeddinggemma2`` runs on PyTorch rather than ONNX Runtime and reads the same
+setting: ``auto`` (CUDA ▸ MPS ▸ CPU), ``cuda``, ``mps`` or ``cpu``. The
+ONNX-only ``coreml`` and ``dml`` read as ``auto`` there, and ``mps`` reads as
+``auto`` for the ONNX models, each with a one-time warning.
+
 Requesting an unavailable accelerator emits a warning and falls back to CPU
 rather than hard-failing — mining must still work on a laptop without CUDA.
 The same applies to an accelerator that runs but computes the model wrongly:
@@ -116,11 +121,16 @@ ChromaDB-compatible EF backed by an OpenAI-compatible ``/v1/embeddings``
 endpoint (LM Studio, llama.cpp, vLLM, Ollama's OpenAI shim, etc.).
 
 Selected via ``embedding_model == "openai-compat"``. Vectors are produced
-server-side and fetched over HTTP, which changes the vector space — so
-``name()`` encodes the model id: ChromaDB persists the EF name on the
-collection and rejects mismatched reads, the signal to run ``mempalace
-repair rebuild-index`` after changing model/endpoint. stdlib ``urllib``
-only, no new dependency.
+server-side and fetched over HTTP, which changes the vector space.
+``name()`` encodes the model id, but this does **not** guard a model or
+endpoint change: chromadb 1.5.x persists this class as a legacy EF
+(``&#123;"type": "legacy"}``, no name), so it never compares names on open,
+and the recorded palace identity is the bare ``openai-compat`` for every
+endpoint model. Switching ``embedding_api_model`` to another model with
+the same dimension is therefore accepted silently; run ``mempalace
+repair rebuild-index`` yourself after changing the model or endpoint.
+(Recording the endpoint model in the identity is follow-up item D.)
+stdlib ``urllib`` only, no new dependency.
 
 #### `__init__`
 
@@ -140,7 +150,158 @@ def name(self) -> str
 def embed_query(self, input)
 ```
 
+### `class UnknownEmbeddingModelError(ValueError)`
+
+``embedding_model`` looks like a misspelled supported model name.
+
+Raised instead of the MiniLM fallback for near misses of EmbeddingGemma
+or ``openai-compat``: filing MiniLM vectors under a palace the user meant
+to embed with another model can only be undone by re-embedding everything
+(``mempalace repair rebuild-index``). The Chroma backend re-raises it
+rather than opening with chromadb's default.
+
+### `class EmbeddingFunctionUnavailableError(RuntimeError)`
+
+The configured embedding function could not be built.
+
+MemPalace refuses the call instead of letting chromadb embed with its
+own default function: that writes vectors from a model the palace's
+recorded identity does not name, and nothing downstream notices (the
+stored and configured names still agree). Raised for writes and
+searches; reads that never embed keep working (see
+:class:`UnavailableEmbeddingFunction`).
+
+#### `__init__`
+
+```python
+def __init__(self, model: str, cause: BaseException)
+```
+
+### `class UnavailableEmbeddingFunction`
+
+Stand-in Chroma EF for a read-only open when the configured one failed to build.
+
+Opening a collection to count, list or fetch rows never embeds, so those
+reads keep working; any embed (a query, or a write that passes text)
+raises the :class:`EmbeddingFunctionUnavailableError` instead of
+reaching chromadb's default function. ``name()`` is ``"default"`` so
+chromadb's EF-name check on open never trips on it; it is never passed
+to a create, so chromadb never persists it.
+
+#### `__init__`
+
+```python
+def __init__(self, error: EmbeddingFunctionUnavailableError)
+```
+
+#### `name`
+
+```python
+def name() -> str
+```
+
+#### `is_legacy`
+
+```python
+def is_legacy(self) -> bool
+```
+
+#### `get_config`
+
+```python
+def get_config(self) -> dict
+```
+
+#### `default_space`
+
+```python
+def default_space(self) -> str
+```
+
+#### `supported_spaces`
+
+```python
+def supported_spaces(self) -> list
+```
+
+#### `embed_query`
+
+```python
+def embed_query(self, input)
+```
+
+#### `embed_documents`
+
+```python
+def embed_documents(self, input)
+```
+
 ## Functions
+
+### `set_embedding_section_hook`
+
+```python
+def set_embedding_section_hook(hook) -> None
+```
+
+Install or clear this thread's embedding-section context manager factory.
+
+``hook`` is ``None`` or a zero-arg callable that returns a context manager.
+
+### `embedding_section`
+
+```python
+def embedding_section()
+```
+
+Run the body under this thread's embedding-section hook, if any.
+
+### `embedding_function_unavailable`
+
+```python
+def embedding_function_unavailable(cause: BaseException) -> EmbeddingFunctionUnavailableError
+```
+
+Wrap a failure to build the configured embedding function.
+
+### `configured_embedding_function`
+
+```python
+def configured_embedding_function()
+```
+
+:func:`get_embedding_function` for the configured model, refusing on a build failure.
+
+A misspelled model keeps raising :class:`UnknownEmbeddingModelError`, and
+an EmbeddingGemma 2 failure keeps its own error (it already names the
+missing extra or device); any other failure to build raises
+:class:`EmbeddingFunctionUnavailableError`. Nothing calls chromadb's
+default function instead.
+
+### `log_model_refusal`
+
+```python
+def log_model_refusal(log, kind: str, exc: BaseException, palace_path = None) -> None
+```
+
+Log a refused call: the full message once per palace and message, then one short line.
+
+A long-lived MCP server refuses every call until the config or the palace
+is fixed; repeating the multi-line explanation on each call buries
+everything else on stderr.
+
+### `model_error_result`
+
+```python
+def model_error_result(exc: BaseException, *, palace_path = None, log = None) -> Optional[dict]
+```
+
+The tool/search result for a model error, or None for any other exception.
+
+Matched by exception class. ``error`` is the human-readable kind,
+``error_class`` the model-error class name (``MODEL_ERROR_CLASS_NAMES``)
+that MCP checks to set ``isError``, ``details`` the full message with the
+fix. ``log``, when given, gets one rate-limited line (no traceback).
 
 ### `get_embedding_function`
 
@@ -179,6 +340,8 @@ Resolve the canonical embedder model name (cheap, no model load).
 This is the configured ``embedding_model`` (``"minilm"`` /
 ``"embeddinggemma"`` / ...), not the embedding function's internal
 ``name()`` (which is spoofed to ``"default"`` for ChromaDB compatibility).
+Unrecognized names resolve to ``"minilm"``, the model that embeds them,
+and near misses raise :class:`UnknownEmbeddingModelError`.
 
 ### `probe_dimension`
 

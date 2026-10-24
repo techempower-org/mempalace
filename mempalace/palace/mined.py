@@ -52,7 +52,10 @@ def _manifest_mtime(row, extract_mode: Optional[str] = None) -> Optional[float]:
     """
     if not isinstance(row, dict) or int(row.get("normalize_version") or 0) < NORMALIZE_VERSION:
         return None
-    if extract_mode == "exchange" and int(row.get("convo_chunker_version") or 1) < CONVO_CHUNKER_VERSION:
+    if (
+        extract_mode == "exchange"
+        and int(row.get("convo_chunker_version") or 1) < CONVO_CHUNKER_VERSION
+    ):
         return None
     mtime = row.get("source_mtime")
     return float(mtime) if mtime is not None else None
@@ -383,7 +386,9 @@ def prefetch_mined_set(
         _scan_collection_metadata(collection, _MINED_SCAN_KEYS, _absorb, groups.clear)
 
     if source_files is not None:
-        source_files = list(dict.fromkeys(source_files))  # read twice: here and the manifest overlay
+        source_files = list(
+            dict.fromkeys(source_files)
+        )  # read twice: here and the manifest overlay
     # Scoped per-file lookups (fork #566) whenever the caller names its files, up to upstream's threshold (#2567);
     # above it one full metadata stream beats many filtered queries. On postgres a per-file lookup is an indexed
     # query, so it stays scoped at any size.

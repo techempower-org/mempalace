@@ -221,7 +221,7 @@ def _reset_mcp_cache(monkeypatch):  # noqa: C901 — merged fork+upstream cached
     """
     del monkeypatch
 
-    def _clear_cache():
+    def _clear_cache():  # noqa: C901 — merged fork+upstream cached-module resets
         try:
             import sys
 

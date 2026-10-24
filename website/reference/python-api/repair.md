@@ -373,11 +373,10 @@ function bypasses the chromadb read path entirely via
 :func:`extract_via_sqlite`.
 
 Re-embeds documents at upsert time using the configured embedding
-function; the original HNSW vectors are not preserved (they live in
-the corrupt ``data_level0.bin`` / ``link_lists.bin``, not in
-SQLite). Acceptable for a corruption-recovery flow because the
-embedding model is deterministic — same model + same document text
-yields semantically equivalent search results.
+function and media assets from their local source files using the
+provider's native media encoder. Original HNSW vectors are not preserved
+(they live in the corrupt ``data_level0.bin`` / ``link_lists.bin``, not in
+SQLite).
 
 ``archive_existing_dest`` controls behavior when ``dest_palace``
 already exists:

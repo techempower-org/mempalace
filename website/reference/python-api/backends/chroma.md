@@ -6,6 +6,14 @@ ChromaDB-backed MemPalace storage backend (RFC 001 reference implementation).
 
 ## Classes
 
+### `class MetadataRecoveryPending(sqlite3.OperationalError)`
+
+The persisted metadata projection needs the normal Chroma recovery path.
+
+### `class CandidateRows(list)`
+
+Candidate row ids; ``truncated`` when a read budget ran out first.
+
 ### `class ChromaCollection(BaseCollection)`
 
 Thin adapter translating ChromaDB dict returns into typed results.
@@ -73,6 +81,56 @@ def delete(self, *, ids = None, where = None)
 ```python
 def count(self)
 ```
+
+#### `iter_metadata`
+
+```python
+def iter_metadata(self, keys: Optional[Iterable[str]] = None, *, require_key: Optional[str] = None, equals: Optional[dict] = None) -> Optional[Iterator[Optional[dict]]]
+```
+
+Stream every drawer's metadata from chroma.sqlite3 in one linear pass.
+
+``keys``, ``require_key`` and ``equals`` narrow the read (see
+:func:`_sqlite_iter_metadata`). Returns ``None`` when this collection
+has no palace path or no database file, so the caller can page through
+:meth:`get` instead. A read error raises from the iterator.
+
+#### `get_all_metadata`
+
+```python
+def get_all_metadata(self, where: Optional[dict] = None) -> list[dict]
+```
+
+Every drawer's metadata in one pass over chroma.sqlite3 (#1796).
+
+The base implementation pages ``get(limit, offset)``, and Chroma turns
+``offset`` into SQL ``OFFSET``, which steps over every skipped row, so
+that pass is quadratic: on a 360k-drawer palace one page cost 81 ms at
+offset 0 and 717 ms at offset 359k. A ``where`` filter still goes
+through the base implementation.
+
+#### `get_recent`
+
+```python
+def get_recent(self, *, limit: int, where: Optional[dict] = None, order_field: str = 'filed_at', include: Optional[list[str]] = None) -> GetResult
+```
+
+Newest ``limit`` records by ``order_field``, read from chroma.sqlite3.
+
+Chroma's ``get`` loads the collection's whole HNSW segment before it
+answers, even for a metadata-only read, so the base implementation's
+paged ``get`` loaded every vector in the palace to pick a few recent
+drawers: ``mempalace wake-up`` for a ten-drawer wing loaded millions.
+This reads the ordered window from the metadata tables instead, which
+also makes the window exact rather than whatever ``get`` paged first.
+``where`` made of string equalities (what Layer 1 passes) is evaluated
+in sqlite; any other filter, or a database the read cannot reach, goes
+through the base implementation.
+
+String equalities and an unfiltered read are the true top ``limit``
+at any collection size, which is why :class:`ChromaBackend` advertises
+``supports_recency_order``. A filter this path cannot evaluate keeps
+the base implementation's approximate window.
 
 #### `lexical_search`
 
@@ -219,6 +277,11 @@ as chromadb's ``PersistentClient`` does any work, so this check
 accepts every real chroma palace while rejecting empty / garbage
 files. See #1893.
 
+Probed through :func:`mempalace.backends._magic.has_sqlite_magic`,
+which never opens a plain descriptor on the file -- see that module for
+why a plain open+close of a live database drops the process's POSIX
+locks on it.
+
 #### `get_or_create_collection`
 
 ```python
@@ -343,10 +406,33 @@ Grouped ``(room, wing, hall, n, last_date)`` from ``chroma.sqlite3``.
 (``build_graph`` only ever uses the maximum). Returns ``None`` when sqlite
 cannot be trusted, so the caller falls back to the client path.
 
+### `sqlite_wing_source_counts`
+
+```python
+def sqlite_wing_source_counts(palace_path: str, collection_name: str) -> Optional[list[tuple]]
+```
+
+Grouped ``(wing, source_file, n)`` for transcript-mined drawers from
+``chroma.sqlite3``, scoped to ``collection_name``; ``None`` when sqlite
+cannot serve it. Same contract as the sqlite_exact reader: only rows
+whose ``source_file`` is a Claude Code projects path or a Codex sessions
+path, which is what the audit's mixed-wing check and ``wings split`` use.
+
+### `sqlite_metadata_snapshot`
+
+```python
+def sqlite_metadata_snapshot(palace_path: str, collection_name: str)
+```
+
+A recovered metadata snapshot, or None when callers must use Chroma.
+
+Keep this context open through page selection and document hydration. It
+reads no documents itself and never takes a backend write lock.
+
 ### `sqlite_list_id_metadata`
 
 ```python
-def sqlite_list_id_metadata(palace_path: str, collection_name: str, where: Optional[dict] = None) -> Optional[tuple[list[str], list[dict]]]
+def sqlite_list_id_metadata(palace_path: str, collection_name: str, where: Optional[dict] = None, *, _connection = None) -> Optional[tuple[list[str], list[dict]]]
 ```
 
 All matching drawer ids + metadata from sqlite, without opening HNSW.
@@ -364,7 +450,7 @@ sqlite cannot be trusted so the caller can fall back to ``col.get`` paging.
 ### `sqlite_documents_for_ids`
 
 ```python
-def sqlite_documents_for_ids(palace_path: str, collection_name: str, ids: list) -> Optional[dict]
+def sqlite_documents_for_ids(palace_path: str, collection_name: str, ids: list, *, _connection = None) -> Optional[dict]
 ```
 
 ``&#123;drawer_id: document}`` for ``ids`` only, straight from sqlite.
@@ -379,6 +465,36 @@ that filters on it alone degenerates into a full scan of
 Seeking the segment first, then ``embedding_metadata``'s ``(id, key)``
 primary key, keeps both steps on an index.
 
+### `sqlite_diary_rows`
+
+```python
+def sqlite_diary_rows(palace_path: str, collection_name: str, *, agent_name: str, wing: str = '', limit: int = 10) -> Optional[tuple[int, list[tuple[str, Optional[str], dict]]]]
+```
+
+Count physical diary rows and hydrate only the newest ``limit`` rows.
+
+All reads share one SQLite snapshot. Missing timestamps sort as empty
+strings, with storage order breaking ties, matching the diary's paged
+``Collection.get`` path. Non-string timestamps, an ambiguous collection,
+or an unavailable schema return ``None`` for that path to handle instead.
+Queued writes ahead of the metadata watermark also require Chroma's
+recovery path. A missing stored document remains ``None`` as it does in
+Chroma's get. ``limit`` is bounded to the diary API's range of 1..100.
+
+### `sqlite_drawer_rows`
+
+```python
+def sqlite_drawer_rows(palace_path: str, collection_name: str, *, drawer_id: str) -> Optional[tuple[bool, list[tuple[str, Optional[str], dict]]]]
+```
+
+Read a direct drawer, or every scalar-parent-linked physical chunk.
+
+The direct physical id wins over a logical group with the same handle.
+Groups are complete and deduplicated by physical row, with no page cap.
+Missing, unsupported, or unmaterialized records return ``None`` so Chroma
+can recover them or preserve metadata types this scalar reader cannot
+decode. In particular any selected array metadata requires that fallback.
+
 ### `quarantine_invalid_hnsw_metadata`
 
 ```python
@@ -392,3 +508,35 @@ labels but invalid or partial metadata, current Chroma versions can accept
 the pickle and crash later in the Rust loader. We rename the entire segment
 out of the way before ``PersistentClient`` opens so Chroma can rebuild
 cleanly instead of touching known-bad metadata.
+
+### `chroma_system_generation`
+
+```python
+def chroma_system_generation() -> int
+```
+
+Generation of the process-wide Chroma System cache.
+
+Increments each time :func:`_clear_chroma_system_cache` drops the cache.
+A client opened at an older generation is reading a discarded segment.
+
+### `register_before_system_cache_reset`
+
+```python
+def register_before_system_cache_reset(callback) -> None
+```
+
+Run ``callback`` before the shared Chroma System cache is dropped.
+
+``clear_system_cache`` forgets Chroma's maps without stopping Systems.
+Every client this module does not itself own has to be closed while those
+maps still resolve. The callback must not call
+:func:`_clear_chroma_system_cache`.
+
+### `chroma_write_serial`
+
+```python
+def chroma_write_serial() -> int
+```
+
+Number of Chroma writes (add, upsert, update, delete) started in this process.

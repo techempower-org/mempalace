@@ -52,7 +52,7 @@ Returns:
 ### `parse_coordinate_input`
 
 ```python
-def parse_coordinate_input(input_data: Any) -> Tuple[str, Dict[str, Any]]
+def parse_coordinate_input(input_data: Any, _internal: bool = False) -> Tuple[str, Dict[str, Any]]
 ```
 
 Parse input to `palace_coordinate`.

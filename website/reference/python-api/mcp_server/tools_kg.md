@@ -70,7 +70,7 @@ fact changes (e.g. a model, employer, or address changes).
 ### `tool_kg_timeline`
 
 ```python
-def tool_kg_timeline(entity: str = None, as_of: str = None)
+def tool_kg_timeline(entity: str = None, as_of: str = None, limit: int = 100, offset: int = 0)
 ```
 
 Get chronological timeline of facts, optionally for one entity.
@@ -79,6 +79,9 @@ Get chronological timeline of facts, optionally for one entity.
 temporal interval contains the given date/datetime; NULL ends are
 treated as open intervals (same semantics as ``mempalace_kg_query``).
 Omit ``as_of`` to see the full timeline including expired facts.
+
+Paginated with ``limit``/``offset`` following the ``tool_list_drawers``
+convention; defaults match the historical behavior (first 100 facts).
 
 ### `tool_kg_stats`
 

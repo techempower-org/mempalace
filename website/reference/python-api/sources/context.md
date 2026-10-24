@@ -50,7 +50,11 @@ def upsert_drawer(self, record: DrawerRecord) -> None
 Persist a ``DrawerRecord`` to the drawer collection.
 
 Applies the spec-mandated ``adapter_name`` and ``adapter_version``
-metadata stamps (§5.1) so adapters never need to populate them.
+metadata stamps (§5.1), which an adapter may set for itself, and the
+``source_dir_ino`` stamp core records for every drawer that names a
+source file (§5.1, #2320), which it may not: that one is a reading of
+this machine's filesystem, and a value from anywhere else would be a
+number ``sync`` weighs a removal against.
 
 #### `skip_current_item`
 

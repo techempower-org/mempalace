@@ -51,9 +51,9 @@ the first drawers still get labelled with the active model.
 def get_collection(palace_path: str, collection_name: Optional[str] = None, create: bool = True, backend: Optional[str] = None, read_only: bool = False, _skip_identity_check: bool = False, _skip_name_check: bool = False)
 ```
 
-Get a first-class MemPalace collection (drawers or closets).
+Get a first-class MemPalace collection (drawers, closets, or media assets).
 
-The wrapper front-loads exactly two collections and is the public surface
+The wrapper front-loads the drawers, closets, and fixed media asset collections and is the public surface
 MCP, miners, the search layer, and the CLI use to open a palace:
 
 * the **drawers** collection — the verbatim document store. Its name is
@@ -63,6 +63,9 @@ MCP, miners, the search layer, and the CLI use to open a palace:
 * the **closets** collection — the searchable index layer. Always named
   :data:`mempalace.palace.CLOSETS_COLLECTION_NAME`` ("mempalace_closets");
   open it through :func:`mempalace.palace.get_closets_collection`.
+* the **media assets** collection — local image, audio, and video references
+  stored separately from drawer documents. Always named
+  :data:`mempalace.palace.ASSETS_COLLECTION_NAME`.
 
 Any other name points to a store the rest of MemPalace never reads, so data
 upserted through it stays invisible to search/CLI/MCP. ``get_collection``
