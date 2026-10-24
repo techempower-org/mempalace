@@ -215,6 +215,66 @@ def tool_diary_write(
         return {"success": False, "error": str(e), "warnings": warnings}
 
 
+def _diary_read_response(agent_name: str, entries: list, total: int, wing: str = "") -> dict:
+    """One envelope for both read paths (upstream #2650's helper, in the fork's shape: #501 agent-less reads,
+    wing, and ``truncated``)."""
+    if total == 0:
+        return {"agent": agent_name or None, "entries": [], "message": "No diary entries yet."}
+    return {
+        "agent": agent_name or None,
+        "wing": wing or None,
+        "entries": entries,
+        "total": total,
+        "showing": len(entries),
+        # Both paths count the whole room, so the total is exact.
+        "truncated": False,
+    }
+
+
+def _sqlite_diary_read(agent_name: str, last_n: int, wing: str):
+    """Read the requested diary page without cold-loading Chroma's HNSW index.
+
+    ``None`` preserves the collection path for other backends, unavailable
+    databases, unsupported schemas, and records SQLite cannot safely order.
+    This does not cache content or change diary chunk/total semantics.
+    """
+    if not _is_chroma_backend():
+        return None
+    try:
+        from ..backends.chroma import sqlite_diary_rows
+
+        result = sqlite_diary_rows(
+            _config.palace_path,
+            _config.collection_name,
+            agent_name=agent_name,
+            wing=wing,
+            limit=last_n,
+        )
+        if result is None:
+            return None
+        total, rows = result
+        entries = []
+        for drawer_id, doc, meta in rows:
+            meta = _safe_meta(meta)
+            entries.append(
+                {
+                    "drawer_id": drawer_id,
+                    "date": meta.get("date", ""),
+                    "timestamp": meta.get("filed_at", ""),
+                    "topic": meta.get("topic", ""),
+                    "agent": meta.get("agent", ""),
+                    "wing": meta.get("wing", ""),
+                    "content": doc,
+                }
+            )
+        return _diary_read_response(agent_name, entries, total, wing)
+    except Exception:
+        logger.debug("sqlite diary read failed; falling back", exc_info=True)
+        return None
+
+
+
+
 # Diary scans read a bounded page rather than the whole room. The palace
 # daemon runs under a 2 GB cgroup cap and sits near it, so an unbounded
 # metadata sweep is a memory hazard, not merely slow (palace-daemon#256).
@@ -262,6 +322,10 @@ def tool_diary_read(agent_name: str = "", last_n: int = 10, wing: str = ""):
     except ValueError as e:
         return {"error": str(e)}
     last_n = max(1, min(last_n, 100))
+    # The sqlite fast path filters by agent, so the agent-less read (#501) takes the collection path.
+    result = _sqlite_diary_read(agent_name, last_n, wing) if agent_name else None
+    if result is not None:
+        return result
     col = _get_collection()
     if not col:
         return _collection_error_or_no_palace()
@@ -334,18 +398,7 @@ def tool_diary_read(agent_name: str = "", last_n: int = 10, wing: str = ""):
             if len(batch_ids) < _DIARY_READ_PAGE_SIZE:
                 break
 
-        if total == 0:
-            return {"agent": agent_name or None, "entries": [], "message": "No diary entries yet."}
-
-        return {
-            "agent": agent_name or None,
-            "wing": wing or None,
-            "entries": entries,
-            "total": total,
-            "showing": len(entries),
-            # Paging reads the whole room, so the total is exact.
-            "truncated": False,
-        }
+        return _diary_read_response(agent_name, entries, total, wing)
     except Exception:
         logger.exception("diary_read failed")
         return {"error": "Failed to read diary entries"}

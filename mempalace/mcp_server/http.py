@@ -135,7 +135,7 @@ _HTTP_EMBEDDING_RELEASE_TOOLS = frozenset(
         "mempalace_diary_write",
     }
 )
-# Taken while a request has released the request lock mid-embedding so
+# Reserved before a request releases the request lock mid-embedding so
 # ``mempalace_reconnect`` cannot close backend handles during that window.
 # Reconnect acquires this before the request lock; embedding reacquires the
 # request lock before releasing this one.
@@ -485,9 +485,10 @@ def _http_release_request_lock_for_embedding(mode: str):
     acquired ``_HTTP_REQUEST_LOCK`` for this request. Nested embedding calls
     on the same thread do not double-release.
 
-    The request lease is taken back before the lifecycle lock is dropped, so
-    reconnect (which takes the lifecycle lock first) cannot close handles in
-    the gap.
+    Reserve lifecycle protection before dropping the request lease. If it is
+    already held, keep the request lease through inference: its owner may be
+    a reconnect waiting for this lease, so waiting here would deadlock. On
+    the responsive path the lease is taken back before lifecycle is dropped.
     """
     depth = getattr(_http_embedding_release_tls, "depth", 0)
     _http_embedding_release_tls.depth = depth + 1
@@ -495,21 +496,24 @@ def _http_release_request_lock_for_embedding(mode: str):
         if depth > 0:
             yield
             return
-        if mode == "read":
-            _HTTP_REQUEST_LOCK.release_read()
-        else:
-            _HTTP_REQUEST_LOCK.release_write()
-        _HTTP_EMBEDDING_LIFECYCLE_LOCK.acquire()
-        try:
+        if not _HTTP_EMBEDDING_LIFECYCLE_LOCK.acquire(blocking=False):
             yield
-        finally:
-            # Reacquire even when inference raises, then drop the lifecycle
-            # lock. The opposite order lets reconnect in while this request
-            # still does not hold its lease.
+            return
+        try:
             if mode == "read":
-                _HTTP_REQUEST_LOCK.acquire_read()
+                _HTTP_REQUEST_LOCK.release_read()
             else:
-                _HTTP_REQUEST_LOCK.acquire_write()
+                _HTTP_REQUEST_LOCK.release_write()
+            try:
+                yield
+            finally:
+                # Reacquire even when inference raises, before reconnect can
+                # obtain lifecycle protection and close the captured handle.
+                if mode == "read":
+                    _HTTP_REQUEST_LOCK.acquire_read()
+                else:
+                    _HTTP_REQUEST_LOCK.acquire_write()
+        finally:
             _HTTP_EMBEDDING_LIFECYCLE_LOCK.release()
     finally:
         _http_embedding_release_tls.depth = depth
@@ -1348,7 +1352,7 @@ def _serve_http(host: str, port: int) -> None:
                 port=bound_port,
                 scheme=getattr(httpd, "scheme", "http"),
                 read_only=_READ_ONLY,
-                capabilities=["search_cli_compatible"],
+                capabilities=["mine_include_ignored", "search_cli_compatible"],
                 search_config_fingerprint=_config.search_config_fingerprint,
             )
             import atexit

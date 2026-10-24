@@ -95,7 +95,7 @@ class MinedSetUnavailable(RuntimeError):
     """
 
 
-def _fast_collection_metadata(collection, keys, require_key=None):
+def _fast_collection_metadata(collection, keys, require_key=None, equals=None):
     """Chroma's one-pass sqlite metadata stream, or ``None`` for other backends.
 
     Paging ``get(limit, offset)`` costs a SQL ``OFFSET`` per page, which
@@ -107,7 +107,9 @@ def _fast_collection_metadata(collection, keys, require_key=None):
 
     inner = collection._inner if isinstance(collection, EmbeddingCollection) else collection
     if isinstance(inner, ChromaCollection):
-        return inner.iter_metadata(keys, require_key=require_key)
+        if equals is None:
+            return inner.iter_metadata(keys, require_key=require_key)
+        return inner.iter_metadata(keys, require_key=require_key, equals=equals)
     return None
 
 

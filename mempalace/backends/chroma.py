@@ -2229,6 +2229,7 @@ def _sqlite_iter_metadata(
     collection_name: str,
     keys: Optional[Iterable[str]],
     require_key: Optional[str],
+    equals: Optional[dict] = None,
 ) -> Iterator[Optional[dict]]:
     """Stream each drawer's metadata from an open chroma.sqlite3 connection, in row order.
 
@@ -2236,9 +2237,12 @@ def _sqlite_iter_metadata(
     them is skipped. With ``keys=None``, every non-internal key is read and a
     drawer without metadata yields ``None``, the way Chroma's ``get`` returns
     it. ``require_key`` limits the scan to drawers holding a string value
-    under that key, found through the ``(key, string_value)`` index. Chroma's
-    own paging is a SQL ``OFFSET``, which re-walks every skipped row, so a
-    full pass that way is quadratic in the number of drawers.
+    under that key, found through the ``(key, string_value)`` index.
+    ``equals`` limits it further to drawers whose string value under each key
+    equals the given one, through the same index, so a pass over one wing
+    reads that wing's rows rather than the whole collection. Chroma's own
+    paging is a SQL ``OFFSET``, which re-walks every skipped row, so a full
+    pass that way is quadratic in the number of drawers.
     """
     scope = """
         SELECT e.id FROM embeddings e
@@ -2251,6 +2255,10 @@ def _sqlite_iter_metadata(
         scope += """ AND e.id IN (SELECT r.id FROM embedding_metadata r
                      WHERE r.key = ? AND r.string_value IS NOT NULL)"""
         params.append(require_key)
+    for key, value in (equals or {}).items():
+        scope += """ AND e.id IN (SELECT r.id FROM embedding_metadata r
+                     WHERE r.key = ? AND r.string_value = ?)"""
+        params.extend((key, value))
     # Older chromadb schemas lack bool_value; select NULL for any value
     # column the table does not have so the row shape stays fixed.
     present = set(_metadata_value_columns(conn))
@@ -2555,6 +2563,261 @@ def sqlite_documents_for_ids(
     except sqlite3.Error:
         return None
     return docs
+
+
+def _sqlite_ready_metadata_segment(conn, collection_name):
+    """Return the unique collection/metadata segment only after queued writes landed.
+
+    The caller must keep this check and its reads in one explicit transaction.
+    Missing or ambiguous recovery state requires the normal Chroma path.
+    """
+    collections = conn.execute(
+        "SELECT id FROM collections WHERE name = ?", (collection_name,)
+    ).fetchall()
+    if len(collections) != 1:
+        return None
+    collection_id = collections[0][0]
+    segments = conn.execute(
+        "SELECT id FROM segments WHERE collection = ? AND scope = 'METADATA'",
+        (collection_id,),
+    ).fetchall()
+    if len(segments) != 1:
+        return None
+    segment_id = segments[0][0]
+    watermark = conn.execute(
+        "SELECT seq_id FROM max_seq_id WHERE segment_id = ?", (segment_id,)
+    ).fetchone()
+    suffix = f"/{collection_id}"
+    if watermark is None:
+        # A never-written collection has no watermark. Existing rows
+        # or a queued write make that missing state untrustworthy.
+        if (
+            conn.execute(
+                "SELECT 1 FROM embeddings WHERE segment_id = ? LIMIT 1", (segment_id,)
+            ).fetchone()
+            or conn.execute(
+                "SELECT 1 FROM embeddings_queue WHERE substr(topic, -length(?)) = ? LIMIT 1",
+                (suffix, suffix),
+            ).fetchone()
+        ):
+            return None
+        consumed = 0
+    else:
+        consumed = watermark[0]
+        if isinstance(consumed, bytes):
+            # Older Chroma stored big-endian 8-byte offsets. The
+            # newer \x11\x11-prefixed format is not that encoding.
+            if len(consumed) != 8 or consumed.startswith(b"\x11\x11"):
+                return None
+            consumed = int.from_bytes(consumed, "big")
+        if not isinstance(consumed, int) or not 0 <= consumed <= (1 << 63) - 1:
+            return None
+    # Legacy Collection.get backfills queued operations first. Read
+    # only when the metadata segment has already consumed them; the
+    # vector segment's lag does not affect stored text or metadata.
+    if conn.execute(
+        "SELECT 1 FROM embeddings_queue WHERE seq_id > ? AND substr(topic, -length(?)) = ? LIMIT 1",
+        (consumed, suffix, suffix),
+    ).fetchone():
+        return None
+    return collection_id, segment_id
+
+
+def _sqlite_hydrate_rows(conn, selected, value_columns):
+    """Hydrate scalar metadata/documents only for selected internal row ids."""
+    records = {row_id: [drawer_id, None, {}] for row_id, drawer_id in selected}
+    for start in range(0, len(selected), 500):
+        row_ids = [row_id for row_id, _ in selected[start : start + 500]]
+        marks = ",".join("?" for _ in row_ids)
+        rows = conn.execute(
+            f"SELECT id, key, {', '.join(value_columns)} FROM embedding_metadata"
+            f" WHERE id IN ({marks})",
+            row_ids,
+        )
+        for row_id, key, *cells in rows:
+            values = dict(zip(value_columns, cells))
+            value = _metadata_cell_value(
+                *(
+                    values.get(col)
+                    for col in ("string_value", "int_value", "float_value", "bool_value")
+                )
+            )
+            if key == "chroma:document":
+                records[row_id][1] = value
+            elif key is not None and not key.startswith("chroma:") and value is not None:
+                # Collection.get keeps internal fields (notably chroma:uri)
+                # out of user metadata, even when URIs were stored with rows.
+                records[row_id][2][key] = value
+    return [tuple(records[row_id]) for row_id, _ in selected]
+
+
+def sqlite_diary_rows(
+    palace_path: str,
+    collection_name: str,
+    *,
+    agent_name: str,
+    wing: str = "",
+    limit: int = 10,
+) -> Optional[tuple[int, list[tuple[str, Optional[str], dict]]]]:
+    """Count physical diary rows and hydrate only the newest ``limit`` rows.
+
+    All reads share one SQLite snapshot. Missing timestamps sort as empty
+    strings, with storage order breaking ties, matching the diary's paged
+    ``Collection.get`` path. Non-string timestamps, an ambiguous collection,
+    or an unavailable schema return ``None`` for that path to handle instead.
+    Queued writes ahead of the metadata watermark also require Chroma's
+    recovery path. A missing stored document remains ``None`` as it does in
+    Chroma's get. ``limit`` is bounded to the diary API's range of 1..100.
+    """
+    db_path = os.path.join(palace_path, "chroma.sqlite3")
+    if not os.path.isfile(db_path) or not isinstance(limit, int):
+        return None
+    limit = max(1, min(limit, 100))
+    equalities = [("room", "diary"), ("agent", agent_name)]
+    if wing:
+        equalities.append(("wing", wing))
+    try:
+        conn = open_palace_reader(db_path)
+        try:
+            conn.execute("PRAGMA busy_timeout = 3000")
+            conn.execute("BEGIN")
+            ready = _sqlite_ready_metadata_segment(conn, collection_name)
+            if ready is None:
+                return None
+            collection_id, _segment_id = ready
+            value_columns = _metadata_value_columns(conn)
+            if "string_value" not in value_columns:
+                return None
+
+            # Drive from the smallest indexed metadata equality. Driving from
+            # embeddings instead scans the entire palace for a sparse diary.
+            sizes = [
+                conn.execute(
+                    "SELECT COUNT(*) FROM embedding_metadata WHERE key = ? AND string_value = ?",
+                    pair,
+                ).fetchone()[0]
+                for pair in equalities
+            ]
+            drive = sizes.index(min(sizes))
+            remaining = equalities[:drive] + equalities[drive + 1 :]
+            filters = "".join(
+                " AND EXISTS (SELECT 1 FROM embedding_metadata w"
+                " WHERE w.id = f.id AND w.key = ? AND w.string_value = ?)"
+                for _ in remaining
+            )
+            scope = f"""
+                FROM embedding_metadata f
+                CROSS JOIN embeddings e ON e.id = f.id
+                JOIN segments s ON s.id = e.segment_id
+                LEFT JOIN embedding_metadata stamp ON stamp.id = e.id AND stamp.key = 'filed_at'
+                WHERE f.key = ? AND f.string_value = ?
+                  AND s.collection = ? AND s.scope = 'METADATA'
+                {filters}
+            """
+            params = [
+                *equalities[drive],
+                collection_id,
+                *[part for pair in remaining for part in pair],
+            ]
+            unsupported_timestamp = "(stamp.id IS NOT NULL AND stamp.string_value IS NULL)"
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'embedding_metadata_array'"
+            ).fetchone():
+                # The legacy diary response exposes these values unchanged.
+                # Array hydration is not this scalar reader's responsibility;
+                # an array timestamp must not be mistaken for a missing one.
+                unsupported_timestamp += (
+                    " OR EXISTS (SELECT 1 FROM embedding_metadata_array a"
+                    " WHERE a.id = f.id AND a.key IN ('filed_at', 'date', 'topic'))"
+                )
+            total, unsupported = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(CASE WHEN "
+                + unsupported_timestamp
+                + " THEN 1 ELSE 0 END), 0) "
+                + scope,
+                params,
+            ).fetchone()
+            if unsupported:
+                return None
+            selected = conn.execute(
+                "SELECT e.id, e.embedding_id "
+                + scope
+                + " ORDER BY COALESCE(stamp.string_value, '') DESC, e.id LIMIT ?",
+                [*params, limit],
+            ).fetchall()
+            if not selected:
+                return total, []
+
+            return total, _sqlite_hydrate_rows(conn, selected, value_columns)
+        finally:
+            conn.close()
+    except (sqlite3.Error, ValueError):
+        return None
+
+
+def sqlite_drawer_rows(
+    palace_path: str,
+    collection_name: str,
+    *,
+    drawer_id: str,
+) -> Optional[tuple[bool, list[tuple[str, Optional[str], dict]]]]:
+    """Read a direct drawer, or every scalar-parent-linked physical chunk.
+
+    The direct physical id wins over a logical group with the same handle.
+    Groups are complete and deduplicated by physical row, with no page cap.
+    Missing, unsupported, or unmaterialized records return ``None`` so Chroma
+    can recover them or preserve metadata types this scalar reader cannot
+    decode. In particular any selected array metadata requires that fallback.
+    """
+    db_path = os.path.join(palace_path, "chroma.sqlite3")
+    if not os.path.isfile(db_path):
+        return None
+    try:
+        conn = open_palace_reader(db_path)
+        try:
+            conn.execute("PRAGMA busy_timeout = 3000")
+            conn.execute("BEGIN")
+            ready = _sqlite_ready_metadata_segment(conn, collection_name)
+            if ready is None:
+                return None
+            _collection_id, segment_id = ready
+            value_columns = _metadata_value_columns(conn)
+            if "string_value" not in value_columns:
+                return None
+            selected = conn.execute(
+                "SELECT id, embedding_id FROM embeddings"
+                " WHERE segment_id = ? AND embedding_id = ? ORDER BY id",
+                (segment_id, drawer_id),
+            ).fetchall()
+            direct = bool(selected)
+            if not direct:
+                # The composite key/string index drives the parent search;
+                # each row's internal id then seeks its embedding by PK.
+                selected = conn.execute(
+                    "SELECT DISTINCT e.id, e.embedding_id FROM embedding_metadata p"
+                    " CROSS JOIN embeddings e ON e.id = p.id"
+                    " WHERE p.key IN ('parent_drawer_id', 'parent_entry_id')"
+                    " AND p.string_value = ? AND e.segment_id = ? ORDER BY e.id",
+                    (drawer_id, segment_id),
+                ).fetchall()
+            if not selected:
+                return None
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'embedding_metadata_array'"
+            ).fetchone():
+                for start in range(0, len(selected), 500):
+                    row_ids = [row_id for row_id, _ in selected[start : start + 500]]
+                    marks = ",".join("?" for _ in row_ids)
+                    if conn.execute(
+                        f"SELECT 1 FROM embedding_metadata_array WHERE id IN ({marks}) LIMIT 1",
+                        row_ids,
+                    ).fetchone():
+                        return None
+            return direct, _sqlite_hydrate_rows(conn, selected, value_columns)
+        finally:
+            conn.close()
+    except (sqlite3.Error, ValueError):
+        return None
 
 
 def _pin_hnsw_threads(collection) -> None:
@@ -3422,11 +3685,15 @@ class ChromaCollection(BaseCollection):
         return self._collection.count()
 
     def iter_metadata(
-        self, keys: Optional[Iterable[str]] = None, *, require_key: Optional[str] = None
+        self,
+        keys: Optional[Iterable[str]] = None,
+        *,
+        require_key: Optional[str] = None,
+        equals: Optional[dict] = None,
     ) -> Optional[Iterator[Optional[dict]]]:
         """Stream every drawer's metadata from chroma.sqlite3 in one linear pass.
 
-        ``keys`` and ``require_key`` narrow the read (see
+        ``keys``, ``require_key`` and ``equals`` narrow the read (see
         :func:`_sqlite_iter_metadata`). Returns ``None`` when this collection
         has no palace path or no database file, so the caller can page through
         :meth:`get` instead. A read error raises from the iterator.
@@ -3441,7 +3708,7 @@ class ChromaCollection(BaseCollection):
         def rows():
             conn = open_palace_reader(db_path)
             try:
-                yield from _sqlite_iter_metadata(conn, name, keys, require_key)
+                yield from _sqlite_iter_metadata(conn, name, keys, require_key, equals)
             finally:
                 conn.close()
 
@@ -3620,7 +3887,9 @@ class ChromaCollection(BaseCollection):
                 # If a metadata filter is present, do not cap before filtering:
                 # otherwise a common term can fill the window with wrong-scope
                 # rows and hide valid scoped hits later in the FTS result set.
-                limit_sql = "" if where else "LIMIT ?"
+                # Without a filter, rank the window so it holds the best matches
+                # rather than the first ones filed.
+                limit_sql = "" if where else "ORDER BY embedding_fulltext_search.rank LIMIT ?"
                 params = [fts_query, collection_name]
                 if not where:
                     params.append(max(max_candidates, n_results))

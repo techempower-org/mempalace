@@ -190,3 +190,24 @@ def test_compute_with_no_surviving_pairs_still_clears_the_wing(recording):
 
     assert ("replace_wing", "kiyo", 0) in recording.calls
     assert recording.records == []
+
+
+def test_the_json_store_uses_the_module_that_created_it(tmp_path, monkeypatch):
+    """A hallways module dropped from sys.modules (as patch.dict does to one first imported inside it) and then
+    imported again leaves two copies. The store must keep using its caller's copy, whose file a test patched, not
+    import the other, whose helpers resolve the real default hallway file (fork, 2026-10-23)."""
+    import importlib
+    import sys
+
+    import mempalace
+    import mempalace.hallways as orphan
+
+    monkeypatch.delitem(sys.modules, "mempalace.hallways")
+    monkeypatch.setattr(mempalace, "hallways", orphan)          # restored after the fresh import replaces it
+    fresh = importlib.import_module("mempalace.hallways")   # the package attribute now points at the fresh copy
+    assert fresh is not orphan and mempalace.hallways is fresh
+
+    monkeypatch.setattr(orphan, "_get_hallway_file", lambda *a, **k: str(tmp_path / "hallways.json"))
+    monkeypatch.setattr(fresh, "_get_hallway_file", lambda *a, **k: str(tmp_path / "wrong.json"))
+    orphan._save_hallways([{"id": "x", "wing": "w", "entity_a": "a", "entity_b": "b"}])
+    assert [h["id"] for h in orphan._hallway_store(None).iter()] == ["x"]

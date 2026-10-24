@@ -27,6 +27,7 @@ import os
 import threading
 import time
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .config import MempalaceConfig, normalize_wing_name
@@ -448,8 +449,6 @@ def build_graph(col=None, config=None):
         if pg_result is not None:
             return pg_result
 
-    
-
     room_data = defaultdict(lambda: {"wings": set(), "halls": set(), "count": 0, "dates": set()})
 
     for meta in _iter_all_metadata(col):
@@ -826,6 +825,122 @@ def _check_room_exists(wing: str, room: str, col) -> bool:
         return True
 
 
+# Per-thread map of open tunnel batches, keyed by the normalized tunnel file.
+# Thread-local so a batch never leaks unsaved state into another thread: a
+# second thread's create_tunnel still takes mine_lock and waits for the batch
+# to persist, exactly as it waits for another per-call create today.
+_TUNNEL_BATCH = threading.local()
+
+
+def _tunnel_batch_key(tunnel_file: str) -> str:
+    return os.path.normcase(os.path.abspath(tunnel_file))
+
+
+class _TunnelBatchState:
+    """Tunnels held in memory for one :func:`tunnel_batch`.
+
+    The file is read on first use, not on entry, so a batch that ends up
+    creating nothing (no shared topics, no entity links) costs no load and
+    no save — the same as the per-call path, which never touched the file.
+    """
+
+    def __init__(self, config):
+        self.config = config
+        self.tunnels = None
+        self.index = None
+        self.dirty = False
+
+    def load(self):
+        if self.tunnels is None:
+            self.tunnels = _load_tunnels(self.config)
+            # setdefault keeps the first record for a duplicated id, matching
+            # the per-call path's linear scan.
+            self.index = {}
+            for t in self.tunnels:
+                if isinstance(t, dict):
+                    self.index.setdefault(t.get("id"), t)
+        return self.tunnels
+
+
+def _active_tunnel_batch(tunnel_file: str):
+    batches = getattr(_TUNNEL_BATCH, "batches", None)
+    if not batches:
+        return None
+    return batches.get(_tunnel_batch_key(tunnel_file))
+
+
+@contextmanager
+def tunnel_batch(config=None):
+    """Load tunnels once, mutate them in memory, persist once on exit.
+
+    Inside the batch, :func:`create_tunnel` calls for the same tunnel file
+    insert or update through an id index instead of loading, scanning and
+    rewriting the whole file per tunnel (#2683). The mine's tunnel passes
+    run inside one; outside a batch every call still loads, mutates and
+    saves on its own, so MCP tools and explicit user tunnels are unchanged.
+
+    The tunnel file's ``mine_lock`` is held for the whole batch. The save
+    runs in ``finally``, so a crash mid-batch persists what was created
+    before it, as the per-call save did. Nesting on the same file reuses
+    the outer batch.
+
+    Only ``create_tunnel`` reads the in-memory state. Other tunnel helpers
+    (``list_tunnels``, ``follow_tunnels``, ``delete_tunnel``,
+    ``record_tunnel_traversal``) read the file and must not be called for
+    the same file inside a batch: they would see the pre-batch state, and
+    the writers would block on the lock this batch holds.
+    """
+    config = config or MempalaceConfig()
+    tunnel_file = _get_tunnel_file(config)
+    if _active_tunnel_batch(tunnel_file) is not None:
+        yield
+        return
+    key = _tunnel_batch_key(tunnel_file)
+    with mine_lock(tunnel_file):
+        state = _TunnelBatchState(config)
+        batches = getattr(_TUNNEL_BATCH, "batches", None)
+        if batches is None:
+            batches = _TUNNEL_BATCH.batches = {}
+        batches[key] = state
+        try:
+            yield
+        finally:
+            del batches[key]
+            if state.dirty:
+                _save_tunnels(state.tunnels, config)
+
+
+def _upsert_tunnel(tunnels: list, existing, tunnel: dict) -> dict:
+    """Insert ``tunnel`` into ``tunnels``, or refresh ``existing`` in place.
+
+    Shared by the per-call and batched paths of :func:`create_tunnel` so
+    both store identical records. Returns the stored dict.
+    """
+    if existing is not None:
+        # Preserve original creation timestamp on label updates.
+        tunnel["created_at"] = existing.get("created_at", tunnel["created_at"])
+        tunnel["updated_at"] = datetime.now(timezone.utc).isoformat()
+        # Preserve L7 dynamics fields across re-creation events.
+        # Without this, a label update (or any re-create) would
+        # reset the connection's strength / stability / access_count
+        # — defeating the living-connection layer. Backfill any
+        # still-missing fields so legacy records also pick up
+        # defaults on next touch. Per PR #1578 review
+        # (gemini-code-assist, medium priority): use dict-update
+        # with a comprehension so the field list lives in one place
+        # and future schema expansion can't drop a field by accident.
+        _dyn_fields = ("strength", "stability", "last_activated", "access_count")
+        tunnel.update({k: existing[k] for k in _dyn_fields if k in existing})
+        initialize_dynamics_fields(tunnel)
+        existing.clear()
+        existing.update(tunnel)
+        return existing
+    # Brand-new tunnel — initialize dynamics from defaults.
+    initialize_dynamics_fields(tunnel)
+    tunnels.append(tunnel)
+    return tunnel
+
+
 def create_tunnel(
     source_wing: str,
     source_room: str,
@@ -902,9 +1017,6 @@ def create_tunnel(
     )[0]
 
 
-_TUNNEL_DYNAMICS_FIELDS = ("strength", "stability", "last_activated", "access_count")
-
-
 def _build_tunnel(spec: dict) -> dict:
     """The tunnel record for one spec, before it meets what is on disk."""
     tunnel = {
@@ -921,40 +1033,6 @@ def _build_tunnel(spec: dict) -> dict:
         tunnel["source"]["drawer_id"] = spec["source_drawer_id"]
     if spec.get("target_drawer_id"):
         tunnel["target"]["drawer_id"] = spec["target_drawer_id"]
-    return tunnel
-
-
-def _apply_tunnel(spec: dict, tunnels: list, by_id: dict) -> dict:
-    """Merge one spec into an in-memory tunnel list. No I/O.
-
-    Exactly the create-or-refresh rule the per-call path always had: an
-    existing tunnel with the same canonical id keeps its ``created_at`` and
-    its accumulated L7 dynamics, gains an ``updated_at``, and is updated in
-    place; anything else is appended with dynamics defaults.
-
-    ``by_id`` makes the lookup O(1). The per-call path rescanned the whole
-    list for every tunnel, so a batch that reused it would trade one
-    quadratic term for another.
-    """
-    tunnel = _build_tunnel(spec)
-    existing = by_id.get(tunnel["id"])
-    if existing is not None:
-        # Preserve original creation timestamp on label updates.
-        tunnel["created_at"] = existing.get("created_at", tunnel["created_at"])
-        tunnel["updated_at"] = datetime.now(timezone.utc).isoformat()
-        # Preserve L7 dynamics across re-creation events. Without this, a
-        # label update (or any rebuild) would reset the connection's
-        # strength / stability / access_count — defeating the
-        # living-connection layer. Backfill any still-missing fields so
-        # legacy records also pick up defaults on next touch.
-        tunnel.update({k: existing[k] for k in _TUNNEL_DYNAMICS_FIELDS if k in existing})
-        initialize_dynamics_fields(tunnel)
-        existing.clear()
-        existing.update(tunnel)
-        return existing
-    initialize_dynamics_fields(tunnel)
-    tunnels.append(tunnel)
-    by_id[tunnel["id"]] = tunnel
     return tunnel
 
 
@@ -1008,13 +1086,34 @@ def create_tunnels(specs: list, config=None) -> list:
                     f"in wing '{spec['target_wing']}'"
                 )
 
-    # Serialize the load → mutate → save cycle. Without this, two concurrent
-    # writers can both read the same snapshot and the later one silently
-    # drops the earlier one's tunnels.
-    with mine_lock(_get_tunnel_file(config)):
+    # One load and one save, under the tunnel file's lock: upstream's tunnel_batch (#2683), which also makes a
+    # create_tunnel inside an outer batch join it instead of waiting on the lock that batch holds. Results are
+    # snapshots, as upstream's batched create_tunnel returns them.
+    tunnel_file = _get_tunnel_file(config)
+
+    def _apply(tunnels: list, index: dict) -> list:
+        out = []
+        for spec in specs:
+            tunnel = _build_tunnel(spec)
+            stored = _upsert_tunnel(tunnels, index.get(tunnel["id"]), tunnel)
+            index[tunnel["id"]] = stored
+            out.append(dict(stored))
+        return out
+
+    with tunnel_batch(config):
+        batch = _active_tunnel_batch(tunnel_file)
+        if batch is not None:
+            results = _apply(batch.load(), batch.index)
+            batch.dirty = True
+            return results
+    # No batch machinery (a caller replaced it): one locked load and save, the per-call path's contract.
+    with mine_lock(tunnel_file):
         tunnels = _load_tunnels(config)
-        by_id = {t.get("id"): t for t in tunnels if isinstance(t, dict) and t.get("id")}
-        results = [_apply_tunnel(spec, tunnels, by_id) for spec in specs]
+        index: dict = {}
+        for t in tunnels:
+            if isinstance(t, dict):
+                index.setdefault(t.get("id"), t)
+        results = _apply(tunnels, index)
         _save_tunnels(tunnels, config)
     return results
 
@@ -1381,22 +1480,25 @@ def topic_tunnels_for_wing(
     # ``compute_topic_tunnels`` keeps the threshold and casing logic in
     # one place.
     created: list[dict] = []
-    for other, other_topics in topics_by_wing.items():
-        if not isinstance(other, str) or not other.strip():
-            continue
-        if normalize_wing_name(other.strip()) == wing:
-            continue
-        if not isinstance(other_topics, (list, tuple)) or not other_topics:
-            continue
-        slice_map = {wing: list(own), other: list(other_topics)}
-        created.extend(
-            compute_topic_tunnels(
-                slice_map,
-                min_count=min_count,
-                label_prefix=label_prefix,
-                config=config,
+    # One batch across every per-pair call; each nested compute_topic_tunnels
+    # batch reuses this one instead of saving per other wing.
+    with tunnel_batch(config):
+        for other, other_topics in topics_by_wing.items():
+            if not isinstance(other, str) or not other.strip():
+                continue
+            if normalize_wing_name(other.strip()) == wing:
+                continue
+            if not isinstance(other_topics, (list, tuple)) or not other_topics:
+                continue
+            slice_map = {wing: list(own), other: list(other_topics)}
+            created.extend(
+                compute_topic_tunnels(
+                    slice_map,
+                    min_count=min_count,
+                    label_prefix=label_prefix,
+                    config=config,
+                )
             )
-        )
     return created
 
 

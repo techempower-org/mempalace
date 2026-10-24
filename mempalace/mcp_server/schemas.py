@@ -639,6 +639,14 @@ TOOLS = {
                         "Ignored by other modes."
                     ),
                 },
+                "include_ignored": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Project-relative paths to scan even if ignored, matching CLI "
+                        "--include-ignored. Projects mode only; default: []."
+                    ),
+                },
             },
             "required": ["source"],
         },
@@ -1048,8 +1056,9 @@ TOOLS = {
             " peer's event syncs in whenever it arrives, so it can already be older than a"
             " timestamp cursor and be missed permanently; since_created_at is a time window"
             " ('what happened today'), not a cursor. Pass preview=true when sweeping a busy"
-            " stream. to_agent=<you> also matches '*' broadcasts. To wait for future events, use"
-            " mempalace_event_wait."
+            " stream. to_agent=<you> also matches '*' broadcasts. writer=<agent> filters by who"
+            " wrote an event; from_agent is your identity and never filters. To wait for"
+            " future events, use mempalace_event_wait."
         ),
         "input_schema": {
             "type": "object",
@@ -1062,7 +1071,17 @@ TOOLS = {
                     "type": "string",
                     "description": "Filter by target agent; also matches '*' broadcasts (optional)",
                 },
-                "from_agent": {"type": "string", "description": "Filter by writer (optional)"},
+                "from_agent": {
+                    "type": "string",
+                    "description": (
+                        "Your agent identity (optional). NOT a filter: it never narrows the result."
+                        " To filter by who wrote an event use writer."
+                    ),
+                },
+                "writer": {
+                    "type": "string",
+                    "description": "Filter by the agent that wrote the event (optional)",
+                },
                 "correlation_id": {
                     "type": "string",
                     "description": "Filter by correlation id (optional)",
@@ -1126,7 +1145,17 @@ TOOLS = {
                     "type": "string",
                     "description": "Filter by target agent; also matches '*' broadcasts (optional)",
                 },
-                "from_agent": {"type": "string", "description": "Filter by writer (optional)"},
+                "from_agent": {
+                    "type": "string",
+                    "description": (
+                        "Your agent identity (optional). NOT a filter: it never narrows the result."
+                        " To filter by who wrote an event use writer."
+                    ),
+                },
+                "writer": {
+                    "type": "string",
+                    "description": "Filter by the agent that wrote the event (optional)",
+                },
                 "correlation_id": {
                     "type": "string",
                     "description": "Filter by correlation id (optional)",
