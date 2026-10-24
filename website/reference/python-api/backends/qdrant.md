@@ -84,6 +84,20 @@ already use, so this can't independently drift from those call
 sites. (Maintainer review on #1832: avoid duplicating the filter
 dance inline.)
 
+#### `get_all_rows`
+
+```python
+def get_all_rows(self, where: Optional[dict] = None, include: Optional[list[str]] = None) -> GetResult
+```
+
+Every matching row's id plus the requested fields in one cursor pass.
+
+Same reasoning as :meth:`get_all_metadata` (#1796): the default
+implementation would call ``get(limit=, offset=)`` in a loop, and each
+of those calls re-walks the collection from the start (#2452 measured
+275 s for ``list_drawers`` on 126k drawers). ``_rows()`` already has
+every id in hand, so hand them back instead of discarding them.
+
 #### `facet_counts`
 
 ```python

@@ -4,7 +4,16 @@ Source: [`mempalace/config.py`](https://github.com/techempower-org/mempalace/blo
 
 MemPalace configuration system.
 
-Priority: env vars > config file (~/.mempalace/config.json) > defaults
+Priority: env vars > config file > defaults.
+
+The default config directory follows the XDG Base Directory Specification
+(https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html)
+with back-compat for existing installs:
+
+  1. $MEMPALACE_CONFIG_DIR if set (explicit override, used by tests and CI)
+  2. ~/.mempalace if it already exists (existing installs keep working)
+  3. $XDG_CONFIG_HOME/mempalace if XDG_CONFIG_HOME is set
+  4. ~/.config/mempalace (XDG default fallback)
 
 ## Classes
 
@@ -24,7 +33,8 @@ Initialize config.
 
 Args:
     config_dir: Override config directory (useful for testing).
-                Defaults to ~/.mempalace.
+                Defaults to the XDG-aware base directory — see
+                _default_config_dir() for the resolution order.
     palace_path: Explicit palace data directory. This is primarily
                  used by CLI operations that received ``--palace``;
                  it takes precedence over environment and file config.
@@ -111,6 +121,18 @@ Garbage values fall back to defaults; a missing/empty command
 disables (fail-open to "off": a typo must never make the CLI
 run an unexpected shell command).
 
+#### `config_dir`
+
+```python
+def config_dir(self)
+```
+
+Active config directory (XDG-aware).
+
+Public accessor for the resolved config-dir path so callers outside
+``config.py`` can derive sibling locations (write-ahead-log dir,
+cache dir, etc.) without reaching into ``_config_dir``.
+
 #### `palace_path`
 
 ```python
@@ -118,6 +140,9 @@ def palace_path(self)
 ```
 
 Path to the memory palace data directory.
+
+Defaults to a "palace" sub-directory inside the active config
+directory, so the palace follows the config wherever XDG places it.
 
 #### `tunnel_file`
 
@@ -508,6 +533,24 @@ def pgvector_namespace(self)
 
 Optional pgvector table namespace/prefix for multi-tenant isolation.
 
+#### `pgvector_shared_namespace`
+
+```python
+def pgvector_shared_namespace(self)
+```
+
+Optional shared table namespace for a pgvector palace spanning hosts.
+
+By default the pgvector backend derives each table name from a hash of
+the palace's *local* path, so several machines pointed at one Postgres
+silently write to separate tables instead of sharing memory. Set this to
+any name the whole fleet agrees on (letters, digits and ``_ - . / :``
+or spaces) and every node resolves the same tables.
+
+Leave unset — the default — for single-machine palaces; table naming is
+then exactly as before and no migration is needed. It is orthogonal to
+``pgvector_namespace``, which stays the tenant-isolation dimension.
+
 #### `people_map`
 
 ```python
@@ -614,7 +657,8 @@ def embedding_device(self)
 Hardware device for the ONNX embedding model.
 
 Values: ``"auto"`` (default), ``"cpu"``, ``"cuda"``, ``"coreml"``,
-``"dml"``. Read from env ``MEMPALACE_EMBEDDING_DEVICE`` first, then
+``"dml"``; ``embeddinggemma2`` (PyTorch) takes ``"auto"``, ``"cpu"``,
+``"cuda"`` and ``"mps"`` (see :mod:`mempalace.embedding`). Read from env ``MEMPALACE_EMBEDDING_DEVICE`` first, then
 ``embedding_device`` in ``config.json``, then ``"auto"``.
 
 ``auto`` resolves to the first available accelerator at runtime via
@@ -633,18 +677,26 @@ Values: ``"minilm"`` (ChromaDB's all-MiniLM-L6-v2 — English-only),
 ``"embeddinggemma"`` (multilingual, 100+ languages, default for
 new installs since onboarding writes the choice), ``"adaptmem_ft"``
 (a local fine-tuned SentenceTransformer checkpoint — see
-:attr:`adaptmem_path`), or ``"openai-compat"`` (embeddings served by
-an OpenAI-compatible ``/v1/embeddings`` endpoint — see
-``embedding_api_url`` / ``embedding_api_model`` /
-``embedding_api_key``). Read from env ``MEMPALACE_EMBEDDING_MODEL``
-first, then ``embedding_model`` in ``config.json``, then ``"minilm"``
-as a back-compat fallback for palaces created before onboarding asked
-the question.
+:attr:`adaptmem_path`), ``"embeddinggemma2"`` (Google EmbeddingGemma 2),
+or ``"openai-compat"`` (embeddings served by an OpenAI-compatible
+``/v1/embeddings`` endpoint — see ``embedding_api_url`` /
+``embedding_api_model`` / ``embedding_api_key``). Read from env
+``MEMPALACE_EMBEDDING_MODEL`` first, then ``embedding_model`` in
+``config.json``, then ``"minilm"`` as a back-compat fallback for
+palaces created before onboarding asked the question.
 
 Switching models on an existing palace requires re-embedding
 (different vector space) — ChromaDB rejects reads when the persisted
 EF name doesn't match. Run ``mempalace repair rebuild-index`` after
 changing this value.
+
+The value is resolved to the embedder that will actually be built
+(:func:`mempalace.embedding._resolve_embedding_model`): an
+unrecognized name (including ``""`` and a JSON ``null``) is logged
+once with the configured value and reads as ``"minilm"``, so the
+identity a palace records and checks is the model that embeds it. A
+near miss of a supported name (``"embeddinggemm2"``, ``"openai"``)
+raises :class:`~mempalace.embedding.UnknownEmbeddingModelError`.
 
 #### `embedding_threads`
 
@@ -688,6 +740,93 @@ default. Unset, non-numeric, or non-positive values fall back to the
 default rather than raising; ``EmbeddinggemmaONNX.__init__`` still
 raises on an explicitly-passed non-positive ``batch_size``.
 
+#### `embeddinggemma2_batch_size`
+
+```python
+def embeddinggemma2_batch_size(self) -> 'int | None'
+```
+
+Documents per encode() call for EmbeddingGemma 2, or None for the default.
+
+The default depends on the device the model runs on (32 on CUDA, 4 on
+CPU and MPS; ``mempalace.embeddinggemma2``). Read from env
+``MEMPALACE_EMBEDDINGGEMMA2_BATCH_SIZE`` first, then
+``embeddinggemma2_batch_size`` in ``config.json``; a set value wins on
+every device. Separate from ``embeddinggemma_batch_size``, which sizes
+ONNX runs of the first EmbeddingGemma model. A value that is not an
+integer from 1 to 1024 logs one warning per process and value and
+means the per-device default.
+
+#### `embeddinggemma2_dimension`
+
+```python
+def embeddinggemma2_dimension(self) -> int
+```
+
+EmbeddingGemma 2 output dimension (768, 512, 256, or 128).
+
+Read from ``MEMPALACE_EMBEDDINGGEMMA2_DIMENSION`` first, then
+``embeddinggemma2_dimension`` in ``config.json``, then 768. Invalid
+values raise ``ValueError`` so the selected model cannot silently use
+a dimension different from the configured vector space.
+
+#### `embeddinggemma2_modalities`
+
+```python
+def embeddinggemma2_modalities(self) -> str
+```
+
+Enabled modalities: text, text+vision, text+audio, or all.
+
+Read from ``MEMPALACE_EMBEDDINGGEMMA2_MODALITIES`` first, then
+``embeddinggemma2_modalities`` in ``config.json``, then ``"text"``.
+Values are normalized to lowercase and invalid values raise
+``ValueError``.
+
+#### `embeddinggemma2_revision`
+
+```python
+def embeddinggemma2_revision(self) -> str
+```
+
+Immutable Hugging Face commit pinned for reproducible model loading.
+
+Read from ``MEMPALACE_EMBEDDINGGEMMA2_REVISION`` first, then
+``embeddinggemma2_revision`` in ``config.json``, then the pinned
+default. Only a full 40-character hexadecimal commit is accepted;
+branch names and tags are mutable and rejected.
+
+#### `hybrid_rank_vector_weight`
+
+```python
+def hybrid_rank_vector_weight(self) -> float
+```
+
+Weight of the vector (embedding-similarity) signal in the hybrid
+re-rank (``searcher._hybrid_rank``).
+
+Read from env ``MEMPALACE_HYBRID_VECTOR_WEIGHT`` first, then
+``hybrid_rank_vector_weight`` in ``config.json``, then the built-in
+default (``0.6``). Unset, non-numeric, infinite, or negative values
+fall back to the default rather than raising — a hand-edited
+``config.json`` shouldn't take retrieval down. The default reproduces
+the previously-hardcoded weight, so leaving it unset is a
+byte-identical blend (#2298).
+
+#### `hybrid_rank_bm25_weight`
+
+```python
+def hybrid_rank_bm25_weight(self) -> float
+```
+
+Weight of the BM25 (lexical) signal in the hybrid re-rank
+(``searcher._hybrid_rank``).
+
+Read from env ``MEMPALACE_HYBRID_BM25_WEIGHT`` first, then
+``hybrid_rank_bm25_weight`` in ``config.json``, then the built-in
+default (``0.4``). Unset, non-numeric, infinite, or negative values
+fall back to the default rather than raising (#2298).
+
 #### `set_embedding_model`
 
 ```python
@@ -696,10 +835,11 @@ def set_embedding_model(self, model: str) -> None
 
 Persist the embedding-model choice to ``config.json``.
 
-Onboarding calls this once on first run. Accepts ``"minilm"`` or
-``"embeddinggemma"``; other values are normalized to lowercase and
-passed through (``embedding.get_embedding_function`` falls back to
-minilm for unrecognized values).
+Onboarding calls this once on first run. Accepts ``"minilm"``,
+``"embeddinggemma"``, ``"embeddinggemma2"``, or ``"openai-compat"``;
+other values are normalized to lowercase and persisted
+(:attr:`embedding_model` then reads unrecognized values as minilm,
+with a warning, and refuses near misses of supported names).
 
 #### `set_backend`
 
@@ -776,6 +916,25 @@ to ``2+`` if your projects share lots of common-tech labels (Python,
 Docker, Git) and you want only meaningfully overlapping wings to
 link. Reads ``MEMPALACE_TOPIC_TUNNEL_MIN_COUNT`` env first, then the
 config-file value, then ``1``.
+
+#### `hallway_min_count`
+
+```python
+def hallway_min_count(self)
+```
+
+Minimum co-occurrence count required to materialize a within-wing
+hallway between two entities.
+
+Mirrors :attr:`topic_tunnel_min_count` (same env > file > default
+resolution and ``>=1`` floor), but for the within-wing hallway
+primitive (``mempalace.hallways.compute_hallways_for_wing``) rather
+than the cross-wing topic tunnels. Default is ``2`` — a single
+co-occurrence is noise (two entities named together once in one drawer
+is not a real link); two or more is a real signal. Bump to ``3+`` if
+your corpus has loosely-associated entity pairs you don't want linked.
+Reads ``MEMPALACE_KG_HALLWAY_MIN_COUNT`` env first, then the
+``hallway_min_count`` config-file value, then ``2``. Clamped to ``>=1``.
 
 #### `max_backups`
 
@@ -1071,6 +1230,29 @@ user folder like ``First Last``, many macOS paths). ``pathname2url``
 percent-encodes the path and normalizes separators so the database opens on
 every platform.
 
+### `connect_sqlite_read`
+
+```python
+def connect_sqlite_read(db_path: str, *, timeout: 'float | None' = None, check_same_thread: bool = True)
+```
+
+Open ``db_path`` for reading, and keep reading when ``mode=ro`` cannot.
+
+A WAL database whose ``-wal`` and ``-shm`` sidecars are absent cannot be
+read through a read-only connection on every SQLite build: Apple's system
+library, which CPython links on macOS, accepts the connect and then fails
+the first statement with ``SQLITE_CANTOPEN``, because a read-only
+connection may not create the shared-memory index that WAL needs. The
+sidecars are absent exactly when nothing holds the palace open, which is
+the ordinary state before this process opens chroma, so a healthy palace
+came back as unreadable and the integrity gate refused every tool (#2489).
+
+Only that case takes a normal open, which creates the sidecars the
+read-only connection may not and takes SQLite's usual locks. ``immutable=1``
+would also open, but it disables locking and can read a torn page set from
+under a live writer, so it is not a substitute. Everything else keeps the
+read-only connection it had.
+
 ### `get_configured_collection_name`
 
 ```python
@@ -1078,3 +1260,5 @@ def get_configured_collection_name() -> str
 ```
 
 Return the configured drawer collection name without repeated config-file reads.
+
+A config object without the attribute (a test's stand-in, an older config shim) means the default name.

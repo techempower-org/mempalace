@@ -554,6 +554,39 @@ def test_age_timeline_with_as_of_filter():
 
 
 @pgmark
+def test_age_timeline_paginates_with_stable_order_and_total():
+    """AGE ``timeline`` honors ``limit``/``offset`` like the SQLite backend (2026-10 upstream sync), with a stable
+    order across pages even when ``valid_from`` ties, and ``timeline_total`` counts every match with the same
+    entity/``as_of`` filters."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        for i in range(7):
+            # Three share a valid_from, so the order relies on the tie-breaker.
+            vf = "2026-01-01" if i < 3 else f"2026-02-{i:02d}"
+            kg.add_triple("JP", "touched", f"thing_{i}", valid_from=vf, valid_to=None)
+        kg.add_triple("JP", "worked_on", "expired", valid_from="2024-01-01", valid_to="2024-12-31")
+
+        pages = [kg.timeline("JP", limit=3, offset=o) for o in (0, 3, 6)]
+        assert [len(p) for p in pages] == [3, 3, 2]
+        seen = [f["object"] for p in pages for f in p]
+        assert len(seen) == len(set(seen)) == 8, "pages must not overlap or skip"
+        assert pages == [kg.timeline("JP", limit=3, offset=o) for o in (0, 3, 6)], (
+            "page order must be stable"
+        )
+
+        assert kg.timeline_total("JP") == 8
+        assert kg.timeline_total("JP", as_of="2026-03-01") == 7
+        assert kg.timeline_total() == 8
+        assert kg.timeline_total(as_of="2024-06-01") == 1
+        assert len(kg.timeline(limit=100, offset=7)) == 1
+    finally:
+        kg.close()
+
+
+@pgmark
 def test_age_timeline_without_entity_filter_respects_as_of():
     """The full-graph branch of ``timeline()`` (no entity_name) honors
     ``as_of`` too. Guards the alternate Cypher template added in #161."""

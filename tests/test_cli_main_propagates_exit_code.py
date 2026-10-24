@@ -21,6 +21,7 @@ import ast
 import pathlib
 
 import pytest
+from _module_source import module_source  # cli is an exec-fragment package
 
 CLI = pathlib.Path(__file__).resolve().parents[1] / "mempalace" / "cli.py"
 
@@ -89,7 +90,7 @@ class TestTheScopeClaimStaysTrue:
         issue's own caveat: its first sweep looked for `ast.Constant` and
         missed `return 0 if ... else 1`, which is an `IfExp`.
         """
-        tree = ast.parse(CLI.read_text())
+        tree = ast.parse(module_source("cli"))
         dispatch = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign) and any(

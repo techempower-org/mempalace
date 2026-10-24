@@ -110,17 +110,41 @@ API key via ``--llm-api-key`` or the ``OPENAI_API_KEY`` env var.
 def __init__(self, model: str, endpoint: Optional[str] = None, api_key: Optional[str] = None, timeout: int = 120, **_: object)
 ```
 
+#### `served_models`
+
+```python
+def served_models(self) -> list[str]
+```
+
+Model ids the endpoint lists; ``[]`` when it cannot be read.
+
 #### `check_available`
 
 ```python
 def check_available(self) -> tuple[bool, str]
 ```
 
+Reachability probe; ``model="auto"`` is resolved here to the served model.
+
+A local server (vLLM, NInfer, LM Studio) serves one model at a time
+and its id changes whenever the operator swaps it; ``auto`` follows
+the swap instead of failing with ``model_not_found``.
+
 #### `classify`
 
 ```python
 def classify(self, system: str, user: str, json_mode: bool = True, think: Optional[bool] = None) -> LLMResponse
 ```
+
+``think=False`` sends ``reasoning_effort: "none"``.
+
+Reasoning models served through an OpenAI-compatible endpoint (Qwen 3.x
+on vLLM, NInfer, llama.cpp) think before answering, and their default
+effort can spend the whole completion budget on the reasoning channel
+and return an empty ``content`` — a 60-excerpt room proposal did
+exactly that at 8192 reasoning tokens. ``reasoning_effort`` is the
+OpenAI field for this and the servers above honor it; a server that
+rejects unknown fields with HTTP 400 gets one retry without it.
 
 ### `class AnthropicProvider(LLMProvider)`
 

@@ -6,7 +6,13 @@ Hook logic for MemPalace — Python implementation of session-start, stop, sessi
 
 Reads JSON from stdin, outputs JSON to stdout.
 Supported hooks: session-start, stop, session-end, precompact
-Supported harnesses: claude-code, codex (extensible to cursor, gemini, etc.)
+Supported harnesses: claude-code, codex, dsh (extensible to cursor, gemini, etc.)
+
+``dsh`` (the DeepSeek Harness) cannot hand a hook its own transcript: DSH stores
+sessions zstd-compressed, and its hook bridge passes an empty
+``transcript_path``. The MemPalace DSH plugin (``.dsh-plugin/``) therefore keeps
+an append-only JSONL transcript per session, in the Claude Code record shape
+with ``cwd`` on every record, and passes that file's path here.
 
 ## Classes
 

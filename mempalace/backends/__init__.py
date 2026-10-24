@@ -24,6 +24,7 @@ from .base import (
     CollectionNotInitializedError,
     DimensionMismatchError,
     EmbedderIdentityMismatchError,
+    EmbeddingFunctionMismatchError,
     GetResult,
     HealthStatus,
     LexicalHit,
@@ -42,6 +43,7 @@ from .postgres import PostgresBackend, PostgresCollection
 from .pgvector import PgVectorBackend, PgVectorCollection
 from .qdrant import QdrantBackend, QdrantCollection
 from .sqlite_exact import SQLiteExactBackend, SQLiteExactCollection
+from .rust_exact import RustExactBackend, RustExactCollection
 from .registry import (
     available_backends,
     detect_backend_for_path,
@@ -54,6 +56,8 @@ from .registry import (
     unregister,
 )
 
+register("rust_exact", RustExactBackend)
+
 __all__ = [
     "BackendClosedError",
     "BackendError",
@@ -65,6 +69,7 @@ __all__ = [
     "CollectionNotInitializedError",
     "DimensionMismatchError",
     "EmbedderIdentityMismatchError",
+    "EmbeddingFunctionMismatchError",
     "GetResult",
     "HealthStatus",
     "LexicalHit",
@@ -81,6 +86,8 @@ __all__ = [
     "QdrantBackend",
     "QdrantCollection",
     "QueryResult",
+    "RustExactBackend",
+    "RustExactCollection",
     "SQLiteExactBackend",
     "SQLiteExactCollection",
     "UnsupportedCapabilityError",

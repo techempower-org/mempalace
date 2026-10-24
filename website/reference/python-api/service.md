@@ -35,6 +35,14 @@ def run_mine(payload: dict[str, Any]) -> dict[str, Any]
 
 Run the same mine operation as the CLI, without daemon transport concerns.
 
+### `run_sweep`
+
+```python
+def run_sweep(payload: dict[str, Any]) -> dict[str, Any]
+```
+
+Run transcript sweep through the daemon worker.
+
 ### `run_sync`
 
 ```python

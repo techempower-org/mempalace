@@ -1,5 +1,8 @@
 # Metadata Reshape Root-Cause Investigation (#32)
 
+> **Status (2026-10-22): the aliasing root cause is fixed.** `ChromaCollection._sanitize_metadatas_for_chromadb` now returns copies of the caller's inner dicts (arrived with the upstream sync, techempower-org/mempalace#578), so a post-sanitize mutation no longer reaches chromadb. `tests/test_metadata_reshape_bug.py` was inverted to pin the fix (`test_sanitizer_inner_dicts_do_not_alias_caller_dicts`, `test_caller_clear_after_sanitize_no_longer_reaches_chromadb`).
+
+
 **Investigator:** Selene (dream-celestial team)
 **Date:** 2026-05-22
 **Branch:** `investigate/metadata-reshape-32`

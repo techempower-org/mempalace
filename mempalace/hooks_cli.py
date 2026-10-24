@@ -3,7 +3,13 @@ Hook logic for MemPalace — Python implementation of session-start, stop, sessi
 
 Reads JSON from stdin, outputs JSON to stdout.
 Supported hooks: session-start, stop, session-end, precompact
-Supported harnesses: claude-code, codex (extensible to cursor, gemini, etc.)
+Supported harnesses: claude-code, codex, dsh (extensible to cursor, gemini, etc.)
+
+``dsh`` (the DeepSeek Harness) cannot hand a hook its own transcript: DSH stores
+sessions zstd-compressed, and its hook bridge passes an empty
+``transcript_path``. The MemPalace DSH plugin (``.dsh-plugin/``) therefore keeps
+an append-only JSONL transcript per session, in the Claude Code record shape
+with ``cwd`` on every record, and passes that file's path here.
 """
 
 import hashlib
@@ -55,20 +61,40 @@ def _detached_popen_kwargs() -> dict:
     return kwargs
 
 
+def _config_root() -> Path:
+    """The directory this install keeps its config in (XDG-aware since #148)."""
+    from .config import _default_config_dir
+
+    return _default_config_dir()
+
+
 def _palace_root_exists() -> bool:
     """User-removable kill-switch.
 
-    If ~/.mempalace/ does not exist, the user has explicitly cleared it.
-    All hook side effects (logging, state dir creation, mining, ingestion)
-    must respect this and short-circuit BEFORE touching disk — including
-    before logging the short-circuit itself.
+    If neither ~/.mempalace/ nor the install's config directory exists, the
+    user has explicitly cleared it. All hook side effects (logging, state dir
+    creation, mining, ingestion) must respect this and short-circuit BEFORE
+    touching disk — including before logging the short-circuit itself.
+
+    Since #148 a fresh install keeps its config and palace in the XDG config
+    directory (``~/.config/mempalace`` by default) and never creates
+    ``~/.mempalace``, so checking only the legacy path silently disabled every
+    hook on new installs. The legacy directory still passes on its own, which
+    leaves every existing install exactly as it was. On an XDG install
+    ``~/.mempalace`` can appear later (hook state, mine locks), so removing
+    only the config directory is not enough to disable hooks there.
 
     Uses ``is_dir()`` rather than ``exists()`` so a stray regular file at
-    ``~/.mempalace`` (or a broken symlink) is treated as absent — otherwise
-    the kill-switch would be bypassed and ``STATE_DIR.mkdir()`` would later
-    crash on ``NotADirectoryError``.
+    either path (or a broken symlink) is treated as absent — otherwise the
+    kill-switch would be bypassed and ``STATE_DIR.mkdir()`` would later crash
+    on ``NotADirectoryError``.
     """
-    return PALACE_ROOT.is_dir()
+    if PALACE_ROOT.is_dir():
+        return True
+    try:
+        return _config_root().is_dir()
+    except (OSError, ValueError):
+        return False
 
 
 def _mempalace_python() -> str:
@@ -1045,8 +1071,57 @@ _THEME_STOPWORDS = frozenset(
 )
 
 
+#: Markers of harness-injected text that lands in the transcript with
+#: ``role: "user"`` but was never typed by the user. A message opening with
+#: any of them is skipped when composing the checkpoint's ``recent:`` line,
+#: which otherwise fills with the same boilerplate in every session instead of
+#: what the session was about. Literal substrings, deliberately: the wrappers
+#: are fixed strings and a regex would cost more for no gain in the hook budget.
+_HARNESS_BOILERPLATE_MARKERS = (
+    "<command-message>",  # slash-command expansion
+    "<command-name>",  # slash-command name, when it leads
+    "<command-args>",  # slash-command arguments
+    "<system-reminder>",  # injected reminders
+    "<local-command-caveat>",  # local command output caveat block
+    "<local-command-stdout>",  # local command output body
+    "<task-notification>",  # background task completion notices
+    "[SYSTEM NOTIFICATION",  # unbracketed notification banner
+    "[Request interrupted by user",  # interruption record, carries no topic
+    "[Image:",  # pasted-image placeholder, no words to summarize
+    "Base directory for this skill:",  # skill preamble
+)
+
+
+def _is_harness_boilerplate(text: str) -> bool:
+    """True when a ``role: user`` message is harness injection, not user words.
+
+    Anchored at the opening of the message, after leading whitespace. Position
+    is the whole discriminator: the harness emits a wrapper *as* the message,
+    so an injection always opens one, while a wrapper appearing later is a
+    human quoting the tooling. Matching anywhere in the body discarded real
+    messages over text further in than the checkpoint ever keeps: someone
+    writing "its events arrive as ``<task-notification>`` messages and wake the
+    loop" thousands of characters into a design note lost the whole note, even
+    though the leading 200 characters :func:`_extract_recent_messages` stores
+    were pure prose.
+
+    A bounded leading *window* was tried before the anchor and is not enough. A
+    quote inside the first 200 characters is still a quote, and a window turns
+    the rule into a tunable with a false-positive rate attached to its size.
+    ``startswith`` has no such knob. Measured over 4,778 real ``role: "user"``
+    text messages, the two agree on every message, so the anchor gives up no
+    recall for the knob it removes.
+    """
+    return text.lstrip().startswith(_HARNESS_BOILERPLATE_MARKERS)
+
+
 def _extract_recent_messages(transcript_path: str, count: int = _RECENT_MSG_COUNT) -> list[str]:
-    """Extract the last N user messages from a JSONL transcript."""
+    """Extract the last N user messages from a JSONL transcript.
+
+    Harness-injected messages are skipped (see
+    :data:`_HARNESS_BOILERPLATE_MARKERS`) so the checkpoint summarizes the
+    conversation rather than the tooling around it.
+    """
     path = Path(transcript_path).expanduser()
     if not path.is_file():
         return []
@@ -1066,7 +1141,7 @@ def _extract_recent_messages(transcript_path: str, count: int = _RECENT_MSG_COUN
                             )
                         if not isinstance(content, str) or not content.strip():
                             continue
-                        if "<command-message>" in content or "<system-reminder>" in content:
+                        if _is_harness_boilerplate(content):
                             continue
                         messages.append(content.strip()[:200])
                     # Codex CLI format
@@ -1075,7 +1150,7 @@ def _extract_recent_messages(transcript_path: str, count: int = _RECENT_MSG_COUN
                         if isinstance(payload, dict) and payload.get("type") == "user_message":
                             text = payload.get("message", "")
                             if isinstance(text, str) and text.strip():
-                                if "<command-message>" not in text:
+                                if not _is_harness_boilerplate(text):
                                     messages.append(text.strip()[:200])
                 except (json.JSONDecodeError, AttributeError):
                     pass
@@ -1113,21 +1188,29 @@ def _save_diary_direct(
     the transcript path); a `diary_read` with an empty wing spans every wing
     the agent wrote to, so project-derived wings stay discoverable.
 
-    Returns {"count": N, "themes": [...]} on success, {"count": 0} on failure.
-    A daemon lock deferral also returns {"count": 0}: nothing is filed yet, but
-    the entry is queued and the daemon files it once the holder exits, so the
-    checkpoint marker is deliberately not advanced.
+    Returns (success):  {"drawers_filed": 1, "messages_folded": N, "themes": [...]}
+    Returns (failure / no messages / routing blocked / daemon deferral):
+        {"drawers_filed": 0, "messages_folded": 0}
+        (+ "routing_blocked" / "routing_message" when blocked).
+
+    drawers_filed is the number of palace drawers (memory entries) filed by this
+    call. One checkpoint write files exactly ONE drawer -- never N. That is the
+    distinction #2303 is about: the legacy return conflated "memories stored"
+    (drawers) with the transcript-message count compressed into that single
+    drawer, which is now reported separately as messages_folded. The render path
+    must label each unit correctly.
     """
     messages = _extract_recent_messages(transcript_path)
     if not messages:
         _log("No recent messages to save")
-        return {"count": 0}
+        return {"drawers_filed": 0, "messages_folded": 0}
 
     routing = _current_hook_write_routing()
     if routing.blocked:
         _log_hook_write_blocked(routing, "diary checkpoint")
         return {
-            "count": 0,
+            "drawers_filed": 0,
+            "messages_folded": 0,
             "routing_blocked": True,
             "routing_message": routing.notice,
         }
@@ -1159,7 +1242,7 @@ def _save_diary_direct(
             except Exception as exc:
                 # Daemon accepted context — don't fall back (would double-write).
                 _log(f"Daemon diary checkpoint failed: {exc}")
-                return {"count": 0}
+                return {"drawers_filed": 0, "messages_folded": 0}
             result = job.get("result") or {}
             if job.get("state") == "succeeded" and result.get("success"):
                 _log(f"Diary checkpoint saved: {result.get('entry_id', '?')}")
@@ -1173,15 +1256,15 @@ def _save_diary_direct(
                     pass
                 if toast:
                     _desktop_toast(f"Checkpoint saved - {len(messages)} messages archived")
-                return {"count": len(messages), "themes": themes}
+                return {"drawers_filed": 1, "messages_folded": len(messages), "themes": themes}
             if _job_deferred_by_lock(job):
                 # Queued behind the palace lock: the entry is held and the daemon
                 # files it once the holder exits. Not a failure, and not a reason
                 # to re-file it here -- that would duplicate verbatim content.
                 _log(f"Daemon diary checkpoint deferred: {_lock_deferral_reason(job)}")
-                return {"count": 0}
+                return {"drawers_filed": 0, "messages_folded": 0}
             _log(f"Daemon diary checkpoint failed: {result.get('error', job.get('error'))}")
-            return {"count": 0}
+            return {"drawers_filed": 0, "messages_folded": 0}
 
         from .mcp_server import tool_diary_write
 
@@ -1202,13 +1285,13 @@ def _save_diary_direct(
             except OSError:
                 pass
             if toast:
-                _desktop_toast(f"Checkpoint saved — {len(messages)} messages archived")
-            return {"count": len(messages), "themes": themes}
+                _desktop_toast(f"Checkpoint saved \u2014 {len(messages)} messages archived")
+            return {"drawers_filed": 1, "messages_folded": len(messages), "themes": themes}
         else:
             _log(f"Diary checkpoint failed: {result.get('error', 'unknown')}")
     except Exception as e:
         _log(f"Diary checkpoint error: {e}")
-    return {"count": 0}
+    return {"drawers_filed": 0, "messages_folded": 0}
 
 
 def _ingest_transcript(transcript_path: str):
@@ -1254,6 +1337,7 @@ def _ingest_transcript(transcript_path: str):
         _log_hook_write_blocked(routing, "transcript ingest")
         return
 
+    wing = _ingest_wing(str(path))
     try:
         if routing.use_daemon:
             try:
@@ -1262,7 +1346,7 @@ def _ingest_transcript(transcript_path: str):
                     {
                         "source": str(path),
                         "mode": "convos",
-                        "wing": "sessions",
+                        "wing": wing,
                         "agent": "mempalace",
                     },
                     dedupe_key=_daemon_mine_dedupe_key(str(path), "convos"),
@@ -1287,10 +1371,10 @@ def _ingest_transcript(transcript_path: str):
                 "--mode",
                 "convos",
                 "--wing",
-                project_wing,
+                wing,
             ]
         )
-        _log(f"Transcript ingest started: {path.name}")
+        _log(f"Transcript ingest started: {path.name} -> {wing}")
     except OSError:
         pass
     except Exception as exc:
@@ -1300,7 +1384,7 @@ def _ingest_transcript(transcript_path: str):
         _log(f"transcript ingest hook failed: {exc}")
 
 
-SUPPORTED_HARNESSES = {"claude-code", "codex"}
+SUPPORTED_HARNESSES = {"claude-code", "codex", "dsh"}
 
 
 def _diary_agent_for_harness(harness: str) -> str:
@@ -1365,15 +1449,16 @@ def _safe_wing_slug(name: str) -> str:
     return slug or "sessions"
 
 
-def _wing_from_jsonl_cwd(transcript_path: str) -> Optional[str]:
-    """Read ``cwd`` from the first JSONL line that records it.
+def _cwd_from_jsonl(transcript_path: str) -> Optional[str]:
+    """The session's working directory, from the first JSONL line that has one.
 
     Claude Code stores the absolute working directory on most message
     types (tool_use, tool_result, user/assistant turns), but not all
-    (e.g. queue-operation lines lack it). Scan up to 200 lines to find
-    the first record that includes a non-empty cwd, then derive the
-    wing from its leaf path segment. Returns ``None`` if the file is
-    unreadable, empty, or contains no cwd.
+    (e.g. queue-operation lines lack it). Scans up to 200 lines. Returns
+    the path with forward slashes and no trailing slash, with a git
+    worktree under ``<project>/.claude/worktrees/`` collapsed to
+    ``<project>``, or ``None`` if the file is unreadable, empty, or
+    records no cwd.
     """
     try:
         path = Path(transcript_path).expanduser()
@@ -1402,12 +1487,49 @@ def _wing_from_jsonl_cwd(transcript_path: str) -> Optional[str]:
                 _wt_marker = "/.claude/worktrees/"
                 if _wt_marker in cwd_norm:
                     cwd_norm = cwd_norm.split(_wt_marker, 1)[0]
-                project = cwd_norm.rsplit("/", 1)[-1]
-                if project:
-                    return f"wing_{_safe_wing_slug(project)}"
+                return cwd_norm
     except OSError:
         pass
     return None
+
+
+def _wing_from_jsonl_cwd(transcript_path: str) -> Optional[str]:
+    """``wing_<project>`` from the transcript's cwd leaf, or ``None``."""
+    cwd_norm = _cwd_from_jsonl(transcript_path)
+    if not cwd_norm:
+        return None
+    project = cwd_norm.rsplit("/", 1)[-1]
+    if project:
+        return f"wing_{_safe_wing_slug(project)}"
+    return None
+
+
+def _workstation_wing() -> str:
+    """Wing for sessions started in the home directory, per machine."""
+    if sys.platform == "darwin":
+        return "mac_workstation"
+    if sys.platform.startswith("win"):
+        return "windows_workstation"
+    return "linux_workstation"
+
+
+def _ingest_wing(transcript_path: str) -> str:
+    """Wing for a hook-ingested transcript: the project the session ran in.
+
+    Same derivation the diary uses (cwd first, encoded project folder
+    second) without the ``wing_`` prefix, so a session in
+    ``~/dev/mempalace`` files into ``mempalace`` next to everything else
+    about that project instead of a flat ``sessions`` wing that
+    ``mempalace audit`` then flags. A session started in the home directory
+    belongs to no project and goes to the machine's workstation wing.
+    """
+    cwd_norm = _cwd_from_jsonl(transcript_path)
+    if cwd_norm:
+        home = str(Path.home()).replace("\\", "/").rstrip("/")
+        if cwd_norm.lower() == home.lower():
+            return _workstation_wing()
+    wing = _wing_from_transcript_path(transcript_path)
+    return wing[len("wing_") :] if wing.startswith("wing_") else wing
 
 
 def _wing_from_transcript_path(transcript_path: str) -> str:
@@ -1456,6 +1578,12 @@ def _wing_from_transcript_path(transcript_path: str) -> str:
     match = re.search(r"/\.claude/projects/-([^/]+)", normalized)
     if match:
         encoded = match.group(1)
+        # "<project>/.claude/worktrees/<wt>" flattens to "-<project>--claude-worktrees-<wt>"
+        # here; collapse it to <project> like _wing_from_jsonl_cwd already does for cwd,
+        # or every worktree spawns its own wing.
+        _wt_marker = "-claude-worktrees-"
+        if _wt_marker in encoded:
+            encoded = encoded.split(_wt_marker, 1)[0]
         # Strip platform user-home prefix so the wing isn't dominated by
         # /Users/<user>/ or /home/<user>/.
         m = re.match(r"(?:Users|home)-[^-]+-(.+)", encoded)
@@ -1654,7 +1782,7 @@ def hook_stop(data: dict, harness: str):
                 # marker advances only after a confirmed diary write (the
                 # original silent-mode contract); ingest failures surface via
                 # daemon-side observability (hook.log + systemd journal).
-                result = {"count": 0}
+                result = {"drawers_filed": 0, "messages_folded": 0}
                 if transcript_path:
                     result = _save_diary_direct(
                         transcript_path,
@@ -1665,13 +1793,16 @@ def hook_stop(data: dict, harness: str):
                     )
                     _ingest_transcript(transcript_path)
                 _maybe_auto_ingest()
-                # Only advance save marker after successful save
-                count = result.get("count", 0)
-                if count > 0:
+                # Only advance the save marker after a genuine drawer was filed
+                # (#2303): the legacy "count" was the compressed-message count and
+                # was misread as a storage count. Report each unit truthfully.
+                drawers_filed = result.get("drawers_filed", 0)
+                if drawers_filed > 0:
                     try:
                         last_save_file.write_text(str(exchange_count), encoding="utf-8")
                     except OSError:
                         pass
+                    messages_folded = result.get("messages_folded", 0)
                     themes = result.get("themes", [])
                     if themes:
                         tag = " \u2014 " + ", ".join(themes)
@@ -1679,7 +1810,7 @@ def hook_stop(data: dict, harness: str):
                         tag = ""
                     _output(
                         {
-                            "systemMessage": f"\u2726 {count} memories woven into the palace{tag}",
+                            "systemMessage": f"\u2726 {drawers_filed} checkpoint saved \u2014 {messages_folded} messages woven into the palace{tag}",
                         }
                     )
                 else:

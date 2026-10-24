@@ -310,6 +310,14 @@ def submit_job(kind: str, payload: dict[str, Any], *, palace_path: str | None = 
 def stop_daemon(palace_path: str) -> bool
 ```
 
+Ask the registered daemon to stop. True when a running daemon was asked.
+
+When the health probe fails, the registration decides what happens: a dead
+pid, or a pid reused by an unrelated process, is a stale registration and
+is removed so the next ``daemon start`` works. A live daemon that does not
+answer cannot be asked to stop over HTTP, so its registration is left in
+place (#2442) and the error names the process to stop instead.
+
 ### `main`
 
 ```python

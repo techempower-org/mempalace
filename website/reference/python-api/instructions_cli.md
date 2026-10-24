@@ -17,10 +17,26 @@ def run_instructions(name: str)
 
 Read and print the instruction .md file for the given name.
 
+### `validate_identity_component`
+
+```python
+def validate_identity_component(name: str, value: str) -> str
+```
+
+Return a stripped identity component, or raise ValueError.
+
+### `apply_mcp_shape`
+
+```python
+def apply_mcp_shape(body: str, mcp: str) -> str
+```
+
+Swap classic MCP tool names for the lightweight triad, or leave as-is.
+
 ### `render_shared_brain_rules`
 
 ```python
-def render_shared_brain_rules(agent_id: str) -> str
+def render_shared_brain_rules(host: str, harness: str, project: str, mcp: str = 'full') -> str
 ```
 
 Render the canonical shared-brain rules block for one agent identity.
@@ -32,10 +48,14 @@ lesson lands in one file instead of N system prompts. The output is
 wrapped in HTML-comment markers so a later re-render can replace the
 block in place.
 
+``mcp`` selects tool names: ``full`` (default, the 52-tool server) or ``light``
+(palace_query / palace_exec / palace_coordinate). Prose is identical;
+only the tool tokens change.
+
 ### `run_rules`
 
 ```python
-def run_rules(agent_id: str)
+def run_rules(host: str, harness: str, project: str, mcp: str = 'full')
 ```
 
 Print the rendered shared-brain rules block for the CLI.

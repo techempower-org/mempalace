@@ -19,7 +19,7 @@
 > Need the shortest recovery/setup path? Use the
 > [Claude Code retention setup checklist](https://mempalaceofficial.com/guide/claude-code-retention.html).
 
-[![version-shield](https://img.shields.io/badge/version-3.9.0-4dc9f6?style=flat-square&labelColor=0a0e14)](https://github.com/techempower-org/mempalace/releases) [![upstream-shield](https://img.shields.io/badge/upstream-3.9.0-7dd8f8?style=flat-square&labelColor=0a0e14)](https://github.com/MemPalace/mempalace/releases)
+[![version-shield][version-shield]](https://github.com/techempower-org/mempalace/releases) [![upstream-shield](https://img.shields.io/badge/upstream-3.11.0-7dd8f8?style=flat-square&labelColor=0a0e14)](https://github.com/MemPalace/mempalace/releases)
 [![python-shield](https://img.shields.io/badge/python-3.10+-7dd8f8?style=flat-square&labelColor=0a0e14&logo=python&logoColor=7dd8f8)](https://www.python.org/)
 [![license-shield](https://img.shields.io/badge/license-MIT-b0e8ff?style=flat-square&labelColor=0a0e14)](LICENSE)
 
@@ -95,6 +95,7 @@ uv sync --extra dev          # recommended; or: python -m venv venv && pip insta
 uv run mempalace init ~/Projects --yes
 uv run mempalace mine ~/Projects/myproject
 uv run mempalace search "why did we switch to GraphQL"
+uv run mempalace audit                     # score how well organized the palace is (read-only)
 ```
 
 ### MCP bridge on PATH
@@ -128,6 +129,12 @@ Skip it and every session fails with `Executable not found in $PATH: mempalace-m
 That failure is quiet: the search tool is rarely called directly, so nothing surfaces it
 until someone asks the palace a question and gets nothing — it went unnoticed
 fleet-wide for days in #425.
+
+52 MCP tools cover palace reads/writes, knowledge-graph operations,
+cross-wing navigation, drawer management, agent diaries, and agent
+coordination (logstream events + artifact handoffs). Installation
+and the full tool list:
+[mempalaceofficial.com/reference/mcp-tools](https://mempalaceofficial.com/reference/mcp-tools.html).
 
 For a daemon-fronted deployment (recommended once palace size reaches the multi-thousand-drawer range), see [palace-daemon](https://github.com/techempower-org/palace-daemon)'s setup. The fork's `scripts/deploy.sh` is a one-command Syncthing-aware redeploy: push fork main, restart palace-daemon, post-restart import-check that the new fork-ahead surface is loaded.
 
@@ -505,3 +512,6 @@ See [`docs/BIBLIOGRAPHY.md`](docs/BIBLIOGRAPHY.md) for the complete documentatio
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+<!-- Link Definitions (scripts/check_versions.py reads version-shield) -->
+[version-shield]: https://img.shields.io/badge/version-3.11.0-4dc9f6?style=flat-square&labelColor=0a0e14

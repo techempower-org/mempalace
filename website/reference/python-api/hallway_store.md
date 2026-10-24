@@ -78,7 +78,7 @@ store makes writes O(wing) in I/O as well.
 #### `__init__`
 
 ```python
-def __init__(self, config = None)
+def __init__(self, config = None, io = None)
 ```
 
 #### `ensure_schema`
@@ -227,7 +227,7 @@ def delete(self, hallway_id: str, conn = None) -> bool
 ### `get_hallway_store`
 
 ```python
-def get_hallway_store(config = None)
+def get_hallway_store(config = None, io = None)
 ```
 
 Return the configured hallway store. JSON unless postgres is opted into.

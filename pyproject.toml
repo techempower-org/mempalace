@@ -1,6 +1,6 @@
 [project]
 name = "mempalace"
-version = "3.9.0"
+version = "3.11.0"
 description = "Give your AI a memory — mine projects and conversations into a searchable palace. No API key required."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -67,6 +67,7 @@ Repository = "https://github.com/MemPalace/mempalace"
 mempalace = "mempalace.cli:main"
 mempalace-mcp = "mempalace.mcp_proxy:main"
 mempalace-kg-extract = "mempalace.kg_triple_worker:cli_main"
+mempalace-light-mcp = "mempalace.mcp_light_server:main"
 
 [project.entry-points."mempalace.backends"]
 chroma = "mempalace.backends.chroma:ChromaBackend"
@@ -75,6 +76,7 @@ postgres = "mempalace.backends.postgres:PostgresBackend"
 pgvector = "mempalace.backends.pgvector:PgVectorBackend"
 qdrant = "mempalace.backends.qdrant:QdrantBackend"
 sqlite_exact = "mempalace.backends.sqlite_exact:SQLiteExactBackend"
+rust_exact = "mempalace.backends.rust_exact:RustExactBackend"
 
 # RFC 002 source-adapter entry-point group. First-party adapters land here as
 # they migrate onto ``BaseSourceAdapter``; third-party adapter packages
@@ -93,11 +95,15 @@ warp = "mempalace.sources.warp:WarpSourceAdapter"
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    # Offline media tests exercise real image objects and audio resampling
+    # without installing the optional model or its PyTorch dependencies.
+    "pillow>=10.0",
+    "scipy>=1.10",
     # Retries known-transient ChromaDB-on-Windows HNSW compaction failures in CI
     # (wired only into the test-windows job in ci.yml, scoped to the specific
     # error). Local/Linux/macOS runs never rerun, so real failures stay loud.
     "pytest-rerunfailures>=12.0",
-    "ruff==0.16.1",
+    "ruff==0.16.6",
     "psutil>=5.9",
     "hypothesis>=6.0",
     "pre-commit>=3.0",
@@ -135,6 +141,28 @@ pgvector = ["psycopg[binary]>=3.1"]
 gpu = ["onnxruntime-gpu>=1.16"]
 dml = ["onnxruntime-directml>=1.16"]
 coreml = ["onnxruntime>=1.16"]
+# Opt-in PyTorch/Transformers implementation of Google EmbeddingGemma 2.
+# The upstream image extra supplies Pillow and torchvision, which the
+# processor imports even for text-only use.
+embeddinggemma2 = [
+    "sentence-transformers[image]>=6.1.0; python_version >= '3.10'",
+    "transformers>=5.19.0; python_version >= '3.10'",
+    "torch>=2.14.0; python_version >= '3.10'",
+    # Pillow < 12.3.0 has heap out-of-bounds writes and other memory-safety
+    # advisories reachable from untrusted images. 12.x needs Python >= 3.10.
+    "pillow>=12.3.0; python_version >= '3.10'",
+]
+multimodal = [
+    "sentence-transformers[image]>=6.1.0; python_version >= '3.10'",
+    "transformers>=5.19.0; python_version >= '3.10'",
+    "torch>=2.14.0; python_version >= '3.10'",
+    # Pillow < 12.3.0 has heap out-of-bounds writes and other memory-safety
+    # advisories reachable from untrusted images. 12.x needs Python >= 3.10.
+    "pillow>=12.3.0; python_version >= '3.10'",
+    "soundfile>=0.13.1; python_version >= '3.10'",
+    "scipy>=1.10; python_version >= '3.10'",
+    "torchcodec>=0.17.0; python_version >= '3.10'",
+]
 # Multilingual extra kept as a no-op alias for back-compat with
 # `pip install mempalace[multilingual]` — these deps now ship in core.
 multilingual = []
@@ -165,11 +193,13 @@ extract = [
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
+    "pillow>=10.0",
+    "scipy>=1.10",
     # Retries known-transient ChromaDB-on-Windows HNSW compaction failures in CI
     # (wired only into the test-windows job in ci.yml, scoped to the specific
     # error). Local/Linux/macOS runs never rerun, so real failures stay loud.
     "pytest-rerunfailures>=12.0",
-    "ruff==0.16.1",
+    "ruff==0.16.6",
     "psutil>=5.9",
     "hypothesis>=6.0",
     "pre-commit>=3.0",
@@ -195,6 +225,31 @@ extend-exclude = ["benchmarks", "*.md"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "C901"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# mcp_server fragments exec into the package namespace. Names they use live
+# in __init__.py and earlier fragments, so F821 is expected; __init__.py
+# imports those names for the fragments, so F401 is expected there too.
+"mempalace/mcp_server/__init__.py" = ["F401"]
+"mempalace/mcp_server/_*.py" = ["F821"]
+"mempalace/mcp_server/tools_*.py" = ["F821"]
+"mempalace/mcp_server/schemas.py" = ["F821"]
+"mempalace/mcp_server/protocol.py" = ["F821"]
+"mempalace/mcp_server/http.py" = ["F821"]
+"mempalace/mcp_server/runtime.py" = ["F821"]
+# cli fragments exec into the package namespace. Names they use live in
+# __init__.py and earlier fragments, so F821 is expected; __init__.py
+# imports those names for the fragments, so F401 is expected there too.
+"mempalace/cli/__init__.py" = ["F401"]
+"mempalace/cli/_*.py" = ["F821"]
+"mempalace/cli/cmd_*.py" = ["F821"]
+"mempalace/cli/parser.py" = ["F821"]
+# searcher fragments exec into the package namespace.
+"mempalace/searcher/__init__.py" = ["F401"]
+"mempalace/searcher/*.py" = ["F821"]
+# palace fragments exec into the package namespace.
+"mempalace/palace/__init__.py" = ["F401"]
+"mempalace/palace/*.py" = ["F821"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 25

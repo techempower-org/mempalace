@@ -242,7 +242,7 @@ class TestMinerAddDrawers:
 @pytest.fixture
 def _mcp_setup(monkeypatch, config, palace_path, kg):
     """Bootstrap mcp_server against a temp palace; return the module."""
-    from tests.test_mcp_server import _patch_mcp_server, _get_collection
+    from _mcp_server_helpers import _patch_mcp_server, _get_collection
 
     _patch_mcp_server(monkeypatch, config, kg)
     _client, _col = _get_collection(palace_path, create=True)

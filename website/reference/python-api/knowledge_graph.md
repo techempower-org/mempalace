@@ -117,6 +117,32 @@ value rather than the asymmetric whole-day expansion.
 Returns the new triple's id. If no open ``old_obj`` triple exists the
 successor is still opened, so ``supersede`` degrades to ``add_triple``.
 
+#### `rewrite`
+
+```python
+def rewrite(self, triple_id: str, predicate: str, obj: str, at: str = None, source_file: str = None)
+```
+
+Close the open fact ``triple_id`` and open its rewrite in one transaction.
+
+The successor keeps the subject, takes ``predicate`` and ``obj`` and
+opens at the same instant the original closes, so an as-of query
+before the boundary still returns the original wording. Unlike
+:meth:`supersede` the predicate may change, which is what
+``mempalace kg normalize`` needs.
+
+Addressed by the triple's ``id`` so that a fact closed or replaced
+after a plan was written is not resurrected: if ``triple_id`` is no
+longer open, nothing is written and ``None`` is returned. Returns the
+successor's id otherwise. One SQLite transaction covers both writes,
+so an interruption leaves the original fact open and untouched.
+
+The successor inherits the original's ``confidence`` and provenance
+(``source_closet``, ``source_file``, ``source_drawer_id``,
+``adapter_name``): rewording a predicate is not new evidence, and a
+normalized fact must still point at the drawer it came from.
+``source_file`` here is only a fallback for an original carrying none.
+
 #### `query_entity`
 
 ```python
@@ -127,6 +153,14 @@ Get all relationships for an entity.
 
 direction: "outgoing" (entity → ?), "incoming" (? → entity), "both"
 as_of: ISO date or canonical UTC datetime — only return facts valid then
+
+#### `find_entity_candidates`
+
+```python
+def find_entity_candidates(self, name: str) -> list
+```
+
+Return token/prefix entity matches for disambiguation (never substring).
 
 #### `query_relationship`
 
@@ -139,10 +173,23 @@ Get all triples with a given relationship type.
 #### `timeline`
 
 ```python
-def timeline(self, entity_name: str = None)
+def timeline(self, entity_name: str = None, limit: int = 100, offset: int = 0)
 ```
 
-Get all facts in chronological order, optionally filtered by entity.
+Get facts in chronological order, optionally filtered by entity.
+
+Paginated with ``limit``/``offset`` (same convention as drawer
+listing); defaults preserve the historical behavior of returning
+the first 100 facts. Use :meth:`timeline_total` for the full
+matching count.
+
+#### `timeline_total`
+
+```python
+def timeline_total(self, entity_name: str = None) -> int
+```
+
+Total number of facts a :meth:`timeline` query matches (all pages).
 
 #### `dump_rows`
 

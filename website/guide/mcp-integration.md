@@ -1,6 +1,6 @@
 # MCP Integration
 
-MemPalace provides 50 tools through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), giving any MCP-compatible AI full read/write access to your palace.
+MemPalace provides 52 tools through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/), giving any MCP-compatible AI full read/write access to your palace.
 
 ## Setup
 
@@ -26,7 +26,7 @@ claude mcp add mempalace -- python -m mempalace.mcp_server --palace /path/to/pal
 codex mcp add mempalace -- python -m mempalace.mcp_server --palace /path/to/palace
 ```
 
-Now your AI has all 50 tools available. Ask it anything:
+Now your AI has all 52 tools available. Ask it anything:
 
 > *"What did we decide about auth last month?"*
 
@@ -34,7 +34,7 @@ Claude calls `mempalace_search` automatically, gets verbatim results, and answer
 
 ## CLI-only mode (`mcp_mode`)
 
-If you want to run the palace **without** loading the 39-tool MCP surface — to save context window, run hooks + skills only, or drive everything from the CLI — set `mcp_mode` to `cli-only`.
+If you want to run the palace **without** loading the 52-tool MCP surface — to save context window, run hooks + skills only, or drive everything from the CLI — set `mcp_mode` to `cli-only`.
 
 **Config file** (default location `~/.mempalace/config.json`):
 
@@ -50,7 +50,7 @@ Or per-process via env (takes precedence over the config file):
 PALACE_MCP_MODE=cli-only
 ```
 
-Valid values: `"all"` (default — full 39-tool surface) and `"cli-only"`. Anything else — typo, missing config, garbled JSON — **fails open** to `"all"`, so a config bug never silently disables the tools.
+Valid values: `"all"` (default — full 52-tool surface) and `"cli-only"`. Anything else — typo, missing config, garbled JSON — **fails open** to `"all"`, so a config bug never silently disables the tools.
 
 ### What `cli-only` does
 

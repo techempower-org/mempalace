@@ -13,7 +13,8 @@ The name comes from the ancient "method of loci" — the memory palace technique
 - **Wings** for broad categories (people, projects, topics)
 - **Rooms** for time-based groupings (days, sessions)
 - **Drawers** for full verbatim content (your exact words)
-- **AAAK compression** for the index layer — a compact symbolic format (via `dialect.py`) that lets an LLM scan thousands of entries instantly and know exactly which drawer to open
+- **Closets** for the index layer — compact pointer lines (`topic|entities|→drawer_ids`) that the project miner writes next to the drawers, so search knows which drawer to open
+- **AAAK** (`dialect.py`) — an experimental, lossy abbreviation format (entity codes, emotion markers) that any LLM reads without a decoder. Opt-in via `mempalace compress`; not the storage default, and never a stand-in for the verbatim drawer
 
 ## Design Principles
 

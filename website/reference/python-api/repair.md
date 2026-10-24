@@ -165,8 +165,9 @@ row count exceeds the extraction count, the segment metadata is
 stale and repair would destroy the difference.
 
 Returns ``None`` when the schema isn't readable (chromadb version
-drift, missing tables, locked file). Callers treat ``None`` as
-"unknown" and fall back to the cap-detection check.
+drift, missing tables, locked file), and without opening anything when
+nothing resolves under the path or when the path names a FIFO. Callers
+treat ``None`` as "unknown" and fall back to the cap-detection check.
 
 ### `sqlite_integrity_status`
 
@@ -372,11 +373,10 @@ function bypasses the chromadb read path entirely via
 :func:`extract_via_sqlite`.
 
 Re-embeds documents at upsert time using the configured embedding
-function; the original HNSW vectors are not preserved (they live in
-the corrupt ``data_level0.bin`` / ``link_lists.bin``, not in
-SQLite). Acceptable for a corruption-recovery flow because the
-embedding model is deterministic — same model + same document text
-yields semantically equivalent search results.
+function and media assets from their local source files using the
+provider's native media encoder. Original HNSW vectors are not preserved
+(they live in the corrupt ``data_level0.bin`` / ``link_lists.bin``, not in
+SQLite).
 
 ``archive_existing_dest`` controls behavior when ``dest_palace``
 already exists:
@@ -484,8 +484,21 @@ The check itself never opens a chromadb client and never imports
 hnswlib — it reads ``chroma.sqlite3`` and ``index_metadata.pickle``
 directly via :func:`mempalace.backends.chroma.hnsw_capacity_status`.
 
-Returns the capacity-status dict (also printed). Returns a dict with
-``status="unknown"`` when no palace exists at the given path.
+Returns the capacity-status dict (also printed), or a one-key dict in its
+place: ``status="unknown"`` when no palace directory is reachable at the
+given path or when ``chroma.sqlite3`` resolves to a named pipe,
+``status="uninitialized"`` when the palace directory is there but nothing
+resolves under ``chroma.sqlite3``, and ``status="empty"`` when the
+database is readable and holds no drawers.
+
+A state this gate cannot settle takes neither early return: the capacity
+report below answers for it instead, returning the ``&#123;"drawers": …,
+"closets": …}`` shape a healthy palace returns with both counts printed as
+unreadable. That report reaches its verdict through its own probes, not by
+opening the file: with ``sqlite3.connect`` instrumented, an unreadable
+directory, a broken link and a symlink loop each produce zero opens of
+``chroma.sqlite3``, while the same instrumentation counts opens on a
+healthy palace.
 
 ### `repair_max_seq_id`
 

@@ -57,6 +57,10 @@ _REAL_EMBEDDING_TEST_MODULES = {
     # Fork: adaptmem_ft dispatch tests assert on the real encoder classes;
     # the stub EF would swallow the model= dispatch they exist to verify.
     "test_adaptmem_ft",
+    "test_embeddinggemma2",
+    "test_embeddinggemma2_device",
+    "test_embeddinggemma2_integration",
+    "test_embedding_model_fallback",
 }
 
 
@@ -151,27 +155,86 @@ def _stable_embedding_function_for_tests(request, monkeypatch):
     )
     monkeypatch.setattr(embedding_mod, "get_embedding_function", lambda *_, **__: ef)
     monkeypatch.setattr(
-        chroma_mod.ChromaBackend, "_resolve_embedding_function", staticmethod(lambda: ef)
+        chroma_mod.ChromaBackend, "_resolve_embedding_function", staticmethod(lambda **_: ef)
     )
-    monkeypatch.setattr(embedding_wrapper, "_embed_texts", lambda texts: ef(input=list(texts)))
+    monkeypatch.setattr(embedding_wrapper, "_embed_texts", lambda texts, **_: ef(input=list(texts)))
     yield
 
 
+def _reset_loaded_mcp_writer_state(mcp_server) -> None:
+    """Release process-global MCP writer state between tests.
+
+    The atexit-registration flag is deliberately preserved. Its callback is
+    registered for the lifetime of the Python process, so resetting the flag
+    would allow later writer acquisitions to register duplicate callbacks.
+    """
+    release_writer_lock = getattr(
+        mcp_server,
+        "_release_mcp_writer_lock",
+        None,
+    )
+    try:
+        if callable(release_writer_lock):
+            release_writer_lock()
+    finally:
+        # Normalize status even when the prior test left a failed/read-only
+        # attempt rather than an acquired context manager.
+        for name, value in (
+            ("_MCP_WRITER_LOCK_CM", None),
+            ("_MCP_WRITER_READ_ONLY", False),
+            ("_MCP_WRITER_LOCK_FAILED", False),
+            ("_MCP_WRITER_LOCK_ERROR", ""),
+        ):
+            if hasattr(mcp_server, name):
+                setattr(mcp_server, name, value)
+
+
 @pytest.fixture(autouse=True)
-def _reset_mcp_cache():  # noqa: C901 — merged fork+upstream cached-module resets; see #383 sync
+def _release_palace_anchors():
+    """Close anchor connections on ``chroma.sqlite3`` after each test.
+
+    On Linux mempalace keeps one idle connection per database inode for the life
+    of the process; across thousands of temporary palaces that would run the
+    test process out of descriptors. Only acts when the module is loaded.
+    """
+    yield
+    import sys
+
+    inproc = sys.modules.get("mempalace.backends._inproc_sqlite")
+    if inproc is not None:
+        inproc.release_all()
+
+
+@pytest.fixture(autouse=True)
+def _reset_mcp_cache(monkeypatch):  # noqa: C901 — merged fork+upstream cached-module resets; see #383 sync
     """Reset cached MCP state between tests without importing mcp_server.
 
-    If mempalace.mcp_server is already imported, close/clear its KG cache and
-    Chroma client cache. If it has not been imported, leave it unloaded so
-    fork/spawn-based tests do not inherit extra Chroma/SQLite state.
-    """
+    If mempalace.mcp_server is already imported, release its writer lease,
+    reset writer-status globals, and close/clear its KG and storage caches. If
+    it has not been imported, leave it unloaded so fork/spawn-based tests do
+    not inherit extra Chroma/SQLite state.
 
-    def _clear_cache():
+    ``monkeypatch`` is an intentional ordering dependency. This fixture must
+    tear down before monkeypatch restores module globals; otherwise a writer
+    context acquired after a test patches ``_MCP_WRITER_LOCK_CM`` can be
+    discarded without its ``__exit__`` method running.
+    """
+    del monkeypatch
+
+    def _clear_cache():  # noqa: C901 — merged fork+upstream cached-module resets
         try:
             import sys
 
             mcp_server = sys.modules.get("mempalace.mcp_server")
             if mcp_server is not None:
+                stop_sync = getattr(mcp_server, "_stop_peer_sync_thread", None)
+                if callable(stop_sync):
+                    try:
+                        stop_sync()
+                    except Exception:
+                        pass
+
+                _reset_loaded_mcp_writer_state(mcp_server)
                 for kg in list(getattr(mcp_server, "_kg_by_path", {}).values()):
                     close = getattr(kg, "close", None)
                     if close is not None:
@@ -182,6 +245,17 @@ def _reset_mcp_cache():  # noqa: C901 — merged fork+upstream cached-module res
 
                 if hasattr(mcp_server, "_kg_by_path"):
                     mcp_server._kg_by_path.clear()
+
+                for ls in list(getattr(mcp_server, "_logstream_by_path", {}).values()):
+                    close = getattr(ls, "close", None)
+                    if close is not None:
+                        try:
+                            close()
+                        except Exception:
+                            pass
+
+                if hasattr(mcp_server, "_logstream_by_path"):
+                    mcp_server._logstream_by_path.clear()
 
                 # Close (not just dereference) the cached chromadb client so its
                 # rust-side file handles are released; on Windows a bare deref
@@ -480,3 +554,14 @@ def _reset_postgres_status_cache():
     mcp = sys.modules.get("mempalace.mcp_server")
     if mcp is not None and hasattr(mcp, "_pg_status_cache"):
         mcp._pg_status_cache = None
+
+
+@pytest.fixture(autouse=True)
+def _clear_configured_collection_name_cache():
+    """``get_configured_collection_name()`` is lru_cached for the process, so a test that changes
+    MEMPALACE_COLLECTION_NAME (or the config file) would otherwise leak its name into every later test."""
+    from mempalace.config import get_configured_collection_name
+
+    get_configured_collection_name.cache_clear()
+    yield
+    get_configured_collection_name.cache_clear()

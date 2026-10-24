@@ -262,7 +262,7 @@ def test_fts5_validation_still_runs_when_derived_is_skipped(project, derived_spi
     from mempalace import miner as m
 
     calls = []
-    monkeypatch.setattr(m, "_validate_palace_fts5_after_mine", lambda p: calls.append(p))
+    monkeypatch.setattr(m, "_validate_palace_fts5_after_mine", lambda p, **_k: calls.append(p))
     monkeypatch.setattr(m, "get_collection", lambda *_a, **_k: _StubCollection())
     monkeypatch.setattr(m, "get_closets_collection", lambda *_a, **_k: _StubCollection())
     monkeypatch.setattr(m, "mine_palace_lock", _nullcontext_factory())
@@ -278,7 +278,7 @@ def test_fts5_validation_runs_when_derived_is_computed(project, derived_spies, m
     from mempalace import miner as m
 
     calls = []
-    monkeypatch.setattr(m, "_validate_palace_fts5_after_mine", lambda p: calls.append(p))
+    monkeypatch.setattr(m, "_validate_palace_fts5_after_mine", lambda p, **_k: calls.append(p))
     monkeypatch.setattr(m, "get_collection", lambda *_a, **_k: _StubCollection())
     monkeypatch.setattr(m, "get_closets_collection", lambda *_a, **_k: _StubCollection())
     monkeypatch.setattr(m, "mine_palace_lock", _nullcontext_factory())

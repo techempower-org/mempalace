@@ -152,12 +152,12 @@ def estimated_count(self) -> int
 def manifest_get(self, extract_mode: str, source_files: Optional[list] = None) -> dict
 ```
 
-``&#123;source_file: &#123;"source_mtime", "chunk_total", "normalize_version"}}``.
+``&#123;source_file: &#123;"source_mtime", "chunk_total", "normalize_version", "convo_chunker_version"}}``.
 
 #### `manifest_put`
 
 ```python
-def manifest_put(self, source_file: str, extract_mode: str, source_mtime: Optional[float], chunk_total: int, normalize_version: int) -> None
+def manifest_put(self, source_file: str, extract_mode: str, source_mtime: Optional[float], chunk_total: int, normalize_version: int, convo_chunker_version: Optional[int] = None) -> None
 ```
 
 #### `close`

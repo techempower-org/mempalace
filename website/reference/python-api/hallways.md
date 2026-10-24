@@ -35,10 +35,101 @@ inspectable / editable by hand if needed.
 
 ## Functions
 
+### `entity_spelling_key`
+
+```python
+def entity_spelling_key(entity: str) -> str
+```
+
+Basename without a known code extension, lower-cased.
+
+``src/main.zig``, ``main.zig`` and ``/Users/x/proj/src/main.zig`` all key
+to ``main``; ``mcp_server`` and ``mcp_server.py`` both key to
+``mcp_server``. The soft key groups candidate aliases; unequal explicit
+extensions of the same stem (``parser.c`` / ``parser.h``) still key
+together here and are separated by :func:`same_file_spelling` and
+:func:`_spelling_clusters`. Used by the miner to skip self-pairs and by
+``mempalace audit`` / ``mempalace hallways --prune-self-links`` to find
+the ones older mines already wrote.
+
+### `is_generic_entity`
+
+```python
+def is_generic_entity(name: str) -> bool
+```
+
+A name that identifies no project: a short lower-case word (``content``,
+``thinking``), a harness tool (``WebFetch``), a generic noun (``Server``),
+a file every repo has (``compose.yml``, ``app.js``) or a library
+reference (``pathlib.Path``).
+
+Symbols (``ChatStore``), qualified project names (``store.baseURL``) and
+project names pass; the boundary with a short lower-case project name is
+fuzzy by construction. Cross-wing ubiquity is judged separately, where
+the wing counts are known.
+
+### `same_file_spelling`
+
+```python
+def same_file_spelling(a: str, b: str) -> bool
+```
+
+True when two spellings can only be the same file.
+
+They must share a basename key *and* one path must be a suffix of the
+other: ``main.zig`` and ``src/main.zig`` are one file, while
+``src/models/user.py`` and ``tests/models/user.py`` are two files that
+happen to share a name. Keying on the basename alone merged their
+associations and let ``--prune-spellings`` delete one of them.
+
+Unequal explicit code extensions stay distinct: ``src/parser.c`` and
+``src/parser.h`` share a stem and a directory, but they are two files.
+An extensionless spelling may still alias a single extension
+(``mcp_server`` / ``mcp_server.py``).
+
+### `canonical_spelling`
+
+```python
+def canonical_spelling(cluster: list[str]) -> str
+```
+
+The spelling records carry for one entity: its most qualified path first.
+
+A path is what tells ``src/models/user.py`` from ``tests/fixtures/user.py``
+once a record leaves its wing, so the spelling with the most directory
+segments wins; keeping the shortest threw that away and let two unrelated
+files meet as bare ``user.py`` in the cross-wing tunnel builder. Among
+spellings with no directory the shortest reads best (``ChatStore`` over
+``ChatStore.swift``). Ties break on the text, so the choice is stable.
+
+### `is_self_link`
+
+```python
+def is_self_link(record) -> bool
+```
+
+True when a hallway record joins two spellings of one entity.
+
+### `canonical_entities`
+
+```python
+def canonical_entities(entities: list[str]) -> list[str]
+```
+
+One spelling per entity, in first-seen order.
+
+The structural extractor records a file as both its path and its
+basename, so a drawer's entity list holds ``src/main.zig`` and
+``main.zig`` side by side. Pairing those raw spellings wrote a hallway
+from the entity to itself and four copies of every real association
+(``ChatStore`` × ``RootView`` under each spelling combination). Each
+entity keeps its :func:`canonical_spelling`, so hallways read
+``ChatStore ↔ RootView``.
+
 ### `compute_hallways_for_wing`
 
 ```python
-def compute_hallways_for_wing(wing: str, col = None, min_count: int = 2, config = None) -> list[dict]
+def compute_hallways_for_wing(wing: str, col = None, min_count: int | None = None, config = None) -> list[dict]
 ```
 
 Compute entity-pair hallways for one wing.
@@ -57,19 +148,29 @@ Algorithm:
 
 Args:
     wing: wing name to scan.
-    col: ChromaDB collection — must support ``.count()`` and paginated
-        ``.get(limit=..., offset=..., include=...)``. The fetch is filtered
-        to ``wing`` client-side rather than via ``.get(where=&#123;"wing": ...})``,
-        which binds one SQL variable per matched id and overflows SQLite's
-        ``SQLITE_MAX_VARIABLE_NUMBER`` on large wings (#1619). Fake
-        collections and alternate backends must implement this shape.
-        If ``None``, returns ``[]`` (caller didn't supply a backing
-        store, so nothing to compute against). Tests pass a controlled
-        MagicMock.
+    col: ChromaDB collection. A Chroma collection is read in one pass
+        over ``chroma.sqlite3`` (see :func:`_wing_metadata_from_sqlite`).
+        Any other must support paginated
+        ``.get(where=&#123;"wing": ...}, limit=..., offset=..., include=...)``.
+        The fetch is scoped to ``wing`` server-side AND paginated: an
+        unbounded ``.get(where=...)`` binds one SQL variable per matched
+        id and overflows SQLite's ``SQLITE_MAX_VARIABLE_NUMBER`` on wings
+        above ~32k drawers (#1619), while an unscoped page walk costs
+        O(total palace drawers) on every mine, pegging the CPU for
+        minutes on large palaces (#2466). A bounded page never binds more
+        than ``batch_size`` ids. Fake collections and alternate backends
+        must implement this shape. If ``None``, returns ``[]`` (caller
+        didn't supply a backing store, so nothing to compute against).
+        Tests pass a controlled MagicMock.
     min_count: minimum co-occurrence count required to materialize a
-        hallway between two entities. Default 2 — single co-occurrences
-        are noise (entities mentioned together once in one drawer);
-        two or more is a real signal. Clamped to ``>=1``.
+        hallway between two entities. Pass an explicit ``None`` (the
+        default) — or omit the arg — to resolve it from config:
+        ``MEMPALACE_KG_HALLWAY_MIN_COUNT`` env first, then the
+        ``hallway_min_count`` config-file value, then the historical
+        default of ``2`` (single co-occurrences are noise — entities named
+        together once in one drawer; two or more is a real signal). An
+        explicitly supplied integer is honoured verbatim, clamped to
+        ``>=1``.
     config: Optional ``MempalaceConfig`` selecting the palace-scoped
         hallway sidecar. Callers using an explicit palace path must pass
         the matching config so derived graph state cannot leak into the
@@ -115,6 +216,41 @@ A JSON file that turns out to be truncated part-way through stops the
 stream with a warning instead of raising. The records already yielded
 stand. This is derived-graph input, and the old whole-file reader returned
 nothing at all for a corrupt file.
+
+### `prune_spelling_hallways`
+
+```python
+def prune_spelling_hallways(config = None, apply: bool = False) -> dict
+```
+
+Find (and with ``apply``) remove hallways that older mines wrote per spelling.
+
+Two defects, one cause: before :func:`canonical_entities` the miner paired
+raw spellings, so every code wing has ``main.zig ↔ src/main.zig``
+(an entity joined to itself) and four copies of ``ChatStore ↔ RootView``
+(one per spelling combination). Self-links are dropped; of each variant
+group the record with the highest co-occurrence count survives under
+its canonical spellings and the rest are dropped. Only the sidecar file
+is touched, never a drawer. ``removed`` is 0 on a dry run.
+
+### `association_groups`
+
+```python
+def association_groups(records: list[dict]) -> list[list[dict]]
+```
+
+Group hallway records that are one association, per wing.
+
+Each endpoint is mapped to the file it names using the wing's own
+spellings (:func:`_spelling_clusters`), so two files that share a
+basename are two entities, and a bare name that could be either of them
+belongs to no file. A record with such an ambiguous endpoint is a group
+of its own: comparing it pairwise let it match both files and bridge
+their records into one group, and the prune then deleted a real
+association. Self-links are expected to be filtered out first.
+
+Shared by ``--prune-spellings`` and ``mempalace audit`` so the audit never
+reports a duplicate the prune would keep.
 
 ### `delete_hallway`
 

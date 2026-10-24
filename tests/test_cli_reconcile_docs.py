@@ -34,6 +34,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+import mempalace
 from mempalace import cli
 
 # Vendored from palace-doc-sync.sh (line `body=$(printf …)`), which runs on
@@ -172,7 +173,7 @@ def _run(srv, home, argv, cwd=None):
             "PALACE_DAEMON_STRICT": "1",
         }
     )
-    root = os.path.dirname(os.path.dirname(os.path.abspath(cli.__file__)))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(mempalace.__file__)))
     return subprocess.run(
         [sys.executable, "-m", "mempalace.cli", "reconcile-docs"] + argv,
         cwd=cwd or root,
@@ -194,7 +195,7 @@ def test_the_subprocess_imports_the_tree_under_test():
     """An editable install resolves `mempalace` to whichever tree it was
     installed from — not necessarily the one these tests import. Pin it, or a
     green run here could be a run against someone else's code."""
-    root = os.path.dirname(os.path.dirname(os.path.abspath(cli.__file__)))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(mempalace.__file__)))
     out = subprocess.run(
         [sys.executable, "-c", "import mempalace; print(mempalace.__file__)"],
         cwd=root,
@@ -202,7 +203,7 @@ def test_the_subprocess_imports_the_tree_under_test():
         text=True,
         check=True,
     ).stdout.strip()
-    assert os.path.dirname(out) == os.path.dirname(os.path.abspath(cli.__file__))
+    assert os.path.dirname(out) == os.path.dirname(os.path.abspath(mempalace.__file__))
 
 
 # ── 1. the wire: one format, not two that drift ────────────────────────

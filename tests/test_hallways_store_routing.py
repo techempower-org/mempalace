@@ -133,8 +133,13 @@ class _FakeCol:
     def count(self):
         return len(self._metadatas)
 
-    def get(self, limit=None, offset=0, include=None):
-        return {"metadatas": self._metadatas[offset : offset + (limit or len(self._metadatas))]}
+    def get(self, where=None, limit=None, offset=0, include=None):
+        # compute_hallways_for_wing scopes the fetch server-side (upstream #2477), so a fake must honour
+        # ``where={"wing": ...}`` the way the real backends do.
+        rows = self._metadatas
+        if where and "wing" in where:
+            rows = [m for m in rows if m.get("wing") == where["wing"]]
+        return {"metadatas": rows[offset : offset + (limit or len(rows))]}
 
 
 def test_compute_reads_dynamics_for_one_wing_not_the_whole_store(recording):
@@ -185,3 +190,30 @@ def test_compute_with_no_surviving_pairs_still_clears_the_wing(recording):
 
     assert ("replace_wing", "kiyo", 0) in recording.calls
     assert recording.records == []
+
+
+def test_the_json_store_uses_the_module_that_created_it(tmp_path, monkeypatch):
+    """A hallways module dropped from sys.modules (as patch.dict does to one first imported inside it) and then
+    imported again leaves two copies. The store must keep using its caller's copy, whose file a test patched, not
+    import the other, whose helpers resolve the real default hallway file (fork, 2026-10-23)."""
+    import importlib
+    import sys
+
+    import mempalace
+    import mempalace.hallways as orphan
+
+    monkeypatch.delitem(sys.modules, "mempalace.hallways")
+    monkeypatch.setattr(
+        mempalace, "hallways", orphan
+    )  # restored after the fresh import replaces it
+    fresh = importlib.import_module(
+        "mempalace.hallways"
+    )  # the package attribute now points at the fresh copy
+    assert fresh is not orphan and mempalace.hallways is fresh
+
+    monkeypatch.setattr(
+        orphan, "_get_hallway_file", lambda *a, **k: str(tmp_path / "hallways.json")
+    )
+    monkeypatch.setattr(fresh, "_get_hallway_file", lambda *a, **k: str(tmp_path / "wrong.json"))
+    orphan._save_hallways([{"id": "x", "wing": "w", "entity_a": "a", "entity_b": "b"}])
+    assert [h["id"] for h in orphan._hallway_store(None).iter()] == ["x"]

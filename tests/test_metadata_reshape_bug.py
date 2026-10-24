@@ -125,57 +125,42 @@ def test_chromacollection_upsert_coerces_empty_dict(fresh_collection):
 # ────────────────────────────────────────────────────────────────────
 
 
-def test_sanitizer_inner_dicts_alias_caller_dicts():
-    """KEY FINDING (#32 root cause candidate):
+def test_sanitizer_inner_dicts_do_not_alias_caller_dicts():
+    """#32 root cause, now FIXED: the sanitizer used to return the caller's own
+    inner dicts (``[m if (...) else sentinel for m in metadatas]``), so a
+    mutation between sanitize and chromadb's ``validate_metadata`` (a recycling
+    producer, a thread holding a reference) reached chromadb as an empty dict
+    and raised ``ValueError: Expected metadata to be a non-empty dict``.
 
-    The sanitizer returns a *new outer list*, but the **inner dicts**
-    are the same objects as the caller's. The comprehension
-    ``[m if (...) else sentinel for m in metadatas]`` returns ``m``
-    (the same reference) whenever it is a non-empty dict.
-
-    If anything mutates the caller's dict between sanitize and
-    chromadb's ``validate_metadata`` — e.g. a concurrent thread that
-    holds a reference and clears it, or a producer that recycles
-    metadata dicts across batches — chromadb will see an empty dict
-    and raise ``ValueError: Expected metadata to be a non-empty dict``
-    even though our sanitizer ran first.
+    The sanitizer now copies each entry (arrived with the 2026-10-22 upstream sync).
+    This pins the fix: equal content, distinct objects, and a later caller-side
+    mutation is not observed.
     """
     metas = [{"wing": "x", "room": "y"}, {}]
     sanitized = ChromaCollection._sanitize_metadatas_for_chromadb(metas)
 
-    # Outer list is a new object…
     assert sanitized is not metas
-    # …but the non-empty dict at index 0 is **aliased**.
-    assert sanitized[0] is metas[0]
+    assert sanitized[0] == metas[0]
+    assert sanitized[0] is not metas[0]
 
-    # Therefore mutating the caller's dict after sanitize is observed
-    # by the sanitized list — which is exactly the failure mode in #32.
     metas[0].clear()
-    assert sanitized[0] == {}, (
-        "If this assert fires, the sanitizer was made non-aliasing — "
-        "good. Update the regression test below and the docs."
-    )
+    assert sanitized[0] == {"wing": "x", "room": "y"}
 
 
-def test_sanitized_dict_empty_after_caller_clear_passes_into_chromadb(fresh_collection):
-    """End-to-end demonstration: aliasing means a post-sanitize mutation
-    is what chromadb actually validates."""
+def test_caller_clear_after_sanitize_no_longer_reaches_chromadb(fresh_collection):
+    """End-to-end form of the fix: clearing the caller's dict after sanitize no
+    longer hands chromadb an empty metadata dict, so the add succeeds."""
     metas = [{"wing": "x", "room": "y"}]
     sanitized = ChromaCollection._sanitize_metadatas_for_chromadb(metas)
-    # Caller clears its own metadata dict (could be a recycling
-    # producer, a thread that owns the dict, an in-place sanitize
-    # higher up, etc.).
     metas[0].clear()
-    # Now the sanitized list contains an empty dict, and chromadb's
-    # validator rejects it — even though our sanitizer "ran".
     raw = fresh_collection._collection
-    with pytest.raises(ValueError, match="non-empty dict"):
-        raw.add(
-            ids=["x"],
-            documents=["d"],
-            embeddings=[_emb(1)],
-            metadatas=sanitized,
-        )
+    raw.add(
+        ids=["x"],
+        documents=["d"],
+        embeddings=[_emb(1)],
+        metadatas=sanitized,
+    )
+    assert raw.get(ids=["x"], include=["metadatas"])["metadatas"] == [{"wing": "x", "room": "y"}]
 
 
 # ────────────────────────────────────────────────────────────────────

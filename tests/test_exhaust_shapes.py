@@ -225,6 +225,11 @@ def _mock_col(docs, metas):
     data = {"documents": docs, "metadatas": metas}
     empty = {"documents": [], "metadatas": []}
     col.get.side_effect = lambda **kw: data if kw.get("offset", 0) == 0 else empty
+    # L1 asks for the recency window via get_recent (upstream #2168). A bare MagicMock would answer that with an
+    # empty mock, so bind the BaseCollection default, which pages through get() and sorts newest first.
+    from mempalace.backends.base import BaseCollection
+
+    col.get_recent = lambda **kw: BaseCollection.get_recent(col, **kw)
     return col
 
 

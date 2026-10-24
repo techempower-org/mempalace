@@ -1197,14 +1197,21 @@ class PostgresCollection(BaseCollection):
                 " PRIMARY KEY (source_file, extract_mode))"
             ).format(self._manifest_id)
         )
+        # The exchange chunker's version (upstream #2591): a row written by an older chunker is stale in the exchange
+        # scope, so its file re-mines once. Nullable and added in place, so rows from before it read as version 1.
+        self._cursor().execute(
+            self._sql.SQL(
+                "ALTER TABLE {} ADD COLUMN IF NOT EXISTS convo_chunker_version integer"
+            ).format(self._manifest_id)
+        )
         self._manifest_ready = True
 
     def manifest_get(self, extract_mode: str, source_files: Optional[list] = None) -> dict:
-        """``{source_file: {"source_mtime", "chunk_total", "normalize_version"}}``."""
+        """``{source_file: {"source_mtime", "chunk_total", "normalize_version", "convo_chunker_version"}}``."""
         self._ensure_manifest()
         params: list[Any] = [extract_mode]
         sql = self._sql.SQL(
-            "SELECT source_file, source_mtime, chunk_total, normalize_version FROM {}"
+            "SELECT source_file, source_mtime, chunk_total, normalize_version, convo_chunker_version FROM {}"
             " WHERE extract_mode = %s"
         ).format(self._manifest_id)
         if source_files is not None:
@@ -1216,7 +1223,12 @@ class PostgresCollection(BaseCollection):
         cur = self._cursor()
         cur.execute(sql, params)
         return {
-            row[0]: {"source_mtime": row[1], "chunk_total": row[2], "normalize_version": row[3]}
+            row[0]: {
+                "source_mtime": row[1],
+                "chunk_total": row[2],
+                "normalize_version": row[3],
+                "convo_chunker_version": row[4],
+            }
             for row in cur.fetchall()
         }
 
@@ -1227,17 +1239,27 @@ class PostgresCollection(BaseCollection):
         source_mtime: Optional[float],
         chunk_total: int,
         normalize_version: int,
+        convo_chunker_version: Optional[int] = None,
     ) -> None:
         self._ensure_manifest()
         self._cursor().execute(
             self._sql.SQL(
                 "INSERT INTO {} (source_file, extract_mode, source_mtime, chunk_total,"
-                " normalize_version, updated_at) VALUES (%s, %s, %s, %s, %s, now())"
+                " normalize_version, convo_chunker_version, updated_at)"
+                " VALUES (%s, %s, %s, %s, %s, %s, now())"
                 " ON CONFLICT (source_file, extract_mode) DO UPDATE SET"
                 " source_mtime = EXCLUDED.source_mtime, chunk_total = EXCLUDED.chunk_total,"
-                " normalize_version = EXCLUDED.normalize_version, updated_at = now()"
+                " normalize_version = EXCLUDED.normalize_version,"
+                " convo_chunker_version = EXCLUDED.convo_chunker_version, updated_at = now()"
             ).format(self._manifest_id),
-            [source_file, extract_mode, source_mtime, int(chunk_total), int(normalize_version)],
+            [
+                source_file,
+                extract_mode,
+                source_mtime,
+                int(chunk_total),
+                int(normalize_version),
+                None if convo_chunker_version is None else int(convo_chunker_version),
+            ],
         )
 
     def close(self) -> None:

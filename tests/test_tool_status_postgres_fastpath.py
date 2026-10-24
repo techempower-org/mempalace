@@ -251,3 +251,29 @@ def test_tool_status_chroma_path_unchanged(monkeypatch):
     assert result["total_drawers"] == 3
     assert result["wings"] == {"wing_user": 2, "wing_code": 1}
     assert result["rooms"] == {"hall_facts": 2, "hall_events": 1}
+
+
+def test_tool_status_reports_the_configured_backend_when_resolution_refuses(monkeypatch):
+    """A palace whose files belong to another backend makes resolve_backend_name raise BackendMismatchError.
+    The status payload names the configured backend instead of failing (fork; seen in CI, where the test palace
+    path held chroma artifacts while MEMPALACE_BACKEND=postgres)."""
+    from mempalace.backends.base import BackendMismatchError
+
+    _reset_caches()
+    monkeypatch.setattr(os, "environ", _chroma_env() | {"MEMPALACE_BACKEND": "postgres"})
+
+    def refuse(*_a, **_k):
+        raise BackendMismatchError(
+            "palace contains 'chroma' backend artifacts, but 'postgres' was selected"
+        )
+
+    monkeypatch.setattr(mcp_server, "_selected_backend_name", refuse)
+    fake_col = MagicMock()
+    fake_col.count.return_value = 1
+    with (
+        patch.object(mcp_server, "_get_collection", return_value=fake_col),
+        patch.object(mcp_server, "_get_cached_metadata", return_value=[{"wing": "w", "room": "r"}]),
+    ):
+        result = mcp_server.tool_status()
+    assert "error" not in result
+    assert result["backend"] == "postgres"

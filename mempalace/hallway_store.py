@@ -200,16 +200,26 @@ class JsonHallwayStore:
     store makes writes O(wing) in I/O as well.
     """
 
-    def __init__(self, config=None):
+    def __init__(self, config=None, io=None):
         self.config = config
+        # The hallways module whose file helpers this store uses. hallways._hallway_store passes its own module, so
+        # the store reads and writes exactly the file its caller resolves (and that a test patched). A lazy
+        # ``from . import hallways`` could reach a second copy of that module (one removed from sys.modules and
+        # imported again), whose helpers resolve the real default hallway file.
+        self._io = io
+
+    def _hallways(self):
+        if self._io is not None:
+            return self._io
+        from . import hallways
+
+        return hallways
 
     def ensure_schema(self) -> None:
         return None
 
     def _iter(self):
-        from . import hallways
-
-        return hallways._iter_hallways(self.config)
+        return self._hallways()._iter_hallways(self.config)
 
     def _read(self, fold, empty):
         """Run ``fold`` over the stream. A missing or corrupt file reads as ``empty``.
@@ -234,9 +244,7 @@ class JsonHallwayStore:
             logger.warning("hallways: stream ended early, file unreadable past this point: %s", exc)
 
     def _write(self, records, commit=None) -> bool:
-        from . import hallways
-
-        return hallways._save_hallways(records, self.config, commit=commit)
+        return self._hallways()._save_hallways(records, self.config, commit=commit)
 
     def list(self, wing: Optional[str] = None, limit=None, offset=None) -> list[dict]:
         def fold(stream):
@@ -563,7 +571,7 @@ class PostgresHallwayStore:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def get_hallway_store(config=None):
+def get_hallway_store(config=None, io=None):
     """Return the configured hallway store. JSON unless postgres is opted into.
 
     A postgres selection with no DSN falls back to JSON with a warning rather
@@ -578,7 +586,7 @@ def get_hallway_store(config=None):
 
     backend = (getattr(config, "hallway_backend", None) or "json").strip().lower()
     if backend != "postgres":
-        return JsonHallwayStore(config)
+        return JsonHallwayStore(config, io=io)
 
     dsn = getattr(config, "postgres_dsn", None)
     if not dsn:
@@ -588,5 +596,5 @@ def get_hallway_store(config=None):
             "hallway file at %s",
             getattr(config, "hallway_file", "<unknown>"),
         )
-        return JsonHallwayStore(config)
+        return JsonHallwayStore(config, io=io)
     return PostgresHallwayStore(dsn)
