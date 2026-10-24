@@ -10,7 +10,7 @@ Port: techempower-org/mempalace#578, head **95026931**.
 
 The live service is `palace-daemon.service` (system unit, User=jp). It runs
 `/home/jp/.local/share/palace-daemon/venv/bin/python main.py --palace /srv/mempalace-data/palace`, and that venv has
-an **editable** install of `/home/jp/Projects/memorypalace` (direct_url.json → file:///home/jp/Projects/memorypalace).
+an **editable** install of `/home/jp/Projects/memorypalace` (its direct_url.json points at that local checkout).
 
 - **Rollback sha:** `6641c5599ee2036b2910a01252ab900f32e32bb1`, the live checkout's `main` = origin/main (#577,
   2026-10-21). The checkout is clean except an untracked `.claudeignore`.
