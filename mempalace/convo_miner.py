@@ -966,6 +966,7 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
                 chunk_total=chunk_total,
                 authored_at=authored_at,
                 content_hash=content_hash,
+                convo_chunker_version=CONVO_CHUNKER_VERSION if extract_mode == "exchange" else None,
             )
             if not refreshed:
                 # Fall back to re-filing them in full — same result as a
@@ -1133,8 +1134,13 @@ def _refresh_unchanged_drawers(
     chunk_total: int,
     authored_at: Optional[str],
     content_hash: Optional[str],
+    convo_chunker_version: Optional[int] = None,
 ) -> bool:
     """Metadata-only refresh of drawers whose content matched the palace.
+
+    In the exchange scope it also stamps ``convo_chunker_version``: an unchanged chunk is still this chunker's output,
+    and without the stamp upstream #2591's ``_meta_is_current`` keeps reading the drawer as stale, so chunk 0's
+    ``content_hash`` would never reach ``prefetch_content_hashes`` again (found on the final-gate scratch re-mine).
 
     Stamps the pass's ``source_mtime`` / ``chunk_total`` (and ``authored_at``
     / chunk-0 ``content_hash`` when known) so the completeness bookkeeping in
@@ -1156,6 +1162,8 @@ def _refresh_unchanged_drawers(
                 meta["authored_at"] = authored_at
             if content_hash is not None and chunk.get("chunk_index", 0) == 0:
                 meta["content_hash"] = content_hash
+            if convo_chunker_version is not None:
+                meta["convo_chunker_version"] = convo_chunker_version
             ids.append(drawer_id)
             metas.append(meta)
         try:

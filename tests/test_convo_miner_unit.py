@@ -1179,6 +1179,25 @@ class TestIncrementalReMine:
             assert after["entities"] == before["entities"]
         assert sum(len(ids) for ids in col.update_calls) == 3
 
+    def test_unchanged_drawers_from_an_older_chunker_are_stamped_current(self):
+        """Upstream #2591: an exchange drawer without convo_chunker_version is stale. A re-mine whose chunks come out
+        byte-identical takes the metadata-only refresh, which must stamp the current version too, or chunk 0's
+        content_hash stays invisible to prefetch_content_hashes (fork, found on the final-gate scratch re-mine)."""
+        import os
+
+        from mempalace.palace import CONVO_CHUNKER_VERSION
+
+        col = _IncrementalFakeCol()
+        self._mine(col, _chunks(3), content_hash="h1")
+        for r in col.records.values():
+            r["metadata"].pop("convo_chunker_version", None)  # as an older chunker filed them
+        future = 4_000_000_000.0
+        os.utime(self.source, (future, future))
+        self._mine(col, _chunks(3), content_hash="h1")
+        refreshed = [col.records[i]["metadata"] for ids in col.update_calls for i in ids]
+        assert refreshed, "the unchanged drawers were refreshed"
+        assert {m.get("convo_chunker_version") for m in refreshed} == {CONVO_CHUNKER_VERSION}
+
     def test_touched_but_unchanged_file_embeds_nothing(self):
         col = _IncrementalFakeCol()
         self._mine(col, _chunks(5))
