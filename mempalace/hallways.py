@@ -632,6 +632,7 @@ def _wing_metadata_from_sqlite(col, wing: str) -> Optional[list]:
     drawers at all.
     """
     from .palace import _fast_collection_metadata
+    from .backends.chroma import MetadataRecoveryPending
 
     scope = {"wing": wing}
     try:
@@ -647,6 +648,9 @@ def _wing_metadata_from_sqlite(col, wing: str) -> Optional[list]:
                 probe.close()
             if isinstance(first, dict) and first.get("wing") == wing:
                 metadatas = [first]
+    except MetadataRecoveryPending:
+        logger.debug("compute_hallways_for_wing: metadata recovery pending for %s", wing)
+        return None
     except Exception:
         logger.warning(
             "compute_hallways_for_wing: sqlite metadata scan failed for %s; paging instead",

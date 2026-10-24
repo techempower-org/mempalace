@@ -1359,9 +1359,9 @@ def _count_embeds(monkeypatch):
     counter = {"texts": 0}
     inner = embedding_wrapper._embed_texts
 
-    def counting(texts):
+    def counting(texts, **kwargs):
         counter["texts"] += len(texts)
-        return inner(texts)
+        return inner(texts, **kwargs)
 
     monkeypatch.setattr(embedding_wrapper, "_embed_texts", counting)
     return counter

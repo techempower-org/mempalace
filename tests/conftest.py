@@ -57,6 +57,10 @@ _REAL_EMBEDDING_TEST_MODULES = {
     # Fork: adaptmem_ft dispatch tests assert on the real encoder classes;
     # the stub EF would swallow the model= dispatch they exist to verify.
     "test_adaptmem_ft",
+    "test_embeddinggemma2",
+    "test_embeddinggemma2_device",
+    "test_embeddinggemma2_integration",
+    "test_embedding_model_fallback",
 }
 
 
@@ -151,9 +155,9 @@ def _stable_embedding_function_for_tests(request, monkeypatch):
     )
     monkeypatch.setattr(embedding_mod, "get_embedding_function", lambda *_, **__: ef)
     monkeypatch.setattr(
-        chroma_mod.ChromaBackend, "_resolve_embedding_function", staticmethod(lambda: ef)
+        chroma_mod.ChromaBackend, "_resolve_embedding_function", staticmethod(lambda **_: ef)
     )
-    monkeypatch.setattr(embedding_wrapper, "_embed_texts", lambda texts: ef(input=list(texts)))
+    monkeypatch.setattr(embedding_wrapper, "_embed_texts", lambda texts, **_: ef(input=list(texts)))
     yield
 
 

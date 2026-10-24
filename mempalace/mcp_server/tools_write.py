@@ -375,7 +375,7 @@ def _fill_drawer_previews(col, page: list) -> None:
     _apply_drawer_previews(page, docs_by_id)
 
 
-def _fill_drawer_previews_from_sqlite(page: list) -> None:
+def _fill_drawer_previews_from_sqlite(page: list, *, connection=None) -> bool:
     """Same, reading the page's documents straight from ``chroma.sqlite3``.
 
     The list itself is answered from metadata only — joining documents into
@@ -384,18 +384,16 @@ def _fill_drawer_previews_from_sqlite(page: list) -> None:
     """
     physical_ids = _page_physical_ids(page)
     if not physical_ids:
-        return
+        return True
     from ..backends.chroma import sqlite_documents_for_ids
 
     docs_by_id = sqlite_documents_for_ids(
-        _config.palace_path, _config.collection_name, physical_ids
+        _config.palace_path, _config.collection_name, physical_ids, _connection=connection
     )
     if docs_by_id is None:
-        # sqlite went unreadable between the two reads; previews are a
-        # display detail, so degrade to blank rather than fail the listing.
-        logger.debug("sqlite preview hydration failed; leaving previews empty")
-        return
+        return False
     _apply_drawer_previews(page, docs_by_id)
+    return True
 
 
 def _collapse_drawer_rows(ids, documents, metadatas):
@@ -723,7 +721,7 @@ def tool_add_drawer(
         _wal_result("add_drawer", outcome)
         return outcome
     except Exception as e:
-        outcome = {"success": False, "error": str(e), "warnings": warnings}
+        outcome = {**_embed_failure(e, success=False), "warnings": warnings}
         _wal_result("add_drawer", outcome)
         return outcome
 
@@ -906,6 +904,7 @@ def tool_mine(
     dry_run: bool = False,
     extract: str = "exchange",
     include_ignored: Optional[list[str]] = None,
+    include_subagents: bool = False,
 ):
     """Mine a directory into the palace — the MCP equivalent of ``mempalace mine``.
 
@@ -928,18 +927,24 @@ def tool_mine(
              ``"general"``; ignored by the other modes.
     include_ignored: project-relative paths to scan even if ignored, matching
                      the CLI's ``--include-ignored``; projects mode only.
+    include_subagents: also mine Claude Code ``subagents/`` transcript dirs,
+                       matching the CLI's ``--include-subagents``; convos mode
+                       only, ignored by the other modes.
 
     Runs synchronously and mirrors the :func:`tool_sync` contract: success
     returns ``{success: True, mode, dry_run, output[, output_truncated]}`` where ``output`` is
     the miner's human-readable summary (captured so it cannot corrupt the
     JSON-RPC stream); failure returns ``{success: False, error[, error_class]}``.
+    A mine that ran but could not file some files returns ``success: False``
+    with ``error_class: "MineFileErrors"``, ``files_failed``, up to 20
+    ``failed_files`` and the same ``output``.
     The palace write lock is held by the miners themselves, so a concurrent mine
     surfaces as a structured already-running error. Orphan cleanup is not part of
     mining — use ``mempalace_sync`` for that.
     """
     global _metadata_cache
     from ..daemon import LOCK_REFUSAL_ERROR_CLASS
-    from ..palace import MineAlreadyRunning, MineValidationError
+    from ..palace import MineAlreadyRunning, MineFileErrors, MineValidationError
 
     if not _config.palace_path:
         np = _no_palace()
@@ -967,6 +972,14 @@ def tool_mine(
             "error": "include_ignored is supported only in projects mode",
             "error_class": "ValueError",
         }
+    # A truthy non-boolean ("false", 1) would silently opt into mining every
+    # subagent transcript, so accept only a real JSON boolean.
+    if not isinstance(include_subagents, bool):
+        return {
+            "success": False,
+            "error": "include_subagents must be a boolean",
+            "error_class": "ValueError",
+        }
 
     src = os.path.expanduser(source) if source else ""
     # convos accepts one conversation file as well as a directory — the CLI has
@@ -981,6 +994,14 @@ def tool_mine(
         return {"success": False, "error": f"source not found: {source!r}"}
 
     def _run():
+        # Files that failed are reported with the summary the mine printed,
+        # which an exception escaping the stdout capture would discard.
+        try:
+            return _run_miner()
+        except MineFileErrors as exc:
+            return exc
+
+    def _run_miner():
         if mode == "convos":
             from ..convo_miner import mine_convos
 
@@ -992,6 +1013,7 @@ def tool_mine(
                 limit=limit,
                 dry_run=dry_run,
                 extract_mode=extract,
+                include_subagents=include_subagents,
             )
         if mode == "extract":
             from ..format_miner import mine_formats
@@ -1071,6 +1093,12 @@ def tool_mine(
         # payload to the MCP client. The useful summary is at the tail, so keep
         # the end and flag the truncation (never silently).
         payload = {"success": True, "mode": mode, "dry_run": dry_run, "output": output}
+        if isinstance(_result, MineFileErrors):
+            payload["success"] = False
+            payload["error"] = str(_result)
+            payload["error_class"] = "MineFileErrors"
+            payload["files_failed"] = len(_result.failed_files)
+            payload["failed_files"] = list(_result.failed_files[:20])
         cap = 4000
         if len(output) > cap:
             payload["output"] = output[-cap:]
@@ -1442,50 +1470,50 @@ def tool_list_drawers(
         elif len(conditions) > 1:
             where = {"$and": conditions}
 
-        listed = None
+        def make_page(ids, metadatas):
+            drawers = _collapse_drawer_rows(ids, [], metadatas)
+            if since_dt is not None or before_dt is not None:
+                drawers = [
+                    d
+                    for d in drawers
+                    if _filed_at_in_window(
+                        d.get("metadata", {}).get("filed_at"), since_dt, before_dt
+                    )
+                ]
+            page = drawers[offset : offset + limit]
+            # Fork: the tag list on each entry, beside upstream's logical-drawer shape.
+            for entry in page:
+                entry["tags"] = extract_tags_from_metadata(entry.get("metadata") or {})
+            return {
+                "drawers": page,
+                "total": len(drawers),
+                "count": len(page),
+                "offset": offset,
+                "limit": limit,
+            }
+
         if _is_chroma_backend() and _config.palace_path:
-            from ..backends.chroma import sqlite_list_id_metadata
+            from ..backends.chroma import sqlite_list_id_metadata, sqlite_metadata_snapshot
 
-            listed = sqlite_list_id_metadata(
-                _config.palace_path, _config.collection_name, where=where
-            )
-        if listed is not None:
-            # Documents are fetched for the displayed page only, below.
-            ids, metadatas = listed
-            documents = []
-        else:
-            col = _get_collection()
-            if not col:
-                return _collection_error_or_no_palace()
-            ids, documents, metadatas = _fetch_drawer_rows(col, where=where, include=["metadatas"])
-        drawers = _collapse_drawer_rows(ids, documents, metadatas)
+            # Metadata selection, logical grouping and page-only text hydration
+            # share a recovered SQLite snapshot. Close it before any SDK fallback.
+            with sqlite_metadata_snapshot(_config.palace_path, _config.collection_name) as conn:
+                if conn is not None:
+                    listed = sqlite_list_id_metadata(
+                        _config.palace_path, _config.collection_name, where=where, _connection=conn
+                    )
+                    if listed is not None:
+                        result = make_page(*listed)
+                        if _fill_drawer_previews_from_sqlite(result["drawers"], connection=conn):
+                            return result
 
-        if since_dt is not None or before_dt is not None:
-            drawers = [
-                d
-                for d in drawers
-                if _filed_at_in_window(d.get("metadata", {}).get("filed_at"), since_dt, before_dt)
-            ]
-
-        page = drawers[offset : offset + limit]
-        if listed is not None:
-            _fill_drawer_previews_from_sqlite(page)
-        else:
-            col = _get_collection()
-            if col:
-                _fill_drawer_previews(col, page)
-
-        # Surface the tag list on each entry without dropping upstream's
-        # logical-drawer shape (wing/room/content_preview/metadata).
-        for entry in page:
-            entry["tags"] = extract_tags_from_metadata(entry.get("metadata") or {})
-        return {
-            "drawers": page,
-            "total": len(drawers),
-            "count": len(page),
-            "offset": offset,
-            "limit": limit,
-        }
+        col = _get_collection()
+        if not col:
+            return _collection_error_or_no_palace()
+        ids, _documents, metadatas = _fetch_drawer_rows(col, where=where, include=["metadatas"])
+        result = make_page(ids, metadatas)
+        _fill_drawer_previews(col, result["drawers"])
+        return result
     except Exception as e:
         logger.exception("tool_list_drawers failed")
         return {"error": str(e)}
@@ -1660,7 +1688,7 @@ def tool_update_drawer(
             "closets_deleted": closets_deleted,
         }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        return _embed_failure(e, success=False)
 
 
 def tool_rate_memory(drawer_id: str, useful: bool):

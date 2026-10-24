@@ -924,6 +924,11 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
     )
     p_mine.add_argument("--wing", default=None, help="Wing name (default: directory name)")
     p_mine.add_argument(
+        "--related-drawer-id",
+        default=None,
+        help="Associate media assets with an existing drawer (--source media only)",
+    )
+    p_mine.add_argument(
         "--no-gitignore",
         action="store_true",
         help="Don't respect .gitignore files when scanning project files",
@@ -1269,6 +1274,17 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         ),
     )
     p_search.add_argument(
+        "--include-media",
+        action="store_true",
+        help="Include local media assets using shared EmbeddingGemma 2 cosine ranking",
+    )
+    p_search.add_argument(
+        "--query-task",
+        choices=["search", "code"],
+        default="search",
+        help="Use the EmbeddingGemma 2 code retrieval prompt (default: search)",
+    )
+    p_search.add_argument(
         "--since",
         default=None,
         help=(
@@ -1391,7 +1407,7 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         choices=["full", "light"],
         default="full",
         help=(
-            "Tool names in the block: 'full' (default, the 47-tool mempalace-mcp) or "
+            "Tool names in the block: 'full' (default, the 52-tool mempalace-mcp) or "
             "'light' (palace_query / palace_exec / palace_coordinate)"
         ),
     )

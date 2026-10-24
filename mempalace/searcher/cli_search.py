@@ -125,6 +125,13 @@ def _cli_ranked_hits(
             kwargs["where"] = where
         results = _query_drawers_with_filter_fallback(col, kwargs, query, n_results, wing, room)
     except Exception as e:
+        if _model_error_class(e) is not None:
+            # The configured embedding function could not be built (C): the
+            # message names the fix, so print it plainly.
+            import sys
+
+            print(f"mempalace: {e}", file=sys.stderr)
+            raise SearchError(str(e)) from e
         print(f"\n  Search error: {e}")
         raise SearchError(f"Search error: {e}") from e
 
@@ -165,7 +172,26 @@ def _cli_ranked_hits(
     return _fold_copies_across_sources(hits, _cli_hit_source, _cli_hit_ref), fetched
 
 
-def search(  # noqa: C901 — fork delegation + upstream window fence on one CLI entry
+def search(*args, **kwargs):
+    """The CLI search (see :func:`_search_delegating`). A model error raised on the way (the fork's pre-open
+    probes open the collection outside upstream's ``_open_collection_or_explain``) prints upstream's single
+    ``mempalace: <message>`` line on stderr and raises :class:`SearchError`, never a traceback."""
+    from ..embedding import _model_error_class
+
+    try:
+        return _search_delegating(*args, **kwargs)
+    except SearchError:
+        raise
+    except Exception as e:
+        if _model_error_class(e) is None:
+            raise
+        import sys
+
+        print(f"mempalace: {e}", file=sys.stderr)
+        raise SearchError(str(e)) from e
+
+
+def _search_delegating(  # noqa: C901 — fork delegation + upstream window fence on one CLI entry
     query: str,
     palace_path: str,
     wing: str = None,
@@ -175,6 +201,8 @@ def search(  # noqa: C901 — fork delegation + upstream window fence on one CLI
     since: str = None,
     before: str = None,
     collection=None,
+    include_media: bool = False,
+    query_task: str = "search",
 ):
     """
     Search the palace. Returns verbatim drawer content.
@@ -186,6 +214,41 @@ def search(  # noqa: C901 — fork delegation + upstream window fence on one CLI
     Delegates to ``search_memories`` so CLI and MCP callers share the same
     hybrid ranking, sqlite-BM25 fallback, and scope-aware warnings.
     """
+    if include_media or query_task != "search":
+        result = search_memories(
+            query,
+            palace_path,
+            wing=wing,
+            room=room,
+            n_results=n_results,
+            since=since,
+            before=before,
+            include_media=include_media,
+            query_task=query_task,
+        )
+        if result.get("error"):
+            if result.get("error_class"):
+                # A model error: the details carry the explanation and the fix.
+                import sys
+
+                print(f"mempalace: {result['details']}", file=sys.stderr)
+            else:
+                print(result["error"])
+            raise SearchError(result["error"])
+        for index, hit in enumerate(result["results"], 1):
+            kind = hit.get("media_type") or "text/code"
+            print(f"{index}. [{kind}] {hit['source_file']}  similarity={hit['similarity']:.3f}")
+            print(f"   {hit['source_path']}")
+            if hit.get("result_type") == "asset":
+                if not hit.get("available"):
+                    print("   File is missing; the indexed reference is retained.")
+                if hit.get("drawer_id"):
+                    print(f"   Related drawer: {hit['drawer_id']}")
+            else:
+                print(hit["text"])
+        if not result["results"]:
+            print("No results found.")
+        return
     # Filesystem-first checks distinguish State A / State B before reaching
     # chromadb (upstream #1498). PersistentClient lazily creates
     # chroma.sqlite3 on first open of an empty palace dir, so without these
@@ -273,6 +336,12 @@ def search(  # noqa: C901 — fork delegation + upstream window fence on one CLI
         before=before,
     )
     if "error" in result and not result.get("results"):
+        if result.get("error_class"):
+            # A model error (upstream C): one ``mempalace: <details>`` line on stderr, as upstream's CLI prints it.
+            import sys
+
+            print(f"mempalace: {result.get('details') or result['error']}", file=sys.stderr)
+            raise SearchError(result["error"])
         # Preserve the palace path in the printed error so the user sees
         # which palace the search tried to open (a common source of
         # confusion when more than one palace is in play). The structured

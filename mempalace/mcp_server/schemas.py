@@ -408,6 +408,15 @@ TOOLS = {
                     "type": "boolean",
                     "description": "Preserve standalone CLI candidate selection, ranking, and output. Used by the CLI Hub forwarder.",
                 },
+                "include_media": {
+                    "type": "boolean",
+                    "description": "Opt in to local image/audio/video assets and text in the shared EmbeddingGemma 2 space. Returns media paths and metadata with cosine ranking.",
+                },
+                "query_task": {
+                    "type": "string",
+                    "enum": ["search", "code"],
+                    "description": "EmbeddingGemma 2 task prompt: general search (default) or native code retrieval.",
+                },
                 "context": {
                     "type": "string",
                     "description": "Background context for the search (optional). NOT used for embedding — only for future re-ranking.",
@@ -645,6 +654,14 @@ TOOLS = {
                     "description": (
                         "Project-relative paths to scan even if ignored, matching CLI "
                         "--include-ignored. Projects mode only; default: []."
+                    ),
+                },
+                "include_subagents": {
+                    "type": "boolean",
+                    "description": (
+                        "Also mine Claude Code subagent transcripts (subagents/ dirs), "
+                        "matching CLI --include-subagents. Convos mode only; ignored by "
+                        "other modes. Default: false."
                     ),
                 },
             },

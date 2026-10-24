@@ -212,7 +212,7 @@ def tool_diary_write(
             "error_class": LOCK_REFUSAL_ERROR_CLASS,
         }
     except Exception as e:
-        return {"success": False, "error": str(e), "warnings": warnings}
+        return {**_embed_failure(e, success=False), "warnings": warnings}
 
 
 def _diary_read_response(agent_name: str, entries: list, total: int, wing: str = "") -> dict:

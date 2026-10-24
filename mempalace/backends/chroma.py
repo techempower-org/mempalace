@@ -12,7 +12,9 @@ import shlex
 import sqlite3
 import weakref
 import struct
+import threading
 import time
+import warnings
 from collections import defaultdict
 from numbers import Integral
 from pathlib import Path
@@ -31,6 +33,7 @@ from .base import (
     BaseBackend,
     BaseCollection,
     CollectionNotInitializedError,
+    EmbeddingFunctionMismatchError,
     GetResult,
     HealthStatus,
     LexicalHit,
@@ -44,6 +47,31 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class MetadataRecoveryPending(sqlite3.OperationalError):
+    """The persisted metadata projection needs the normal Chroma recovery path."""
+
+
+# chromadb persists EmbeddingGemma 2's EF config on the collection and, on
+# every later open, tries to rebuild it from its own registry, which does not
+# know "embeddinggemma2": it warns "Could not reconstruct embedding function
+# embeddinggemma2 ... Setting to None" and drops the rebuilt function. That
+# is harmless here (MemPalace always passes its own function or caller
+# vectors and checks the recorded identity), so silence exactly that warning.
+# Registering the class instead would let chromadb build and embed with a
+# function from the persisted config whenever none is passed, which is the
+# kind of silent fallback the backend refuses.
+def _ignore_embeddinggemma2_reconstruct_warning() -> None:
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Could not reconstruct embedding function embeddinggemma2: ",
+        category=UserWarning,
+        module=r"chromadb(\.|$)",
+    )
+
+
+_ignore_embeddinggemma2_reconstruct_warning()
 
 
 # ChromaDB's own default is ``anonymized_telemetry=True``. In the 1.x line we
@@ -2277,7 +2305,7 @@ def _sqlite_iter_metadata(
     else:
         sql = f"""
             SELECT ids.id, {columns} FROM ({scope}) ids
-            LEFT JOIN embedding_metadata m ON m.id = ids.id AND m.key NOT LIKE 'chroma:%'
+            LEFT JOIN embedding_metadata m ON m.id = ids.id AND substr(m.key, 1, 7) != 'chroma:'
             ORDER BY ids.id
         """
         cursor = conn.execute(sql, params)
@@ -2380,10 +2408,40 @@ def _equality_filters(where: Optional[dict]) -> Optional[dict]:
     return filters
 
 
+@contextlib.contextmanager
+def sqlite_metadata_snapshot(palace_path: str, collection_name: str):
+    """A recovered metadata snapshot, or None when callers must use Chroma.
+
+    Keep this context open through page selection and document hydration. It
+    reads no documents itself and never takes a backend write lock.
+    """
+    conn = None
+    db_path = os.path.join(palace_path, "chroma.sqlite3")
+    try:
+        if os.path.isfile(db_path):
+            conn = open_palace_reader(db_path)
+            conn.execute("PRAGMA busy_timeout = 3000")
+            conn.execute("BEGIN")
+            if _sqlite_ready_metadata_segment(conn, collection_name) is None:
+                conn.close()
+                conn = None
+    except sqlite3.Error:
+        if conn is not None:
+            conn.close()
+        conn = None
+    try:
+        yield conn
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def sqlite_list_id_metadata(
     palace_path: str,
     collection_name: str,
     where: Optional[dict] = None,
+    *,
+    _connection=None,
 ) -> Optional[tuple[list[str], list[dict]]]:
     """All matching drawer ids + metadata from sqlite, without opening HNSW.
 
@@ -2403,16 +2461,14 @@ def sqlite_list_id_metadata(
     filters = _equality_filters(where)
     if filters is None:
         return None
+    reader = (
+        contextlib.nullcontext(_connection)
+        if _connection is not None
+        else sqlite_metadata_snapshot(palace_path, collection_name)
+    )
     try:
-        conn = open_palace_reader(db_path)
-        try:
-            conn.execute("PRAGMA busy_timeout = 3000")
-            if (
-                conn.execute(
-                    "SELECT 1 FROM collections WHERE name = ?", (collection_name,)
-                ).fetchone()
-                is None
-            ):
+        with reader as conn:
+            if conn is None:
                 return None
             value_columns = _metadata_value_columns(conn)
             if not value_columns:
@@ -2440,14 +2496,12 @@ def sqlite_list_id_metadata(
                 JOIN collections c ON s.collection = c.id
                 {" ".join(joins)}
                 LEFT JOIN embedding_metadata m
-                    ON m.id = e.id AND m.key != 'chroma:document'
+                    ON m.id = e.id AND substr(m.key, 1, 7) != 'chroma:'
                 WHERE c.name = ?
                 ORDER BY e.id
                 """,
                 params,
             ).fetchall()
-        finally:
-            conn.close()
     except sqlite3.Error:
         return None
 
@@ -2496,6 +2550,8 @@ def sqlite_documents_for_ids(
     palace_path: str,
     collection_name: str,
     ids: list,
+    *,
+    _connection=None,
 ) -> Optional[dict]:
     """``{drawer_id: document}`` for ``ids`` only, straight from sqlite.
 
@@ -2516,10 +2572,15 @@ def sqlite_documents_for_ids(
         return None
     wanted = [str(i) for i in ids]
     docs: dict[str, str] = {}
+    reader = (
+        contextlib.nullcontext(_connection)
+        if _connection is not None
+        else sqlite_metadata_snapshot(palace_path, collection_name)
+    )
     try:
-        conn = open_palace_reader(db_path)
-        try:
-            conn.execute("PRAGMA busy_timeout = 3000")
+        with reader as conn:
+            if conn is None:
+                return None
             segments = [
                 row[0]
                 for row in conn.execute(
@@ -2558,8 +2619,6 @@ def sqlite_documents_for_ids(
                     internal,
                 ):
                     docs[public_by_internal[int(internal_id)]] = str(value or "")
-        finally:
-            conn.close()
     except sqlite3.Error:
         return None
     return docs
@@ -3262,6 +3321,26 @@ def _clear_chroma_system_cache() -> bool:
         _clearing_system_cache = False
 
 
+# How many writes ChromaCollection instances in this process have started.
+# A mine compares it before and after to learn whether it wrote anything, and
+# skips its post-mine quick_check when it did not (#2684). Process-wide rather
+# than per palace: a write to another palace in between costs one extra check,
+# never a missed one.
+_write_serial = 0
+_write_serial_lock = threading.Lock()
+
+
+def chroma_write_serial() -> int:
+    """Number of Chroma writes (add, upsert, update, delete) started in this process."""
+    return _write_serial
+
+
+def _count_write() -> None:
+    global _write_serial
+    with _write_serial_lock:
+        _write_serial += 1
+
+
 class ChromaCollection(BaseCollection):
     """Thin adapter translating ChromaDB dict returns into typed results.
 
@@ -3281,6 +3360,8 @@ class ChromaCollection(BaseCollection):
     no-lock behaviour for callers that construct a ``ChromaCollection``
     directly without going through ``ChromaBackend``.
     """
+
+    upsert_merges_metadata = True
 
     def __init__(self, collection, palace_path: Optional[str] = None, backend=None):
         self._collection = collection
@@ -3303,7 +3384,10 @@ class ChromaCollection(BaseCollection):
         next collection open rebuilds the client, reloading every HNSW segment
         it had already paid for. That made the file-a-drawer-then-search cycle
         reload the whole index each time.
+
+        Counts the write first, so one that fails partway still counts.
         """
+        _count_write()
         if self._palace_path is None:
             yield
             return
@@ -3402,7 +3486,24 @@ class ChromaCollection(BaseCollection):
         with self._write_lock():
             self._collection.add(**kwargs)
 
-    def upsert(self, *, documents, ids, metadatas=None, embeddings=None):
+    def _upsert_with_metadata_guard(self, *, expected, documents, ids, metadatas, embeddings):
+        """Reject metadata drift between embedding and publication.
+
+        The embedding runs before the backend lock (HTTP may yield its request
+        lock there). Cooperating MemPalace writers cannot change metadata
+        between this comparison and publication.
+        """
+        with self._write_lock():
+            result = self.get(ids=ids, include=["metadatas"])
+            current = dict(zip(result.ids, result.metadatas))
+            if current != expected:
+                raise ValueError("Metadata changed while embedding; retry the upsert")
+            kwargs = self._upsert_kwargs(
+                documents=documents, ids=ids, metadatas=metadatas, embeddings=embeddings
+            )
+            return self._collection.upsert(**kwargs)
+
+    def _upsert_kwargs(self, *, documents, ids, metadatas=None, embeddings=None):
         if getattr(self, "_require_embeddings", False) and embeddings is None:
             raise ValueError("caller-vector collection requires explicit embeddings")
 
@@ -3415,10 +3516,31 @@ class ChromaCollection(BaseCollection):
             kwargs["metadatas"] = sanitized
         if embeddings is not None:
             kwargs["embeddings"] = embeddings
+        return kwargs
+
+    def upsert(self, *, documents, ids, metadatas=None, embeddings=None):
+        kwargs = self._upsert_kwargs(
+            documents=documents, ids=ids, metadatas=metadatas, embeddings=embeddings
+        )
         with self._write_lock():
             self._collection.upsert(**kwargs)
 
-    def update(
+    def _update_with_metadata_guard(self, *, expected, ids, documents, metadatas, embeddings):
+        """Publish only if the documents and metadata used by embedding still agree."""
+        with self._write_lock():
+            result = self.get(ids=ids, include=["documents", "metadatas"])
+            current = {
+                record_id: (result.documents[index], result.metadatas[index] or {})
+                for index, record_id in enumerate(result.ids)
+            }
+            if current != expected:
+                raise ValueError("Document or metadata changed while embedding; retry the update")
+            kwargs = self._update_kwargs(
+                ids=ids, documents=documents, metadatas=metadatas, embeddings=embeddings
+            )
+            return self._collection.update(**kwargs)
+
+    def _update_kwargs(
         self,
         *,
         ids,
@@ -3442,6 +3564,12 @@ class ChromaCollection(BaseCollection):
             kwargs["metadatas"] = metadatas
         if embeddings is not None:
             kwargs["embeddings"] = embeddings
+        return kwargs
+
+    def update(self, *, ids, documents=None, metadatas=None, embeddings=None):
+        kwargs = self._update_kwargs(
+            ids=ids, documents=documents, metadatas=metadatas, embeddings=embeddings
+        )
         with self._write_lock():
             self._collection.update(**kwargs)
 
@@ -3708,6 +3836,11 @@ class ChromaCollection(BaseCollection):
         def rows():
             conn = open_palace_reader(db_path)
             try:
+                conn.execute("BEGIN")
+                if _sqlite_ready_metadata_segment(conn, name) is None:
+                    raise MetadataRecoveryPending(
+                        "metadata recovery pending; use collection reader"
+                    )
                 yield from _sqlite_iter_metadata(conn, name, keys, require_key, equals)
             finally:
                 conn.close()
@@ -4141,21 +4274,39 @@ class ChromaBackend(BaseBackend):
         _LIVE_BACKENDS.add(self)
 
     @staticmethod
-    def _resolve_embedding_function():
-        """Return the EF for the user's ``embedding_device`` setting.
+    def _resolve_embedding_function(*, read_only: bool = False):
+        """Return the EF for the user's ``embedding_model`` / ``embedding_device``.
 
         Both ``get_collection`` and ``get_or_create_collection`` must receive
         the EF explicitly — ChromaDB 1.x does not persist it with the
         collection, so a reader that omits the argument silently gets the
         library default and its queries won't match the writer's vectors.
-        """
-        try:
-            from ..embedding import get_embedding_function
 
-            return get_embedding_function()
-        except Exception:
-            logger.exception("Failed to build embedding function; using chromadb default")
-            return None
+        Never returns None, so chromadb's default function is never used. A
+        configured function that fails to build raises
+        :class:`~mempalace.embedding.EmbeddingFunctionUnavailableError` (an
+        EmbeddingGemma 2 failure keeps its original error). With
+        ``read_only=True`` it returns an
+        :class:`~mempalace.embedding.UnavailableEmbeddingFunction` instead,
+        so opens that only count, list or fetch rows keep working and any
+        embed raises that error.
+        """
+        from ..embedding import (
+            EmbeddingFunctionUnavailableError,
+            UnavailableEmbeddingFunction,
+            configured_embedding_function,
+        )
+
+        # A misspelled model (UnknownEmbeddingModelError) always stops the
+        # open, not run on chromadb's default (MiniLM) function. The caller
+        # reports a refusal (CLI: one ``mempalace:`` line; MCP: the tool
+        # error plus one rate-limited log line).
+        try:
+            return configured_embedding_function()
+        except EmbeddingFunctionUnavailableError as error:
+            if read_only:
+                return UnavailableEmbeddingFunction(error)
+            raise
 
     @staticmethod
     def _explain_ef_mismatch(error: Exception, palace_path: str) -> Optional[str]:
@@ -4178,16 +4329,22 @@ class ChromaBackend(BaseBackend):
             current_model = MempalaceConfig().embedding_model
         except Exception:
             current_model = "unknown"
-        rebuild_cmd = f"mempalace --palace {shlex.quote(palace_path)} repair rebuild-index"
+        quoted = shlex.quote(palace_path)
+        rebuild_cmd = f"mempalace --palace {quoted} repair rebuild-index"
+        separate_cmd = (
+            f"mempalace --palace <new-palace> repair --mode from-sqlite --source {quoted}"
+        )
         return (
-            f"Embedding model mismatch reading palace at {palace_path!r}.\n"
+            f"Embedding model mismatch reading palace at {palace_path}.\n"
             f"  Underlying ChromaDB error: {msg}\n"
-            f"  Current MEMPALACE_EMBEDDING_MODEL={current_model!r}.\n"
+            f"  Current embedding_model={current_model!r}.\n"
             f"  The palace was built with a different embedding model. Either:\n"
-            f"    (a) revert the model: unset MEMPALACE_EMBEDDING_MODEL (or set "
-            f"the previous value), or\n"
-            f"    (b) re-embed in place: `{rebuild_cmd}` "
-            f"(writes new vectors with the current model)."
+            f"    (a) revert the model: set embedding_model (config.json or "
+            f"MEMPALACE_EMBEDDING_MODEL) back to the value the palace was built "
+            f"with, or\n"
+            f"    (b) re-embed with the current model: `{rebuild_cmd}` (in place; "
+            f"archives the original palace first) or `{separate_cmd}` (into a "
+            f"separate palace)."
         )
 
     # ------------------------------------------------------------------
@@ -4479,6 +4636,18 @@ class ChromaBackend(BaseBackend):
         if not create and not os.path.isdir(palace_path):
             raise PalaceNotFoundError(palace_path)
 
+        if caller_vectors:
+            # Passing None explicitly prevents Chroma's client default EF.
+            ef_kwargs = {
+                "embedding_function": None,
+            }
+        else:
+            # Before the folder is created: a configured function that cannot
+            # be built refuses a create with nothing written.
+            ef_kwargs = {
+                "embedding_function": self._resolve_embedding_function(read_only=not create),
+            }
+
         if create:
             os.makedirs(palace_path, exist_ok=True)
             try:
@@ -4489,21 +4658,6 @@ class ChromaBackend(BaseBackend):
         # Collection opens and creates write to chroma.sqlite3.
         with palace_db_lock(os.path.join(palace_path, "chroma.sqlite3")):
             client = self._client(palace_path)
-
-            if caller_vectors:
-                # Passing None explicitly prevents Chroma's client default EF.
-                ef_kwargs = {
-                    "embedding_function": None,
-                }
-            else:
-                ef = self._resolve_embedding_function()
-                ef_kwargs = (
-                    {
-                        "embedding_function": ef,
-                    }
-                    if ef is not None
-                    else {}
-                )
 
             if create:
                 try:
@@ -4524,7 +4678,7 @@ class ChromaBackend(BaseBackend):
                 except ValueError as e:
                     explanation = self._explain_ef_mismatch(e, palace_path)
                     if explanation:
-                        raise ValueError(explanation) from e
+                        raise EmbeddingFunctionMismatchError(explanation) from e
                     raise
             else:
                 try:
@@ -4534,7 +4688,7 @@ class ChromaBackend(BaseBackend):
                 except ValueError as e:
                     explanation = self._explain_ef_mismatch(e, palace_path)
                     if explanation:
-                        raise ValueError(explanation) from e
+                        raise EmbeddingFunctionMismatchError(explanation) from e
                     raise
             if caller_vectors:
                 _require_caller_vector_collection(collection)
@@ -4616,8 +4770,7 @@ class ChromaBackend(BaseBackend):
         self, palace_path: str, collection_name: str, hnsw_space: str = "cosine"
     ) -> ChromaCollection:
         """Create (not get-or-create) ``collection_name`` with the given HNSW space."""
-        ef = self._resolve_embedding_function()
-        ef_kwargs = {"embedding_function": ef} if ef is not None else {}
+        ef_kwargs = {"embedding_function": self._resolve_embedding_function()}
         with palace_db_lock(os.path.join(palace_path, "chroma.sqlite3")):
             collection = self._client(palace_path).create_collection(
                 collection_name,
