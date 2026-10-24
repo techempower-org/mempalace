@@ -204,8 +204,8 @@ def test_env_flag_on_adds_to_existing_chain(monkeypatch, fake_psycopg):
         metadata={"wing": "memorypalace", "room": "decisions"},
     )
 
-    # MENTIONS stage ran (regex extractor → kg.add_mention).
-    assert kg.add_mention.called
+    # MENTIONS stage ran (regex extractor → kg.replace_mentions, one call for the drawer).
+    assert kg.replace_mentions.called
     # Queue stage ran on the patched fake connection.
     insert_sqls = [
         sql for sql, _ in queue_conn._cursor.executes if sql.lstrip().startswith("INSERT")
