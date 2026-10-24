@@ -19,3 +19,22 @@ How the 2026-10 upstream port (#578, upstream through 3.11.0) went live on famil
   across the restart and drain on the new code.
 - **A restored dump needs the AGE graphid fixup and `VACUUM ANALYZE`** before a scratch daemon serves (REPORT,
   production observations 1–2).
+
+## After the move: the re-mine drain
+- **Count re-mine progress from the source manifest, not from drawer metadata.** A file is current when its row in
+  `mempalace_drawers_source_manifest` (`extract_mode = 'exchange'`) has `convo_chunker_version = 2`. A re-mine stamps
+  chunk 0 and the chunks it rewrites. Byte-identical drawers keep no `convo_chunker_version` in their metadata *by
+  design* (#575). Counting "drawers without the key" overstated the 10-24 drain: 21,775 looked stale when only the
+  dormant files were behind, and one 14-drawer file still showed 10 "stale" after it was current.
+  ```sql
+  SELECT coalesce(convo_chunker_version::text, 'stale') AS v, count(*)
+  FROM mempalace_drawers_source_manifest WHERE extract_mode = 'exchange' GROUP BY 1;
+  ```
+- **The KG write-through dominates a full re-file.** At ~1.2M Drawer and 1.5M Entity vertices, the per-mention
+  `MERGE`/`CREATE` ran ~90% of wall time (76 drawers/min against ~1,050 with `MEMPALACE_KG_WRITETHROUGH=0`). Each
+  rewrite also added a second set of MENTIONS edges, because `add_mention` always CREATEs. Turn the write-through off
+  for the drain, and on again only after the rewrite fix.
+- **The background queue never re-files a dormant file.** The daemon's drain skips a source "unchanged since last
+  successful mine" before mempalace's chunker-version check runs. To bring an untouched transcript current, use a
+  blocking `POST /mine` (`"background": false`, the file's current wing, `mode: convos`). It takes the same
+  `_mine_sem` as the drain.
