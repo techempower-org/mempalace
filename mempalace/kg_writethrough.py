@@ -46,6 +46,46 @@ class _ExtractedEntity(Protocol):
 Extractor = Callable[[str], list[_ExtractedEntity]]
 
 
+def _write_drawer_mentions(
+    kg: Any, drawer_id: str, entities: list, *, confidence: float, commit: bool
+) -> bool:
+    """Write one drawer's MENTIONS edges; returns whether anything was sent to the KG.
+
+    Prefers ``kg.replace_mentions``: the drawer's old edges go first, then all its edges in one UNWIND statement, so a
+    re-filed drawer ends up with exactly its current entities instead of a second set beside the first (an incremental
+    re-mine upserts a changed drawer under its old id, with no delete-through). An empty ``entities`` still clears the
+    old edges: they described content that is gone.
+
+    A KG without ``replace_mentions`` gets the old per-mention ``add_mention`` loop, failures isolated per mention.
+    """
+    if hasattr(kg, "replace_mentions"):
+        kg.replace_mentions(
+            drawer_id,
+            [
+                (ent.name, getattr(ent, "type", "unknown"), getattr(ent, "count", 1))
+                for ent in entities
+            ],
+            confidence=confidence,
+            commit=commit,
+        )
+        return True
+    wrote = False
+    for ent in entities:
+        try:
+            kg.add_mention(
+                drawer_id=drawer_id,
+                entity_name=ent.name,
+                entity_type=getattr(ent, "type", "unknown"),
+                count=getattr(ent, "count", 1),
+                confidence=confidence,
+                commit=commit,
+            )
+            wrote = True
+        except Exception as e:  # noqa: BLE001
+            logger.debug("add_mention failed for (%s, %s): %s", drawer_id, ent.name, e)
+    return wrote
+
+
 def make_age_writethrough(
     kg: Any,
     extractor: Extractor,
@@ -100,29 +140,19 @@ def make_age_writethrough(
         except Exception as e:  # noqa: BLE001
             logger.warning("extractor failed for drawer %s: %s", drawer_id, e)
             return
-        if not entities:
-            return
-        # Cap to bound per-drawer write cost.
-        # Use add_mention (Drawer)-[:MENTIONS]->(Entity) rather than
-        # add_triple (Entity-RELATION-Entity) so the drawer keeps its
-        # :Drawer label and the palace-structure layer (Wing→Room→Drawer)
-        # connects cleanly to the entity layer.
-        for ent in entities[:max_entities_per_drawer]:
-            try:
-                kg.add_mention(
-                    drawer_id=drawer_id,
-                    entity_name=ent.name,
-                    entity_type=getattr(ent, "type", "unknown"),
-                    count=getattr(ent, "count", 1),
-                    confidence=confidence,
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.debug(
-                    "add_mention failed for (%s, %s): %s",
-                    drawer_id,
-                    ent.name,
-                    e,
-                )
+        # Cap to bound per-drawer write cost. MENTIONS is (Drawer)-[:MENTIONS]->(Entity) rather than add_triple's
+        # Entity-RELATION-Entity, so the drawer keeps its :Drawer label and the palace-structure layer
+        # (Wing→Room→Drawer) connects cleanly to the entity layer.
+        try:
+            _write_drawer_mentions(
+                kg,
+                drawer_id,
+                list(entities or [])[:max_entities_per_drawer],
+                confidence=confidence,
+                commit=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("mention write failed for drawer %s: %s", drawer_id, e)
 
     return hook
 
@@ -188,10 +218,12 @@ def make_age_batch_writethrough(
     that curve: ~10x fewer savepoints at this corpus's entity density, and
     it bounds a loss to one drawer's edges rather than the batch's.
 
-    Note the edges stay ``CREATE``-always (``add_mention`` does not upsert),
-    so a partially-applied batch is a state this system already tolerates.
-    That is also why nothing here retries: a retry after a lost commit would
-    duplicate the edges it did write.
+    With ``replace_mentions`` (the AGE KG), each drawer costs two statements
+    (delete its old edges, then one UNWIND for all its current ones), and a
+    re-filed drawer ends with exactly its current edges: rerunning a drawer is
+    idempotent. A KG without it falls back to ``add_mention``, whose edges are
+    ``CREATE``-always, so there a partially-applied batch is a state the system
+    tolerates, and nothing retries: a retry would duplicate what it wrote.
     """
 
     def hook(drawers) -> None:
@@ -206,21 +238,17 @@ def make_age_batch_writethrough(
             except Exception as e:  # noqa: BLE001
                 logger.warning("extractor failed for drawer %s: %s", drawer_id, e)
                 continue
-            if not entities:
-                continue
-            for ent in entities[:max_entities_per_drawer]:
-                try:
-                    kg.add_mention(
-                        drawer_id=drawer_id,
-                        entity_name=ent.name,
-                        entity_type=getattr(ent, "type", "unknown"),
-                        count=getattr(ent, "count", 1),
-                        confidence=confidence,
-                        commit=False,
-                    )
+            try:
+                if _write_drawer_mentions(
+                    kg,
+                    drawer_id,
+                    list(entities or [])[:max_entities_per_drawer],
+                    confidence=confidence,
+                    commit=False,
+                ):
                     wrote = True
-                except Exception as e:  # noqa: BLE001
-                    logger.debug("add_mention failed for (%s, %s): %s", drawer_id, ent.name, e)
+            except Exception as e:  # noqa: BLE001
+                logger.debug("mention write failed for drawer %s: %s", drawer_id, e)
         if not wrote:
             return
         try:

@@ -980,6 +980,72 @@ class KnowledgeGraphAGE:
             commit=commit,
         )
 
+    def replace_mentions(
+        self,
+        drawer_id: str,
+        mentions: list,
+        *,
+        confidence: float = 0.5,
+        commit: bool = True,
+    ) -> int:
+        """Make a drawer's MENTIONS edges exactly ``mentions``. Returns the number of edges written.
+
+        ``mentions`` is a list of ``(entity_name, entity_type, count)``. Repeated names collapse to one edge (the
+        highest count wins, the first type is kept), so a drawer never holds two edges to one entity.
+
+        This is the write-through's rewrite-safe path. :meth:`add_mention` always CREATEs, and an incremental re-mine
+        upserts a changed drawer under its old id with no delete-through, so each re-file used to add a full second
+        set of edges (2026-10-24: one live-session drawer held 16,872 edges over 36 entities). Here the drawer's old
+        edges go first, then every edge is written in ONE ``UNWIND`` statement instead of one ``MERGE``/``CREATE``
+        round trip per mention: two statements per drawer, whatever its entity count. The UNWIND form is the one
+        ``backfill_age`` has run in production since ``4fbd8c6``, with ``MERGE`` on the drawer because the
+        write-through can run before the palace-structure layer has created it.
+
+        The entity list is rendered as an explicit Cypher list of maps. ``_cypher_literal`` would turn a Python list
+        into a JSON *string*.
+        """
+        drawer_id = sanitize_kg_value(drawer_id, "drawer_id")
+        merged: dict = {}
+        for name, etype, count in mentions:
+            try:
+                name = sanitize_kg_value(name, "entity_name")
+                _cypher_literal(name)
+            except ValueError as e:
+                logger.debug("replace_mentions: skipping entity %r on %s: %s", name, drawer_id, e)
+                continue
+            if name in merged:
+                merged[name] = (merged[name][0], max(merged[name][1], int(count)))
+            else:
+                merged[name] = (etype if etype else "unknown", int(count))
+        self._run_cypher(
+            """
+            MATCH (d:Drawer {id: $did})-[m:MENTIONS]->()
+            DELETE m
+            """,
+            {"did": drawer_id},
+            commit=False if merged else commit,
+        )
+        if not merged:
+            return 0
+        literals = ", ".join(
+            "{{name: {}, etype: {}, cnt: {}, conf: {}}}".format(
+                _cypher_literal(name), _cypher_literal(str(etype)), int(count), float(confidence)
+            )
+            for name, (etype, count) in merged.items()
+        )
+        self._run_cypher(
+            f"""
+            MERGE (d:Drawer {{id: $did}})
+            WITH d
+            UNWIND [{literals}] AS ent
+            MERGE (e:Entity {{name: ent.name}})
+            CREATE (d)-[:MENTIONS {{count: ent.cnt, confidence: ent.conf, etype: ent.etype}}]->(e)
+            """,
+            {"did": drawer_id},
+            commit=commit,
+        )
+        return len(merged)
+
     def commit(self) -> None:
         """Commit the pending KG-write transaction.
 
