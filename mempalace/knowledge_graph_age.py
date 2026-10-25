@@ -97,6 +97,9 @@ def _cypher_literal(value: Any) -> str:
     - ``int``/``float`` → bare numeric literal
     - ``bool`` → bare ``true``/``false``
     - ``str`` → single-quoted with backslash-escaping
+    - ``list``/``tuple`` → a Cypher list of the rendered elements. Before 2026-10-24 a list went through
+      ``json.dumps`` like any other value, so ``UNWIND $ids`` in :meth:`KnowledgeGraphAGE.delete_drawers` unwound
+      a single string and matched nothing: the delete-through never removed a Drawer node.
     - anything else → ``json.dumps`` and treated as a string
 
     Defense in depth: rejects strings containing the outer dollar-quote
@@ -111,6 +114,8 @@ def _cypher_literal(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_cypher_literal(v) for v in value) + "]"
     s = value if isinstance(value, str) else json.dumps(value)
     if _AGE_DQ_TAG in s:
         raise ValueError(
@@ -1124,6 +1129,8 @@ class KnowledgeGraphAGE:
             """,
             {"ids": ids},
             commit=commit,
+            # Without fetch the call returned [] and this count was always 0, which hid that nothing was deleted.
+            fetch=True,
         )
         return len(rows)
 
