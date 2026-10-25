@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **the KG write-through replaces a drawer's MENTIONS edges in two statements instead of CREATE-ing one more edge per mention on every re-file, so a re-mined drawer no longer gains a duplicate set of edges** (`HEAD` — pending resolution)
+- **the KG write-through replaces a drawer's MENTIONS edges in three statements instead of CREATE-ing one more edge per mention on every re-file, so a re-mined drawer no longer gains a duplicate set of edges** (`HEAD` — pending resolution)
   An incremental re-mine upserts a changed drawer under its old id with
   no delete-through, and `add_mention` always CREATEs, so every re-file
   added a full second set of MENTIONS edges. The chunker-version re-file
@@ -34,14 +34,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   was about 90% of that re-file's wall time: 76 drawers/min against
   about 1,050 with the write-through off.
 
-  `KnowledgeGraphAGE.replace_mentions` deletes the drawer's edges, then
-  writes all its current ones in one UNWIND statement (backfill_age's
-  form, with MERGE on the drawer). That is two statements per drawer
-  whatever its entity count. Repeated names collapse to one edge, and an
-  unsanitizable name is skipped rather than failing the drawer. Both
-  hooks use it when the KG has it, and a drawer whose new content has no
-  entities still loses its old edges. A KG without it keeps the
-  per-mention loop.
+  `KnowledgeGraphAGE.replace_mentions` deletes the drawer's edges with
+  one SQL DELETE through `drawer_id_unique` and `idx_mentions_start_id`,
+  MERGEs the drawer node on its own, then writes all its current edges
+  in one `MATCH … UNWIND` statement (backfill_age's form). That makes
+  three statements per drawer whatever its entity count. On the
+  production-size graph the Cypher edge delete didn't finish in 120 s,
+  and MERGE ahead of the UNWIND took 4.8 s against 0.07 s for MATCH.
+  Repeated names collapse to one edge, and an unsanitizable name is
+  skipped rather than failing the drawer. Both hooks use it when the KG
+  has it, and a drawer whose new content has no entities still loses
+  its old edges. A KG without it keeps the per-mention loop.
 
 
 ## [2026-10-21]
