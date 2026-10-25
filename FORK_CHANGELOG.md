@@ -18,6 +18,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-10-25]
+
+
+### Fixed
+
+
+- **the KG delete-through deletes again; a Python list now reaches Cypher as a list, so delete_drawers' UNWIND matches its drawers instead of one JSON string, and its count is real** (`HEAD` — pending resolution)
+  `_cypher_literal` rendered every non-scalar through `json.dumps` as a
+  quoted string, so `delete_drawers`' `UNWIND $ids` unwound a single
+  string and matched no drawer. The delete-through never removed a
+  Drawer node or its edges. A probe on a real AGE 1.6 graph confirmed it,
+  and production held 93,223 Drawer nodes with no drawer row (of
+  1,289,138) on 2026-10-25. `delete_drawers` also ran without
+  `fetch=True`, so its count was always 0 and hid the miss.
+
+  Lists and tuples now render as Cypher lists of rendered elements, with
+  the dollar-quote check applied per element. Dicts keep their JSON-string
+  form. `delete_drawers` is the only caller that passes a list. The
+  existing orphans are a separate, reviewed cleanup.
+
+
 ## [2026-10-24]
 
 
