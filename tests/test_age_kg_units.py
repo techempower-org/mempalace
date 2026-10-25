@@ -35,11 +35,15 @@ def test_cypher_literal_rejects_dq_tag_in_string():
 
 
 def test_cypher_literal_non_string_falls_through_json_dumps():
-    """Lists, dicts, etc. round-trip via json.dumps and get string-quoted."""
+    """Dicts and other non-scalars round-trip via json.dumps and get string-quoted.
+
+    Lists no longer do: a list renders as a Cypher list (see test_kg_cypher_list_literal.py). The old
+    "'[1, 2, 3]'" string form is what made ``UNWIND $ids`` in delete_drawers match nothing.
+    """
     from mempalace.knowledge_graph_age import _cypher_literal
 
-    # json.dumps([1, 2, 3]) = "[1, 2, 3]"; cypher_literal wraps with single quotes.
-    assert _cypher_literal([1, 2, 3]) == "'[1, 2, 3]'"
+    assert _cypher_literal({"a": 1}) == "'{\"a\": 1}'"
+    assert _cypher_literal([1, 2, 3]) == "[1, 2, 3]"
 
 
 def test_inline_cypher_params_substitutes_named_placeholders():
