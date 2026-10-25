@@ -134,25 +134,30 @@ def _capturing_kg():
         kg.sent.append((" ".join(cypher.split()), dict(params), commit))
         return []
 
+    def _delete_drawer_mentions(drawer_id, *, commit):
+        kg.sent.append(("SQL DELETE MENTIONS", {"did": drawer_id}, commit))
+
     kg._run_cypher = _run_cypher
+    kg._delete_drawer_mentions = _delete_drawer_mentions
     return kg
 
 
-def test_replace_deletes_first_then_writes_all_edges_in_one_unwind():
+def test_replace_deletes_first_then_merges_the_drawer_then_one_unwind():
     kg = _capturing_kg()
     n = kg.replace_mentions(
         "drawer_x", [("Alpha", "org", 2), ("Beta", "person", 1)], confidence=0.5, commit=False
     )
     assert n == 2
-    assert len(kg.sent) == 2
-    delete, write = kg.sent
-    assert delete[0].startswith("MATCH (d:Drawer {id: $did})-[m:MENTIONS]->() DELETE m")
-    assert delete[1] == {"did": "drawer_x"} and delete[2] is False
+    assert len(kg.sent) == 3
+    delete, merge, write = kg.sent
+    assert delete == ("SQL DELETE MENTIONS", {"did": "drawer_x"}, False)
+    assert merge == ("MERGE (d:Drawer {id: $did})", {"did": "drawer_x"}, False)
     assert (
-        "UNWIND [{name: 'Alpha', etype: 'org', cnt: 2, conf: 0.5}, {name: 'Beta', etype: 'person', cnt: 1, conf: 0.5}]"
-        in write[0]
+        "UNWIND [{name: 'Alpha', etype: 'org', cnt: 2, conf: 0.5}, "
+        "{name: 'Beta', etype: 'person', cnt: 1, conf: 0.5}]" in write[0]
     )
-    assert write[0].startswith("MERGE (d:Drawer {id: $did}) WITH d UNWIND")
+    # MATCH, not MERGE, ahead of the UNWIND: MERGE there planned 70x slower at production scale.
+    assert write[0].startswith("MATCH (d:Drawer {id: $did}) WITH d UNWIND")
     assert write[0].count("CREATE (d)-[:MENTIONS") == 1
     assert write[2] is False
 
@@ -163,7 +168,7 @@ def test_repeated_names_collapse_to_one_edge_with_the_highest_count():
         kg.replace_mentions("d", [("Alpha", "org", 1), ("Alpha", "person", 5), ("Beta", None, 1)])
         == 2
     )
-    write = kg.sent[1][0]
+    write = kg.sent[2][0]
     assert write.count("name: 'Alpha'") == 1
     assert "{name: 'Alpha', etype: 'org', cnt: 5" in write
     assert "{name: 'Beta', etype: 'unknown', cnt: 1" in write
@@ -172,20 +177,91 @@ def test_repeated_names_collapse_to_one_edge_with_the_highest_count():
 def test_no_mentions_only_deletes_and_commits_that():
     kg = _capturing_kg()
     assert kg.replace_mentions("d", [], commit=True) == 0
-    assert len(kg.sent) == 1
-    assert kg.sent[0][0].endswith("DELETE m") and kg.sent[0][2] is True
+    assert kg.sent == [("SQL DELETE MENTIONS", {"did": "d"}, True)]
 
 
-def test_the_delete_never_commits_on_its_own_when_edges_follow():
+def test_only_the_last_statement_commits_when_edges_follow():
     kg = _capturing_kg()
     kg.replace_mentions("d", [("Alpha", "org", 1)], commit=True)
-    assert [c for _, _, c in kg.sent] == [False, True]
+    assert [c for _, _, c in kg.sent] == [False, False, True]
 
 
 def test_quotes_in_names_are_escaped_and_bad_names_skipped():
     kg = _capturing_kg()
     kg.replace_mentions("d", [("O'Brien", "person", 1), ("", "x", 1)])
-    write = kg.sent[1][0]
+    write = kg.sent[2][0]
     assert "name: 'O\\'Brien'" in write or "name: 'OBrien'" in write
     # The empty name was skipped; "ent.name" in the MERGE is not a list entry.
     assert write.count("{name: '") == 1
+
+
+# ---------------------------------------------------------------------------
+# KnowledgeGraphAGE._delete_drawer_mentions: the SQL it runs
+# ---------------------------------------------------------------------------
+
+
+class _Cursor:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        self.conn.executed.append((" ".join(sql.split()), params))
+
+    def fetchone(self):
+        return (self.conn.regclass,)
+
+
+class _Conn:
+    def __init__(self, regclass):
+        self.regclass = regclass
+        self.executed = []
+        self.commits = 0
+
+    def cursor(self):
+        return _Cursor(self)
+
+    def commit(self):
+        self.commits += 1
+
+
+def _sql_kg(regclass):
+    import threading
+
+    kg = KnowledgeGraphAGE.__new__(KnowledgeGraphAGE)
+    kg._conn = _Conn(regclass)
+    kg._lock = threading.RLock()
+    kg._with_conn_retry = lambda fn: fn()
+    return kg
+
+
+def test_the_delete_goes_through_the_drawer_id_index_expression_and_start_id():
+    kg = _sql_kg('"mempalace_kg"."MENTIONS"')
+    kg._delete_drawer_mentions("drw'1", commit=False)
+    sql, params = kg._conn.executed[-1]
+    assert sql == (
+        'DELETE FROM "mempalace_kg"."MENTIONS" m USING "mempalace_kg"."Drawer" d '
+        "WHERE m.start_id = d.id AND ((d.properties::text)::jsonb->>'id') = %s"
+    )
+    assert params == ("drw'1",)  # bound, never interpolated
+    assert kg._conn.commits == 0
+
+
+def test_a_graph_without_a_mentions_table_skips_the_delete():
+    kg = _sql_kg(None)
+    kg._delete_drawer_mentions("d", commit=True)
+    assert [s for s, _ in kg._conn.executed] == ["SELECT to_regclass(%s)"]
+
+
+def test_the_table_check_runs_once_then_is_cached():
+    kg = _sql_kg('"mempalace_kg"."MENTIONS"')
+    kg._delete_drawer_mentions("a", commit=True)
+    kg._delete_drawer_mentions("b", commit=True)
+    checks = [s for s, _ in kg._conn.executed if s.startswith("SELECT to_regclass")]
+    assert len(checks) == 1
+    assert kg._conn.commits == 2

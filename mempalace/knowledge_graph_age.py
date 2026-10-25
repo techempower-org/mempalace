@@ -996,10 +996,10 @@ class KnowledgeGraphAGE:
         This is the write-through's rewrite-safe path. :meth:`add_mention` always CREATEs, and an incremental re-mine
         upserts a changed drawer under its old id with no delete-through, so each re-file used to add a full second
         set of edges (2026-10-24: one live-session drawer held 16,872 edges over 36 entities). Here the drawer's old
-        edges go first, then every edge is written in ONE ``UNWIND`` statement instead of one ``MERGE``/``CREATE``
-        round trip per mention: two statements per drawer, whatever its entity count. The UNWIND form is the one
-        ``backfill_age`` has run in production since ``4fbd8c6``, with ``MERGE`` on the drawer because the
-        write-through can run before the palace-structure layer has created it.
+        edges go first (one indexed SQL delete, :meth:`_delete_drawer_mentions`), the drawer node is MERGEd on its
+        own (the write-through can run before the palace-structure layer creates it), and every edge is written in
+        ONE ``UNWIND`` statement instead of one ``MERGE``/``CREATE`` round trip per mention: three statements per
+        drawer, whatever its entity count. The UNWIND is ``backfill_age``'s production form (``4fbd8c6``).
 
         The entity list is rendered as an explicit Cypher list of maps. ``_cypher_literal`` would turn a Python list
         into a JSON *string*.
@@ -1017,14 +1017,7 @@ class KnowledgeGraphAGE:
                 merged[name] = (merged[name][0], max(merged[name][1], int(count)))
             else:
                 merged[name] = (etype if etype else "unknown", int(count))
-        self._run_cypher(
-            """
-            MATCH (d:Drawer {id: $did})-[m:MENTIONS]->()
-            DELETE m
-            """,
-            {"did": drawer_id},
-            commit=False if merged else commit,
-        )
+        self._delete_drawer_mentions(drawer_id, commit=False if merged else commit)
         if not merged:
             return 0
         literals = ", ".join(
@@ -1033,9 +1026,12 @@ class KnowledgeGraphAGE:
             )
             for name, (etype, count) in merged.items()
         )
+        # The drawer node first, on its own: MERGE followed by WITH/UNWIND in one statement planned at
+        # 4.8 s for 13 entities on the production-size graph, against 0.07 s for MATCH + UNWIND (2026-10-24).
+        self._run_cypher("MERGE (d:Drawer {id: $did})", {"did": drawer_id}, commit=False)
         self._run_cypher(
             f"""
-            MERGE (d:Drawer {{id: $did}})
+            MATCH (d:Drawer {{id: $did}})
             WITH d
             UNWIND [{literals}] AS ent
             MERGE (e:Entity {{name: ent.name}})
@@ -1045,6 +1041,35 @@ class KnowledgeGraphAGE:
             commit=commit,
         )
         return len(merged)
+
+    def _delete_drawer_mentions(self, drawer_id: str, *, commit: bool) -> None:
+        """Delete one drawer's MENTIONS edges with plain SQL on AGE's label tables.
+
+        The Cypher form, ``MATCH (d:Drawer {id: $did})-[m:MENTIONS]->() DELETE m``, did not finish in 120 s on the
+        production-size graph (55M MENTIONS edges, 2026-10-24): AGE does not drive that pattern through the edge
+        index. Here the drawer is found through ``drawer_id_unique`` (the same expression) and its edges through
+        ``idx_mentions_start_id``. The MENTIONS table only exists once some edge has been written, so a fresh graph
+        skips the delete rather than raising inside the caller's transaction.
+        """
+        graph = self.GRAPH_NAME
+
+        def _execute() -> None:
+            with self._conn.cursor() as cur:
+                if not getattr(self, "_mentions_table_ready", False):
+                    cur.execute("SELECT to_regclass(%s)", (f'"{graph}"."MENTIONS"',))
+                    if cur.fetchone()[0] is None:
+                        return
+                    self._mentions_table_ready = True
+                cur.execute(
+                    f'DELETE FROM "{graph}"."MENTIONS" m USING "{graph}"."Drawer" d '
+                    "WHERE m.start_id = d.id AND ((d.properties::text)::jsonb->>'id') = %s",
+                    (drawer_id,),
+                )
+            if commit:
+                self._conn.commit()
+
+        with self._lock:
+            self._with_conn_retry(_execute)
 
     def commit(self) -> None:
         """Commit the pending KG-write transaction.
