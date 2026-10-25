@@ -135,10 +135,12 @@ per *drawer* instead of per mention is the more promising point on
 that curve: ~10x fewer savepoints at this corpus's entity density, and
 it bounds a loss to one drawer's edges rather than the batch's.
 
-Note the edges stay ``CREATE``-always (``add_mention`` does not upsert),
-so a partially-applied batch is a state this system already tolerates.
-That is also why nothing here retries: a retry after a lost commit would
-duplicate the edges it did write.
+With ``replace_mentions`` (the AGE KG), each drawer costs two statements
+(delete its old edges, then one UNWIND for all its current ones), and a
+re-filed drawer ends with exactly its current edges: rerunning a drawer is
+idempotent. A KG without it falls back to ``add_mention``, whose edges are
+``CREATE``-always, so there a partially-applied batch is a state the system
+tolerates, and nothing retries: a retry would duplicate what it wrote.
 
 ### `make_null_writethrough`
 

@@ -226,6 +226,28 @@ AGE 1.6.0 Cypher dialect gaps respected:
   - No coalesce() in SET.
 Edge properties are set at CREATE time and never modified after.
 
+#### `replace_mentions`
+
+```python
+def replace_mentions(self, drawer_id: str, mentions: list, *, confidence: float = 0.5, commit: bool = True) -> int
+```
+
+Make a drawer's MENTIONS edges exactly ``mentions``. Returns the number of edges written.
+
+``mentions`` is a list of ``(entity_name, entity_type, count)``. Repeated names collapse to one edge (the
+highest count wins, the first type is kept), so a drawer never holds two edges to one entity.
+
+This is the write-through's rewrite-safe path. :meth:`add_mention` always CREATEs, and an incremental re-mine
+upserts a changed drawer under its old id with no delete-through, so each re-file used to add a full second
+set of edges (2026-10-24: one live-session drawer held 16,872 edges over 36 entities). Here the drawer's old
+edges go first (one indexed SQL delete, :meth:`_delete_drawer_mentions`), the drawer node is MERGEd on its
+own (the write-through can run before the palace-structure layer creates it), and every edge is written in
+ONE ``UNWIND`` statement instead of one ``MERGE``/``CREATE`` round trip per mention: three statements per
+drawer, whatever its entity count. The UNWIND is ``backfill_age``'s production form (``4fbd8c6``).
+
+The entity list is rendered as an explicit Cypher list of maps. ``_cypher_literal`` would turn a Python list
+into a JSON *string*.
+
 #### `commit`
 
 ```python

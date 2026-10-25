@@ -433,8 +433,13 @@ def test_make_null_writethrough_returns_callable_that_does_nothing():
     assert hook(drawer_id="d1", document="anything", metadata={}) is None
 
 
-def test_make_age_writethrough_calls_add_mention_per_entity():
-    """The factory wires extractor → kg.add_mention for each entity."""
+def _legacy_kg():
+    """A KG with only the per-mention surface (no replace_mentions): the hook's fallback path."""
+    return MagicMock(spec=["add_mention", "commit"])
+
+
+def test_make_age_writethrough_replaces_a_drawers_mentions_in_one_call():
+    """The factory wires extractor -> one kg.replace_mentions call carrying every entity."""
     from mempalace.kg_writethrough import _builtin_regex_extractor, make_age_writethrough
 
     kg = MagicMock()
@@ -442,7 +447,23 @@ def test_make_age_writethrough_calls_add_mention_per_entity():
 
     hook(drawer_id="drw1", document="Claude meets OpenAI", metadata={})
 
-    assert kg.add_mention.called
+    kg.replace_mentions.assert_called_once()
+    args, kw = kg.replace_mentions.call_args
+    assert args[0] == "drw1"
+    assert {name for name, _t, _c in args[1]} >= {"claude", "openai"}
+    assert kw["commit"] is True
+    kg.add_mention.assert_not_called()
+
+
+def test_make_age_writethrough_falls_back_to_add_mention_per_entity():
+    """A KG without replace_mentions still gets one add_mention per entity."""
+    from mempalace.kg_writethrough import _builtin_regex_extractor, make_age_writethrough
+
+    kg = _legacy_kg()
+    hook = make_age_writethrough(kg, _builtin_regex_extractor)
+
+    hook(drawer_id="drw1", document="Claude meets OpenAI", metadata={})
+
     called_with_names = {kw["entity_name"] for _args, kw in kg.add_mention.call_args_list}
     assert "claude" in called_with_names
     assert "openai" in called_with_names
@@ -459,6 +480,7 @@ def test_make_age_writethrough_skips_empty_document():
     hook = make_age_writethrough(kg, fake_extractor)
     hook(drawer_id="d1", document="", metadata={})
     kg.add_mention.assert_not_called()
+    kg.replace_mentions.assert_not_called()
 
 
 def test_make_age_writethrough_swallows_extractor_errors():
@@ -474,26 +496,37 @@ def test_make_age_writethrough_swallows_extractor_errors():
     # Must NOT raise.
     hook(drawer_id="d1", document="some text", metadata={})
     kg.add_mention.assert_not_called()
+    kg.replace_mentions.assert_not_called()
 
 
-def test_make_age_writethrough_swallows_add_mention_errors():
+def test_make_age_writethrough_swallows_replace_mentions_errors():
     """KG-side failures during enrichment don't break ingest either."""
     from mempalace.kg_writethrough import _builtin_regex_extractor, make_age_writethrough
 
     kg = MagicMock()
+    kg.replace_mentions.side_effect = RuntimeError("kg blew up")
+
+    hook = make_age_writethrough(kg, _builtin_regex_extractor)
+    # Must NOT raise.
+    hook(drawer_id="d1", document="Claude and OpenAI shipped models.", metadata={})
+    kg.replace_mentions.assert_called_once()
+
+
+def test_make_age_writethrough_swallows_add_mention_errors_on_the_fallback():
+    """On the per-mention fallback, each failure is swallowed and the rest are still tried."""
+    from mempalace.kg_writethrough import _builtin_regex_extractor, make_age_writethrough
+
+    kg = _legacy_kg()
     kg.add_mention.side_effect = RuntimeError("kg blew up")
 
     hook = make_age_writethrough(kg, _builtin_regex_extractor)
-    # Multiple entities — each individual add_mention failure is swallowed.
     hook(drawer_id="d1", document="Claude and OpenAI shipped models.", metadata={})
     assert kg.add_mention.call_count >= 2  # tried for each entity, none re-raised
 
 
 def test_make_age_writethrough_caps_entities_per_drawer():
-    """``max_entities_per_drawer`` bounds the per-write KG round-trip count."""
+    """``max_entities_per_drawer`` bounds what one drawer writes."""
     from mempalace.kg_writethrough import make_age_writethrough
-
-    kg = MagicMock()
 
     # Build an extractor returning 50 fake entities.
     class _Ent:
@@ -505,10 +538,17 @@ def test_make_age_writethrough_caps_entities_per_drawer():
     def extractor(text):
         return [_Ent(i) for i in range(50)]
 
-    hook = make_age_writethrough(kg, extractor, max_entities_per_drawer=5)
-    hook(drawer_id="d1", document="anything", metadata={})
+    kg = MagicMock()
+    make_age_writethrough(kg, extractor, max_entities_per_drawer=5)(
+        drawer_id="d1", document="anything", metadata={}
+    )
+    assert len(kg.replace_mentions.call_args[0][1]) == 5
 
-    assert kg.add_mention.call_count == 5
+    legacy = _legacy_kg()
+    make_age_writethrough(legacy, extractor, max_entities_per_drawer=5)(
+        drawer_id="d1", document="anything", metadata={}
+    )
+    assert legacy.add_mention.call_count == 5
 
 
 def test_make_writethrough_from_env_returns_none_when_disabled(monkeypatch):
@@ -557,7 +597,7 @@ def test_make_writethrough_from_env_regex_returns_age_hook(monkeypatch):
     hook = make_writethrough_from_env(kg=kg)
     assert hook is not None
     hook(drawer_id="d1", document="Claude greets OpenAI.", metadata={})
-    assert kg.add_mention.called
+    assert kg.replace_mentions.called
 
 
 # =============================================================================

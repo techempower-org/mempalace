@@ -1,0 +1,28 @@
+seq: 185
+id: kg-writethrough-replace-mentions
+date: '2026-10-24'
+bucket: Fixed
+commit: HEAD
+area: Knowledge graph
+summary: the KG write-through replaces a drawer's MENTIONS edges in three statements instead of CREATE-ing one more edge per mention on every re-file, so a re-mined drawer no longer gains a duplicate set of edges
+body: |
+  An incremental re-mine upserts a changed drawer under its old id with
+  no delete-through, and `add_mention` always CREATEs, so every re-file
+  added a full second set of MENTIONS edges. The chunker-version re-file
+  after the 2026-10-24 port (#578) exposed it. 13 of 50 sampled pre-port
+  drawers carried duplicated (drawer, entity) pairs, and one live-session
+  drawer held 16,872 edges over 36 entities. The per-mention MERGE/CREATE
+  was about 90% of that re-file's wall time: 76 drawers/min against
+  about 1,050 with the write-through off.
+
+  `KnowledgeGraphAGE.replace_mentions` deletes the drawer's edges with
+  one SQL DELETE through `drawer_id_unique` and `idx_mentions_start_id`,
+  MERGEs the drawer node on its own, then writes all its current edges
+  in one `MATCH … UNWIND` statement (backfill_age's form). That makes
+  three statements per drawer whatever its entity count. On the
+  production-size graph the Cypher edge delete didn't finish in 120 s,
+  and MERGE ahead of the UNWIND took 4.8 s against 0.07 s for MATCH.
+  Repeated names collapse to one edge, and an unsanitizable name is
+  skipped rather than failing the drawer. Both hooks use it when the KG
+  has it, and a drawer whose new content has no entities still loses
+  its old edges. A KG without it keeps the per-mention loop.
