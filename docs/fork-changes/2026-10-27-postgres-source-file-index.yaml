@@ -1,0 +1,31 @@
+seq: 186
+id: postgres-source-file-index
+date: '2026-10-27'
+bucket: Performance
+commit: HEAD
+area: Postgres backend
+summary: a new postgres palace gets an expression index on metadata->>'source_file', and the any-size scoped prefetch is taken only where pg_index shows that index, so a palace without it no longer turns every per-file lookup into a full scan
+body: |
+  Every per-file lookup compiles to `metadata->>'source_file' = %s`,
+  covering the mine's scoped prefetch, `file_already_mined` and the
+  purge before a re-file. The metadata GIN serves `@>`, not `->>`, so
+  without an expression index each lookup is a sequential scan: about
+  24 s on the 1.16M-drawer palace (#567). The production palace has had
+  the index since an operator built it CONCURRENTLY on 2026-10-20. No
+  code created it, yet `_indexed_scope` treated every postgres
+  collection as indexed and kept mines of any size on per-file lookups.
+
+  `_create_table` now builds `{table}_source_file_idx`.
+  `PostgresCollection.has_source_file_index()` looks for a valid,
+  non-partial btree whose first key is that expression, and caches only
+  a True result. When the index is missing it logs one warning per
+  table naming the CONCURRENTLY build. `_indexed_scope` requires the
+  index, and the convo miner's `SCOPED_PREFETCH_MAX_FILES` gate yields
+  to it, so an indexed palace scopes a mine of any size.
+
+  Measured read-only on the live palace (1,261,111 drawers, 2026-10-27):
+  60 sampled transcripts took a median of 7.0 ms per `get()` from the
+  6th call on, past psycopg's auto-prepare threshold. A scoped
+  `prefetch_mined_set` over all 60 took 1.47 s. Before this change, a
+  convo mine of more than 10 files took the whole-palace scan, about
+  9 min per the #548 measurements.

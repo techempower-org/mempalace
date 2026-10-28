@@ -152,11 +152,12 @@ def _scan_collection_metadata(collection, keys, absorb, reset, require_key=None)
 
 
 def _indexed_scope(collection) -> bool:
-    """True on postgres, where a per-file lookup is one indexed query at any list size."""
+    """True where a per-file lookup is one indexed query at any list size: postgres with the
+    ``metadata->>'source_file'`` index. Without that index each lookup is a full scan (#567)."""
     from ..backends.postgres import PostgresCollection
 
     inner = collection._inner if isinstance(collection, EmbeddingCollection) else collection
-    return isinstance(inner, PostgresCollection)
+    return isinstance(inner, PostgresCollection) and inner.has_source_file_index()
 
 
 def _paged_metadata(collection):
@@ -285,9 +286,9 @@ def _iter_scoped_metadata(collection, where: dict, page_size: int = 1000):
     large the scope: ``get_all_metadata`` returns the whole match as one
     list, which for a 217K-drawer wing peaked at 820 MB against the full
     scan's 204 MB (measured on the postgres palace, 2026-10-15). On the
-    postgres backend ``wing`` is a btree column; ``source_file`` is a
-    ``metadata->>`` comparison with no index yet, about 24 s per lookup
-    on a 1.16M-drawer palace.
+    postgres backend ``wing`` is a btree column and ``source_file`` an
+    expression index (#567); without that index a ``source_file`` lookup
+    was about 24 s on a 1.16M-drawer palace.
     """
     offset = 0
     while True:

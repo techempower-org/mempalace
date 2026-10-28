@@ -42,6 +42,10 @@ EMBEDDING_MODEL = "chroma-default-all-MiniLM-L6-v2"
 VECTOR_INDEX_MIN_ROWS = 5_000
 VECTOR_INDEX_CHECK_INTERVAL_ROWS = 1_000
 
+# Tables already warned about a missing source_file index, so a long mine
+# names it once instead of on every prefetch (#567).
+_WARNED_NO_SOURCE_FILE_INDEX: set = set()
+
 # Set once the first time a resolved embedder's width disagrees with the
 # column's, so the mismatch is named on the batch that discovers it rather
 # than on every batch after.
@@ -458,6 +462,7 @@ class PostgresCollection(BaseCollection):
         self._index_am: Optional[str] = None
         self._setup_done = False
         self._vector_index_ready = False
+        self._source_file_indexed = False
         self._rows_since_index_check = VECTOR_INDEX_CHECK_INTERVAL_ROWS
         self._local_row_estimate = 0
 
@@ -1423,6 +1428,59 @@ class PostgresCollection(BaseCollection):
         )
         return cur.fetchone() is not None
 
+    def has_source_file_index(self) -> bool:
+        """True when a valid, non-partial btree leads with ``metadata->>'source_file'``.
+
+        That index is what makes a per-file lookup one indexed query at any list
+        size (#567). It is built by ``_create_table`` for a new palace, but an
+        older palace only has it if an operator built it, so ask ``pg_index``
+        rather than assume it from the backend type. Only True is cached: a
+        palace whose index is built later is found on the next check.
+        """
+        if self._source_file_indexed:
+            return True
+        try:
+            cur = self._cursor()
+            cur.execute(
+                """
+                SELECT 1
+                FROM pg_index idx
+                JOIN pg_class t ON t.oid = idx.indrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                JOIN pg_class ix ON ix.oid = idx.indexrelid
+                JOIN pg_am am ON am.oid = ix.relam
+                WHERE n.nspname = current_schema()
+                  AND t.relname = %s
+                  AND am.amname = 'btree'
+                  AND idx.indisvalid
+                  AND idx.indpred IS NULL
+                  -- key 1 only; the deparse wraps an expression in parentheses
+                  -- ("((metadata ->> 'source_file'::text))"), so trim them at the
+                  -- ends alone: a key literal such as 'source_(file)' must not match
+                  AND btrim(pg_get_indexdef(idx.indexrelid, 1, false), '()')
+                      = 'metadata ->> ''source_file''::text'
+                LIMIT 1
+                """,
+                (self.table_name,),
+            )
+            found = cur.fetchone() is not None
+        except Exception:
+            logger.debug("source_file index check failed on %s", self.table_name, exc_info=True)
+            return False
+        if found:
+            self._source_file_indexed = True
+        elif self.table_name not in _WARNED_NO_SOURCE_FILE_INDEX:
+            _WARNED_NO_SOURCE_FILE_INDEX.add(self.table_name)
+            logger.warning(
+                "%s has no index on metadata->>'source_file': every per-file lookup scans "
+                "the table. Build it once with: CREATE INDEX CONCURRENTLY %s_source_file_idx "
+                "ON %s ((metadata->>'source_file'));",
+                self.table_name,
+                self.table_name,
+                self.table_name,
+            )
+        return found
+
     def _ensure_setup(self, *, create: bool = True) -> None:
         if self._setup_done:
             return
@@ -1519,6 +1577,17 @@ class PostgresCollection(BaseCollection):
                     "Install with: CREATE EXTENSION pg_trgm;",
                     self.table_name,
                 )
+
+        # Every per-file lookup (the mine's scoped prefetch, file_already_mined, the purge
+        # before a re-file) compiles to `metadata->>'source_file' = %s`. The metadata GIN
+        # serves `@>`, not `->>`, so without this each one is a sequential scan: ~24 s on a
+        # 1.16M-drawer palace (#567). An existing palace builds it once, CONCURRENTLY.
+        cur.execute(
+            self._sql.SQL("CREATE INDEX {} ON {} ((metadata->>'source_file'))").format(
+                self._sql.Identifier(f"{self.table_name}_source_file_idx"),
+                self._table_id,
+            )
+        )
 
         logger.info(
             "Created PostgreSQL collection %s (%s, %s)",

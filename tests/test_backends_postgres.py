@@ -315,3 +315,85 @@ def test_postgres_count_where_matches_a_paged_walk(tmp_path):
         assert col.count_where(where) == expected == paged(where), where
     # No filter: the same as count().
     assert col.count_where(None) == col.count() == 16
+
+
+def test_new_collection_indexes_source_file_and_reports_it(tmp_path, caplog):
+    """A new table gets the ``metadata->>'source_file'`` expression index, and
+    ``has_source_file_index`` reads pg_index rather than the backend type: an
+    older palace without the index must not take the any-size scoped path,
+    where every lookup would be a full scan (#567)."""
+    import logging
+    import uuid
+
+    import psycopg as psycopg2
+
+    from mempalace.backends import postgres as pg
+    from mempalace.palace import _indexed_scope
+
+    backend = get_backend("postgres")
+    col = backend.get_collection(
+        palace=_palace_ref(str(tmp_path)),
+        collection_name=f"sf_idx_{uuid.uuid4().hex[:8]}",
+        create=True,
+        options={"dsn": POSTGRES_DSN},
+    )
+    col.add(
+        ids=["d1"],
+        documents=["doc"],
+        metadatas=[{"wing": "w", "source_file": "/s/a.jsonl"}],
+        embeddings=[[0.0] * 384],
+    )
+    index = f"{col.table_name}_source_file_idx"
+    conn = psycopg2.connect(POSTGRES_DSN)
+    conn.autocommit = True
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET enable_seqscan = off")
+            cur.execute(
+                f'EXPLAIN SELECT id FROM "{col.table_name}" '
+                "WHERE metadata->>'source_file' = '/s/a.jsonl'"
+            )
+            plan = "\n".join(row[0] for row in cur.fetchall())
+        assert index in plan, plan
+        assert col.has_source_file_index()
+        assert _indexed_scope(col)
+
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX "{index}"')
+        bare = PostgresCollection(POSTGRES_DSN, table_name=col.table_name)
+        pg._WARNED_NO_SOURCE_FILE_INDEX.discard(col.table_name)
+        with caplog.at_level(logging.WARNING, logger="mempalace.postgres"):
+            assert not bare.has_source_file_index()
+            assert not _indexed_scope(bare)
+        warnings = [
+            r for r in caplog.records if "no index on metadata->>'source_file'" in r.message
+        ]
+        assert len(warnings) == 1, "named once per table, not on every check"
+
+        # A False is not cached: an operator's later CONCURRENTLY build is seen.
+        with conn.cursor() as cur:
+            cur.execute(
+                f'CREATE INDEX CONCURRENTLY "{index}" '
+                f"ON \"{col.table_name}\" ((metadata->>'source_file'))"
+            )
+        assert bare.has_source_file_index()
+
+        # None of these serves `metadata->>'source_file' = %s`, so none counts: a partial
+        # index, the expression as a second key, and keys whose literal differs only in
+        # the characters a looser comparison would strip.
+        for shape in (
+            "((metadata->>'source_file')) WHERE wing = 'w'",
+            "(wing, (metadata->>'source_file'))",
+            "((metadata->>'source_(file)'))",
+            "((metadata->>'source_ file'))",
+        ):
+            with conn.cursor() as cur:
+                cur.execute(f'DROP INDEX IF EXISTS "{index}"')
+                cur.execute(f'CREATE INDEX "{index}" ON "{col.table_name}" {shape}')
+            assert not PostgresCollection(
+                POSTGRES_DSN, table_name=col.table_name
+            ).has_source_file_index(), shape
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
