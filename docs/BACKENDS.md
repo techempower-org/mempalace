@@ -37,7 +37,7 @@ Tiers:
 | Diary and hook saves | live | 67,222 (no `source_file`) | `tool_diary_write` (silent hook save) | — |
 | Codex CLI, Gemini CLI, Aider, OpenCode, Warp sessions | supported | not measured | `mempalace/sources/` adapters, `normalize.py` | a mine target on a host that runs those tools |
 | ChatGPT and claude.ai exports, Slack export JSON, Continue | supported | not measured | `normalize.py` parsers | an export file to mine |
-| livekit-voice phone calls | live (private) | 411 in `mempalace_private_drawers`, 0 in the drawers collection (121 of 139 records have a transcript) | `mempalace mine ~/.local/share/livekit-voice/calls --source livekit-calls`; privacy class `sensitive` | a schedule (run by hand on 2026-10-27); session transcripts that quote a call still reach the shared palace (see the issue linked from the PR) |
+| livekit-voice phone calls | live (private) | 411 in `mempalace_private_drawers`, 0 in the drawers collection (121 of 139 records have a transcript) | hourly user timer `palace-calls-mine.timer` on familiar: `mempalace mine ~/.local/share/livekit-voice/calls --source livekit-calls`; privacy class `sensitive` | — (session transcripts that quote a call are now filed privately too: #588, #590, #591) |
 | Slack (live workspace) | missing | 0 | none | export or API adapter; token in the vault |
 | Gmail | missing | 0 | none | Takeout mbox mined locally, or an API adapter |
 | Notion | missing | 0 | none | export adapter |
