@@ -24,7 +24,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **a livekit-calls source adapter files phone-call transcripts into a private drawers collection that no search, status or wake-up path opens, and any adapter of privacy class sensitive is routed there** (`HEAD` — pending resolution)
+- **the convo miner files transcript chunks that carry a sensitive marker (a private path, a pasted call record, a live transcription) verbatim into the private collection, and moves a shared copy filed before the marker was known** (`HEAD` — pending resolution)
+  A session that quoted a phone call put the other party's words in the
+  shared drawers collection (#588). `mempalace.sensitive` flags a chunk
+  that matches a marker, and every chunk that continues its tool output up
+  to the next tool call rendered at column 0. `_file_chunks_locked` files
+  those verbatim into `mempalace_private_drawers` before the shared purge
+  runs, so a shared copy becomes an orphan and is removed, and every
+  re-mine classifies the same chunks the same way.
+
+  Defaults are generic. Site-specific names go under `sensitive_markers`
+  in the palace config. An unreadable config, an invalid marker, or a
+  private-filing failure stops that file's mine with the shared drawers
+  untouched. A call id alone is not a marker, because reports link calls
+  by id.
+
+
+- **a livekit-calls source adapter files phone-call transcripts into a private drawers collection that no search, status or wake-up path opens, and any adapter of privacy class sensitive is routed there** ([`eaf20ea`](https://github.com/techempower-org/mempalace/commit/eaf20ea))
   A phone call carries an outside party's words and often benefits or
   health details. RFC 002 §6 defines a `sensitive` privacy class but
   nothing enforced it. Core now files a `sensitive` adapter's drawers in

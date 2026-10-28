@@ -578,6 +578,15 @@ def topic_wings(self)
 
 List of topic wing names.
 
+#### `sensitive_markers`
+
+```python
+def sensitive_markers(self)
+```
+
+Regular expressions that mark a conversation chunk as sensitive (``mempalace.sensitive``),
+added to its defaults. Site-specific names go here rather than in code.
+
 #### `hall_keywords`
 
 ```python

@@ -32,6 +32,7 @@ from .ids import (
 from .normalize import UnparsedCodexTranscriptError, normalize_conversations
 from .source_identity import identity_metadata, source_directory_identity
 from .entities import entities_metadata
+from .sensitive import configured_markers, sensitive_chunk_flags
 from .palace import (
     CONVO_CHUNKER_VERSION,
     NORMALIZE_VERSION,
@@ -821,9 +822,17 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
     authored_at=None,
     content_hash=None,
     source_dir_ino=None,
+    palace_path=None,
 ):
     """Lock the source file, reconcile it against what the palace already
     holds, and upsert only the chunks that are new or changed.
+
+    Sensitive chunks (``mempalace.sensitive``: a pasted call, a private file)
+    are filed verbatim into the private collection first and planned out of
+    this collection, so a copy already stored here is purged as an orphan
+    (#588). Without ``palace_path``, or when the markers or the private
+    collection cannot be read, the file's mine stops with the shared drawers
+    untouched.
 
     Combines the per-file serialization that prevents concurrent agents from
     duplicating work (via mine_lock) with the rebuild contract that fires on
@@ -880,6 +889,27 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
                 wing, chunk_room, source_file, extract_mode, chunk["chunk_index"]
             )
             planned.append((chunk, chunk_room, drawer_id))
+
+        try:
+            # Inside the try: unreadable markers stop this file's mine rather than classify
+            # without them.
+            flags = sensitive_chunk_flags(
+                [chunk["content"] for chunk, _room, _id in planned], configured_markers()
+            )
+            sensitive = [item for item, flag in zip(planned, flags) if flag]
+            planned = [item for item, flag in zip(planned, flags) if not flag]
+            _file_sensitive_chunks(
+                palace_path, source_file, sensitive, wing, agent, extract_mode, authored_at
+            )
+        except Exception as exc:
+            # Leave this collection untouched: its copies of the sensitive chunks are purged only
+            # once the private copies are written. The next mine retries.
+            print(
+                f"  ! [error] private filing failed for {source_file!r} ({exc!r}); "
+                "leaving existing drawers untouched, will retry on the next mine",
+                file=sys.stderr,
+            )
+            return 0, room_counts_delta, PURGE_FAILED
         planned_ids = {drawer_id for _chunk, _room, drawer_id in planned}
 
         # Prefetch what the palace already holds for this file. On failure
@@ -949,7 +979,8 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             source_mtime = os.path.getmtime(source_file)
         except OSError:
             source_mtime = None
-        chunk_total = len(chunks)
+        # This collection's rows only: completeness counts what is filed here.
+        chunk_total = len(planned)
 
         # Metadata-only refresh of the unchanged drawers. ``update`` with no
         # documents never touches the embedding function; backends without a
@@ -1083,6 +1114,77 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
                 f"{len(changed)} embedded ({Path(source_file).name[:50]})"
             )
     return drawers_added, room_counts_delta, False
+
+
+def _file_sensitive_chunks(
+    palace_path, source_file, items, wing, agent, extract_mode, authored_at
+) -> None:
+    """File ``items`` (planned ``(chunk, room, drawer_id)``) verbatim into the private collection,
+    and drop that collection's rows for ``source_file`` the pass no longer plans there.
+
+    The private collection is created only when there is something to file. Raises on any
+    failure, so the caller leaves the shared drawers as they were.
+    """
+    from .palace import PRIVATE_COLLECTION_NAME, get_collection
+
+    if palace_path is None:
+        if items:
+            # Raising keeps the shared copies: the caller purges them only after this returns.
+            raise RuntimeError(
+                f"{len(items)} sensitive chunk(s) of {source_file} and no palace path for the "
+                "private collection"
+            )
+        return
+    try:
+        private = get_collection(
+            palace_path, collection_name=PRIVATE_COLLECTION_NAME, create=bool(items)
+        )
+    except Exception:
+        if items:
+            raise
+        return  # no private collection yet, and nothing to file in it
+    stored = _source_file_stored_documents(private, source_file, extract_mode)
+    keep = {drawer_id for _chunk, _room, drawer_id in items}
+    orphans = [drawer_id for drawer_id in stored if drawer_id not in keep]
+    changed = [
+        item for item in items if not _chunk_matches_stored(item[0]["content"], stored.get(item[2]))
+    ]
+    if changed:
+        filed_at = datetime.now().isoformat()
+        try:
+            source_mtime = os.path.getmtime(source_file)
+        except OSError:
+            source_mtime = None
+        metas = []
+        for chunk, chunk_room, _drawer_id in changed:
+            meta = {
+                "wing": wing,
+                "room": chunk_room,
+                "source_file": source_file,
+                "chunk_index": chunk["chunk_index"],
+                "added_by": agent,
+                "filed_at": filed_at,
+                "authored_at": authored_at if authored_at is not None else filed_at,
+                "ingest_mode": "convos",
+                "extract_mode": extract_mode,
+                "normalize_version": NORMALIZE_VERSION,
+                "id_recipe": ID_RECIPE,
+                "privacy_class": "sensitive",
+            }
+            if extract_mode == "exchange":
+                meta["convo_chunker_version"] = CONVO_CHUNKER_VERSION
+            if source_mtime is not None:
+                meta["source_mtime"] = source_mtime
+            metas.append(meta)
+        for start in range(0, len(changed), DRAWER_UPSERT_BATCH_SIZE):
+            batch = changed[start : start + DRAWER_UPSERT_BATCH_SIZE]
+            private.upsert(
+                documents=[chunk["content"] for chunk, _room, _id in batch],
+                ids=[drawer_id for _chunk, _room, drawer_id in batch],
+                metadatas=metas[start : start + DRAWER_UPSERT_BATCH_SIZE],
+            )
+    if orphans:
+        private.delete(ids=orphans)
 
 
 def _unchanged_to_refresh(collection, unchanged: list, extract_mode, content_hash):
@@ -1835,6 +1937,7 @@ def _mine_convos_impl(
             authored_at=_extract_authored_at(filepath),
             content_hash=content_hash,
             source_dir_ino=source_directory_identity(filepath),
+            palace_path=palace_path,
         )
         if skipped == PURGE_FAILED:
             files_failed.append(source_file)

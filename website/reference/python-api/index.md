@@ -99,6 +99,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.rooms`](./rooms) — Closed room sets for a wing: propose with an LLM, assign with a fast decider.
 - [`mempalace.rrf`](./rrf) — Reciprocal Rank Fusion — combine ranked lists from N retrievers.
 - [`mempalace.searcher`](./searcher) — searcher.py — Find anything. Exact words.
+- [`mempalace.sensitive`](./sensitive) — Which conversation chunks are sensitive, and so go to the private collection.
 - [`mempalace.server_registry`](./server_registry) — Per-palace discovery registry for the MemPalace HTTP MCP hub.
 - [`mempalace.service`](./service) — Shared service operations used by daemon-backed entry points.
 - [`mempalace.source_identity`](./source_identity) — Which directory a source file was mined from, recorded as its inode.

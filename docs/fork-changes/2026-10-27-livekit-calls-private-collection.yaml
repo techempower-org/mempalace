@@ -2,7 +2,7 @@ seq: 187
 id: livekit-calls-private-collection
 date: '2026-10-27'
 bucket: Added
-commit: HEAD
+commit: eaf20ea
 area: Sources
 summary: a livekit-calls source adapter files phone-call transcripts into a private drawers collection that no search, status or wake-up path opens, and any adapter of privacy class sensitive is routed there
 body: |
@@ -24,3 +24,4 @@ body: |
   malformed fields, and never reads under `~/private`. The live palace
   holds 411 drawers from 121 calls in the private collection, and 0 in
   the drawers collection.
+fork_pr: 589

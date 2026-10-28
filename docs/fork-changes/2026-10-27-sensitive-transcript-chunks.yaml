@@ -1,0 +1,22 @@
+seq: 188
+id: sensitive-transcript-chunks
+date: '2026-10-27'
+bucket: Added
+commit: HEAD
+fork_pr: 590
+area: Mining
+summary: the convo miner files transcript chunks that carry a sensitive marker (a private path, a pasted call record, a live transcription) verbatim into the private collection, and moves a shared copy filed before the marker was known
+body: |
+  A session that quoted a phone call put the other party's words in the
+  shared drawers collection (#588). `mempalace.sensitive` flags a chunk
+  that matches a marker, and every chunk that continues its tool output up
+  to the next tool call rendered at column 0. `_file_chunks_locked` files
+  those verbatim into `mempalace_private_drawers` before the shared purge
+  runs, so a shared copy becomes an orphan and is removed, and every
+  re-mine classifies the same chunks the same way.
+
+  Defaults are generic. Site-specific names go under `sensitive_markers`
+  in the palace config. An unreadable config, an invalid marker, or a
+  private-filing failure stops that file's mine with the shared drawers
+  untouched. A call id alone is not a marker, because reports link calls
+  by id.

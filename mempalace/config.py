@@ -1659,6 +1659,13 @@ class MempalaceConfig:
         return self._file_config.get("topic_wings", DEFAULT_TOPIC_WINGS)
 
     @property
+    def sensitive_markers(self):
+        """Regular expressions that mark a conversation chunk as sensitive (``mempalace.sensitive``),
+        added to its defaults. Site-specific names go here rather than in code."""
+        markers = self._file_config.get("sensitive_markers", [])
+        return list(markers) if isinstance(markers, list) else []
+
+    @property
     def hall_keywords(self):
         """Mapping of hall names to keyword lists."""
         return self._file_config.get("hall_keywords", DEFAULT_HALL_KEYWORDS)
