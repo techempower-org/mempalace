@@ -21,7 +21,9 @@ Markers are regular expressions: :data:`DEFAULT_MARKERS`, plus any listed
 under ``sensitive_markers`` in the palace config. Site-specific names belong
 in the config, not here. A config that cannot be read, or a pattern that does
 not compile, raises :class:`SensitiveMarkersUnavailable` rather than classify
-without it. A marker split across a chunk boundary is still found.
+without it. A marker split across a chunk boundary is still found, and marks
+both chunks, as long as it starts within the last 512 characters of the
+earlier one: markers are short tokens, not spans of text.
 
 Known limits. The boundaries are read from rendered text, so a private
 file that itself holds a line shaped like a column-0 tool call ends its

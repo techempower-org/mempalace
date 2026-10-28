@@ -17,7 +17,9 @@ Markers are regular expressions: :data:`DEFAULT_MARKERS`, plus any listed
 under ``sensitive_markers`` in the palace config. Site-specific names belong
 in the config, not here. A config that cannot be read, or a pattern that does
 not compile, raises :class:`SensitiveMarkersUnavailable` rather than classify
-without it. A marker split across a chunk boundary is still found.
+without it. A marker split across a chunk boundary is still found, and marks
+both chunks, as long as it starts within the last 512 characters of the
+earlier one: markers are short tokens, not spans of text.
 
 Known limits. The boundaries are read from rendered text, so a private
 file that itself holds a line shaped like a column-0 tool call ends its
@@ -82,22 +84,20 @@ def configured_markers() -> Tuple[str, ...]:
     config = MempalaceConfig()
     if getattr(config, "_file_config_state", "read") in ("unread", "unparsed"):
         raise SensitiveMarkersUnavailable("palace config unreadable; sensitive_markers unknown")
-    extra = tuple(p for p in config.sensitive_markers if isinstance(p, str) and p)
+    raw = config._file_config.get("sensitive_markers", [])
+    if not isinstance(raw, list) or not all(isinstance(p, str) and p for p in raw):
+        raise SensitiveMarkersUnavailable("sensitive_markers must be a list of non-empty strings")
+    extra = tuple(raw)
     _compiled(extra)  # raise now on an invalid pattern
     return extra
 
 
-def _last_match_end(text: str, extra: Sequence[str]) -> int:
-    """End offset of the last marker match in ``text``, or -1."""
-    end = -1
-    for pattern in _compiled(tuple(extra)):
-        for match in pattern.finditer(text):
-            end = max(end, match.end())
-    return end
+def _matches(text: str, extra: Sequence[str]) -> List[Tuple[int, int]]:
+    return [m.span() for p in _compiled(tuple(extra)) for m in p.finditer(text)]
 
 
 def is_marked(text: str, extra: Sequence[str] = ()) -> bool:
-    return _last_match_end(text, extra) >= 0
+    return bool(_matches(text, extra))
 
 
 def sensitive_chunk_flags(contents: Iterable[str], extra: Sequence[str] = ()) -> List[bool]:
@@ -108,10 +108,13 @@ def sensitive_chunk_flags(contents: Iterable[str], extra: Sequence[str] = ()) ->
     for text in contents:
         tail = previous[-_BOUNDARY_OVERLAP:]
         joined = tail + text
-        end = _last_match_end(joined, extra)
-        # A match ending inside the previous chunk was counted there; only one ending in this
-        # chunk (wholly here, or begun across the boundary) marks it.
-        if end > len(tail):
+        # A match ending inside the previous chunk was counted there; one ending in this chunk
+        # marks it, and one begun in the previous chunk marks that one too.
+        spans = [(start, end) for start, end in _matches(joined, extra) if end > len(tail)]
+        if spans:
+            if flags and min(start for start, _end in spans) < len(tail):
+                flags[-1] = True
+            end = max(end for _start, end in spans)
             flags.append(True)
             # The marked block runs on past this chunk unless a tool call opens a new one after it.
             after = joined[end:].split("\n")[1:]

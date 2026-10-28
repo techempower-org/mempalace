@@ -58,7 +58,13 @@ def test_a_call_id_alone_is_not_a_marker():
 
 def test_a_marker_split_across_chunks_is_found():
     chunks = ["> read it\n[Bash] cat ~/pri", "vate/budget.txt\n→ the secret", "more of it"]
-    assert sensitive_chunk_flags(chunks) == [False, True, True]
+    # The chunk the marker starts in is marked too.
+    assert sensitive_chunk_flags(chunks) == [True, True, True]
+
+
+def test_a_match_spanning_the_boundary_marks_both_chunks():
+    chunks = ["> q\nBEGIN\nsecret payload\nEN", "D\ncontinuation", "[Bash] date\n→ Tue"]
+    assert sensitive_chunk_flags(chunks, ["BEGIN\\n[\\s\\S]*END"]) == [True, True, False]
 
 
 def test_a_multiline_config_marker_carries_from_its_real_end():
@@ -74,6 +80,10 @@ def test_bad_markers_and_an_unreadable_config_fail_closed(tmp_path, monkeypatch)
     monkeypatch.setenv("MEMPALACE_CONFIG_DIR", str(cfg))
     (cfg / "config.json").write_text('{"sensitive_markers": ["acme-call"]}')
     assert configured_markers() == ("acme-call",)
+    for bad in ('"acme-call"', '["ok", 3]', '[""]'):
+        (cfg / "config.json").write_text('{"sensitive_markers": %s}' % bad)
+        with pytest.raises(SensitiveMarkersUnavailable):
+            configured_markers()
     (cfg / "config.json").write_text("{not json")
     with pytest.raises(SensitiveMarkersUnavailable):
         configured_markers()
