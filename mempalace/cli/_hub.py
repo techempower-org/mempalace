@@ -464,15 +464,19 @@ def _mine_via_adapter(args) -> None:
     from ..palace import get_collection
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    collection_name = _drawer_collection_name_for(adapter)
     try:
-        collection = get_collection(palace_path, create=True)
+        collection = get_collection(palace_path, collection_name=collection_name, create=True)
     except Exception as e:
         print(f"  ERROR: cannot open palace at {palace_path}: {e}", file=sys.stderr)
         sys.exit(1)
 
-    kg_path = os.path.join(palace_path, ".mempalace", "knowledge_graph.sqlite3")
-    os.makedirs(os.path.dirname(kg_path), exist_ok=True)
-    kg = KnowledgeGraph(db_path=kg_path)
+    if collection_name is not None:
+        kg = _SensitiveKnowledgeGraphRefusal()
+    else:
+        kg_path = os.path.join(palace_path, ".mempalace", "knowledge_graph.sqlite3")
+        os.makedirs(os.path.dirname(kg_path), exist_ok=True)
+        kg = KnowledgeGraph(db_path=kg_path)
 
     palace_ctx = PalaceContext(
         drawer_collection=collection,
@@ -480,6 +484,7 @@ def _mine_via_adapter(args) -> None:
         palace_path=palace_path,
         adapter_name=adapter_name,
         adapter_version=adapter.adapter_version,
+        private_collection=collection_name is not None,
     )
 
     print(f"\n  Mining {directory} via adapter '{adapter_name}' (v{adapter.adapter_version})")

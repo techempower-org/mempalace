@@ -90,6 +90,7 @@ codex = "mempalace.sources.codex:CodexSourceAdapter"
 gemini = "mempalace.sources.gemini:GeminiSourceAdapter"
 aider = "mempalace.sources.aider:AiderSourceAdapter"
 warp = "mempalace.sources.warp:WarpSourceAdapter"
+livekit-calls = "mempalace.sources.livekit_calls:LivekitCallsSourceAdapter"
 
 [project.optional-dependencies]
 dev = [

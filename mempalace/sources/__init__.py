@@ -34,7 +34,7 @@ from .base import (
     SourceSummary,
     TransformationViolationError,
 )
-from .context import PalaceContext, ProgressHook
+from .context import PalaceContext, ProgressHook, SensitiveRecordOutsidePrivateCollection
 from .registry import (
     available_adapters,
     get_adapter,
@@ -56,6 +56,7 @@ __all__ = [
     "IngestMode",
     "IngestResult",
     "PalaceContext",
+    "SensitiveRecordOutsidePrivateCollection",
     "ProgressHook",
     "RouteHint",
     "SchemaConformanceError",

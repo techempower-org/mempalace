@@ -216,18 +216,28 @@ def _enforce_embedder_identity(
 # store. Mirrored independently in repair.py as ``CLOSETS_COLLECTION_NAME``.
 CLOSETS_COLLECTION_NAME = "mempalace_closets"
 ASSETS_COLLECTION_NAME = "mempalace_assets"
+# Drawers from a source adapter whose privacy class is ``sensitive`` (RFC 002
+# §6: known PII, health or financial content, such as phone calls with outside
+# parties). Search, status, wake-up and the daemon's fast paths open only the
+# configured drawers collection, so nothing reads this one unless it is named.
+PRIVATE_COLLECTION_NAME = "mempalace_private_drawers"
 
 
 def _allowed_wrapper_collection_names() -> List[str]:
     """The collection names the ``get_collection`` wrapper routes through.
 
-    The configured drawers collection, closets collection, and fixed media
-    assets collection are first-class to MemPalace. Every other name points at a store the search/CLI/MCP
+    The configured drawers collection, closets collection, fixed media
+    assets collection and the private drawers collection are first-class to MemPalace. Every other name points at a store the search/CLI/MCP
     layer never reads — the exact silent-miss failure of issue ``#2347``.
     """
     from ..config import get_configured_collection_name
 
-    allowed = [get_configured_collection_name(), CLOSETS_COLLECTION_NAME, ASSETS_COLLECTION_NAME]
+    allowed = [
+        get_configured_collection_name(),
+        CLOSETS_COLLECTION_NAME,
+        ASSETS_COLLECTION_NAME,
+        PRIVATE_COLLECTION_NAME,
+    ]
     seen: set[str] = set()
     out: list[str] = []
     for name in allowed:
@@ -341,6 +351,13 @@ def get_collection(
         from ..config import get_configured_collection_name
 
         collection_name = get_configured_collection_name()
+        if collection_name == PRIVATE_COLLECTION_NAME:
+            # Every search, status and wake-up path opens the configured name, so this
+            # configuration would serve the private drawers to all of them.
+            raise ValueError(
+                f"the drawers collection may not be configured as {PRIVATE_COLLECTION_NAME!r}; "
+                "that name is reserved for sensitive sources"
+            )
     # Upstream #2347: fail loudly on a name the wrapper does not own. An explicit default name is rejected when a custom
     # name is configured (the silent-miss case); callers that mean "the drawers collection" pass None.
     if not _skip_name_check:
