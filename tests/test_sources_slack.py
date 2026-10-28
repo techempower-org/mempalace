@@ -278,3 +278,66 @@ def test_reruns_leave_nothing_stale_and_move_days_between_collections(tmp_path, 
         assert "DAYC plain again" in shared and "DAYC" not in private
     finally:
         unregister(_Fake.name)
+
+
+def test_a_later_failure_still_leaves_no_shared_copy_of_a_promoted_day(tmp_path, monkeypatch):
+    from mempalace.cli import mine_source_adapter
+    from mempalace.palace import get_collection
+    from mempalace.sources import register, unregister
+
+    monkeypatch.setenv("MEMPALACE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr("mempalace.sources.slack.configured_markers", lambda: ("acme-call",))
+    state = {
+        "C1": [{"ts": str(T0), "user": "U1", "text": "PLAIN day"}],
+        "C2": [{"ts": str(T0), "user": "U1", "text": "other"}],
+    }
+    fail = {"on": False}
+
+    def call(method, params):
+        if fail["on"] and method == "conversations.history" and params["channel"] == "C2":
+            raise RuntimeError("slack down")
+        if method == "conversations.list":
+            return {
+                "ok": True,
+                "channels": [{"name": "events", "id": "C1"}, {"name": "yurt", "id": "C2"}],
+            }
+        return _fake(state)(method, params)
+
+    class _Fake(SlackSourceAdapter):
+        name = "test-slack-fail"
+
+        def __init__(self):
+            super().__init__(
+                call=call, sources=[{"channel": "events"}, {"channel": "yurt"}], tz_name="UTC"
+            )
+
+    palace = str(tmp_path / "palace")
+    register(_Fake.name, _Fake)
+    try:
+        mine_source_adapter(source_name=_Fake.name, source_path=str(tmp_path), palace_path=palace)
+        assert any(
+            "PLAIN day" in d for d in get_collection(palace).get(include=["documents"])["documents"]
+        )
+        state["C1"][0]["text"] = "PLAIN day, then the acme-call"
+        fail["on"] = True
+        with pytest.raises(Exception):
+            mine_source_adapter(
+                source_name=_Fake.name, source_path=str(tmp_path), palace_path=palace
+            )
+        assert not any(
+            "PLAIN day" in d for d in get_collection(palace).get(include=["documents"])["documents"]
+        )
+    finally:
+        unregister(_Fake.name)
+
+
+def test_scopes_name_the_workspace(monkeypatch):
+    monkeypatch.setattr("mempalace.sources.slack.configured_markers", lambda: ())
+    adapter = SlackSourceAdapter(
+        call=_fake({"C1": [{"ts": str(T0), "user": "U1", "text": "hi"}]}),
+        sources=[{"channel": "events"}],
+        tz_name="UTC",
+    )
+    drawers = _ingest(adapter)
+    assert {d.metadata["slack_team_id"] for d in drawers} == {"T1"}
+    assert {"slack_team_id": "T1"} in adapter.snapshot_scopes()[0]["$and"]

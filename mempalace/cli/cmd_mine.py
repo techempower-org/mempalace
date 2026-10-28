@@ -418,6 +418,21 @@ def _drawer_collection_name_for(adapter) -> Optional[str]:
     return None
 
 
+def _withdraw_shared(collection, source_file: str) -> None:
+    """Delete every drawer of ``source_file`` from the (shared) ``collection``."""
+    ids, offset = [], 0
+    while True:
+        page = collection.get(
+            where={"source_file": source_file}, include=[], limit=1000, offset=offset
+        )
+        if not page["ids"]:
+            break
+        ids += page["ids"]
+        offset += len(page["ids"])
+    if ids:
+        collection.delete(ids=ids)
+
+
 def _reconcile_snapshot(adapter, palace_path, *, shared, written_shared, written_private) -> None:
     """Delete, from both collections, drawers in the adapter's snapshot scopes that this completed
     run did not write there (see ``BaseSourceAdapter.snapshot_scopes``)."""
@@ -558,6 +573,7 @@ def mine_source_adapter(
             private_context = None
             written_shared: set = set()
             written_private: set = set()
+            withdrawn: set = set()
             media_failures = 0
             media_seen = 0
             source_options = {}
@@ -596,6 +612,11 @@ def mine_source_adapter(
                             )
                         private_context.upsert_drawer(result)
                         written_private.add(_build_drawer_id(result))
+                        if not dry_run and result.source_file not in withdrawn:
+                            # Its private copy exists now; take the source's shared copies out
+                            # at once rather than at the end of a run that may yet fail.
+                            withdrawn.add(result.source_file)
+                            _withdraw_shared(drawer_collection, result.source_file)
                     else:
                         context.upsert_drawer(result)
                         (written_private if context.private_collection else written_shared).add(

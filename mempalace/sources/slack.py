@@ -257,6 +257,7 @@ class SlackSourceAdapter(BaseSourceAdapter):
                             "room": room,
                             "slack_channel": label,
                             "slack_channel_id": channel_id,
+                            "slack_team_id": team_id,
                             "slack_date": day,
                             "privacy_class": "sensitive"
                             if sensitive
@@ -264,7 +265,15 @@ class SlackSourceAdapter(BaseSourceAdapter):
                         },
                         route_hint=RouteHint(wing=wing, room=room),
                     )
-            scopes.append({"$and": [{"adapter_name": self.name}, {"slack_channel_id": channel_id}]})
+            scopes.append(
+                {
+                    "$and": [
+                        {"adapter_name": self.name},
+                        {"slack_team_id": team_id},
+                        {"slack_channel_id": channel_id},
+                    ]
+                }
+            )
         # Published only once every channel was read in full, so core never deletes on a partial run.
         self._scopes = scopes
 
