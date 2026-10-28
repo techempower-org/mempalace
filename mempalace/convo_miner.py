@@ -896,6 +896,13 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             flags = sensitive_chunk_flags(
                 [chunk["content"] for chunk, _room, _id in planned], configured_markers()
             )
+            # A chunk once filed privately stays private, marker or not: ids are positional, so a
+            # drawer moved by hand (a call relayed without a marker, #588) keeps its place.
+            already_private = _private_ids(palace_path, source_file, extract_mode)
+            flags = [
+                flag or drawer_id in already_private
+                for flag, (_chunk, _room, drawer_id) in zip(flags, planned)
+            ]
             sensitive = [item for item, flag in zip(planned, flags) if flag]
             planned = [item for item, flag in zip(planned, flags) if not flag]
             _file_sensitive_chunks(
@@ -1114,6 +1121,22 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
                 f"{len(changed)} embedded ({Path(source_file).name[:50]})"
             )
     return drawers_added, room_counts_delta, False
+
+
+def _private_ids(palace_path, source_file, extract_mode) -> set:
+    """Ids the private collection already holds for ``source_file``; none without a palace path
+    or a private collection. Any other failure raises, so the caller leaves the shared drawers
+    as they were."""
+    from .backends import PalaceNotFoundError
+    from .palace import PRIVATE_COLLECTION_NAME, get_collection
+
+    if palace_path is None:
+        return set()
+    try:
+        private = get_collection(palace_path, collection_name=PRIVATE_COLLECTION_NAME, create=False)
+    except PalaceNotFoundError:
+        return set()
+    return set(_source_file_stored_documents(private, source_file, extract_mode))
 
 
 def _file_sensitive_chunks(

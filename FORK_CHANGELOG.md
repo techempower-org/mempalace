@@ -61,6 +61,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   the drawers collection.
 
 
+### Changed
+
+
+- **a transcript chunk already in the private collection stays private on every re-mine, so a drawer moved there by hand keeps its place without a marker** (`HEAD` — pending resolution)
+  Convo drawer ids are positional, so a re-mine plans the same id for
+  the same chunk. A relayed phone call carries no marker, so the
+  classifier cannot see it and a re-mine filed it back into the shared
+  drawers collection (#588). `_file_chunks_locked` now treats any planned
+  id the private collection already holds for that source as sensitive.
+  A palace with no private collection mines as before; any other failure
+  reading it stops the file's mine with the shared drawers untouched.
+
+
 ### Performance
 
 

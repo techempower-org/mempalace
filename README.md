@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| a transcript chunk already in the private collection stays private on every re-mine, so a drawer moved there by hand keeps its place without a marker | — | `HEAD` — pending resolution |
 | the convo miner files transcript chunks that carry a sensitive marker (a private path, a pasted call record, a live transcription) verbatim into the private collection, and moves a shared copy filed before the marker was known | — | `HEAD` — pending resolution |
 | a livekit-calls source adapter files phone-call transcripts into a private drawers collection that no search, status or wake-up path opens, and any adapter of privacy class sensitive is routed there | — | [`eaf20ea`](https://github.com/techempower-org/mempalace/commit/eaf20ea) |
 | a new postgres palace gets an expression index on metadata->>'source_file', and the any-size scoped prefetch is taken only where pg_index shows that index, so a palace without it no longer turns every per-file lookup into a full scan | — | [`eb65e60`](https://github.com/techempower-org/mempalace/commit/eb65e60) |
