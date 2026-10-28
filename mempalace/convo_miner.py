@@ -36,6 +36,7 @@ from .palace import (
     CONVO_CHUNKER_VERSION,
     NORMALIZE_VERSION,
     SKIP_DIRS,
+    _indexed_scope,
     _metadata_matches_extract_mode,
     _validate_palace_fts5_after_mine,
     file_already_mined,
@@ -184,9 +185,11 @@ _LINE_GROUP_SIZE = 25  # lines per fallback group when no paragraph breaks
 _LINE_FALLBACK_MIN_NEWLINES = 20  # trigger line-group fallback above this newline count
 DRAWER_UPSERT_BATCH_SIZE = 1000
 # A mine of at most this many files skips the whole-palace prefetch scan for
-# per-file and per-wing lookups (#548). On the postgres palace a per-file
-# lookup is a ~24 s sequential scan and the whole scan ~9 min, so past about
-# twenty files one pass is cheaper; ten keeps a margin. A drain mine is one.
+# per-file and per-wing lookups (#548). Without an index a per-file lookup on
+# the postgres palace was a ~24 s sequential scan and the whole scan ~9 min,
+# so past about twenty files one pass is cheaper; ten keeps a margin. A drain
+# mine is one. Where the lookup is indexed (_indexed_scope, #567) the mine
+# stays scoped at any size.
 SCOPED_PREFETCH_MAX_FILES = 10
 MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB — skip files larger than this.
 # Matches miner.py at 500 MB. Long Claude Code sessions, multi-year
@@ -1674,7 +1677,9 @@ def _mine_convos_impl(
     # its own files and wing instead: the whole-palace scan costs the same
     # for one file as for two thousand, and on a 950K-drawer palace a
     # one-file mine sat in it for 5-10 minutes (#548).
-    scoped = len(files) <= SCOPED_PREFETCH_MAX_FILES
+    scoped = len(files) <= SCOPED_PREFETCH_MAX_FILES or (
+        collection is not None and _indexed_scope(collection)
+    )
     report_phase("prefetch", files_total=len(files), scoped=scoped)
     mined_mtimes: dict = (
         prefetch_mined_set(

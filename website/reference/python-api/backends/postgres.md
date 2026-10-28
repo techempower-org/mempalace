@@ -166,6 +166,20 @@ def manifest_put(self, source_file: str, extract_mode: str, source_mtime: Option
 def close(self) -> None
 ```
 
+#### `has_source_file_index`
+
+```python
+def has_source_file_index(self) -> bool
+```
+
+True when a valid, non-partial btree leads with ``metadata->>'source_file'``.
+
+That index is what makes a per-file lookup one indexed query at any list
+size (#567). It is built by ``_create_table`` for a new palace, but an
+older palace only has it if an operator built it, so ask ``pg_index``
+rather than assume it from the backend type. Only True is cached: a
+palace whose index is built later is found on the next check.
+
 ### `class PostgresBackend(BaseBackend)`
 
 Factory for optional PostgreSQL collections.

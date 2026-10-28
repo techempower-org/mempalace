@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| a new postgres palace gets an expression index on metadata->>'source_file', and the any-size scoped prefetch is taken only where pg_index shows that index, so a palace without it no longer turns every per-file lookup into a full scan | — | `HEAD` — pending resolution |
 | the KG write-through replaces a drawer's MENTIONS edges in three statements instead of CREATE-ing one more edge per mention on every re-file, so a re-mined drawer no longer gains a duplicate set of edges | — | `HEAD` — pending resolution |
 | on postgres a convo re-mine no longer re-stamps every unchanged chunk; completeness is recorded in one source-manifest row per (source_file, extract_mode), written last in the pass, so re-mining an appended live session updates its new chunks plus chunk 0 instead of every chunk | — | `HEAD` — pending resolution |
 | AGE knowledge-graph setup commits on every path through the Drawer-index check, so its connection no longer sits idle in transaction holding a snapshot after an early return | — | `HEAD` — pending resolution |

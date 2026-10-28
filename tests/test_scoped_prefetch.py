@@ -201,6 +201,19 @@ def test_large_mine_keeps_the_full_scan(tmp_path, monkeypatch):
     assert calls == {"source_files": None, "wing": None}
 
 
+def test_large_mine_stays_scoped_where_the_lookup_is_indexed(tmp_path, monkeypatch):
+    """Past SCOPED_PREFETCH_MAX_FILES the mine still scopes when each per-file
+    lookup is an indexed query (postgres with the source_file index, #567)."""
+    convos = tmp_path / "convos"
+    _write_convos(convos, 2)
+    monkeypatch.setattr(convo_miner, "SCOPED_PREFETCH_MAX_FILES", 1)
+    monkeypatch.setattr(convo_miner, "_indexed_scope", lambda collection: True)
+    calls = _spy_prefetch(monkeypatch)
+    convo_miner.mine_convos(str(convos), str(tmp_path / "palace"), wing="w")
+    assert len(calls["source_files"]) == 2
+    assert calls["wing"] == "w"
+
+
 def test_small_remine_skips_what_the_scoped_prefetch_found(tmp_path, capsys):
     convos = tmp_path / "convos"
     _write_convos(convos, 2)
