@@ -830,7 +830,9 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
     Sensitive chunks (``mempalace.sensitive``: a pasted call, a private file)
     are filed verbatim into the private collection first and planned out of
     this collection, so a copy already stored here is purged as an orphan
-    (#588). Without ``palace_path`` they are withheld from both.
+    (#588). Without ``palace_path``, or when the markers or the private
+    collection cannot be read, the file's mine stops with the shared drawers
+    untouched.
 
     Combines the per-file serialization that prevents concurrent agents from
     duplicating work (via mine_lock) with the rebuild contract that fires on
@@ -888,12 +890,14 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             )
             planned.append((chunk, chunk_room, drawer_id))
 
-        flags = sensitive_chunk_flags(
-            [chunk["content"] for chunk, _room, _id in planned], configured_markers()
-        )
-        sensitive = [item for item, flag in zip(planned, flags) if flag]
-        planned = [item for item, flag in zip(planned, flags) if not flag]
         try:
+            # Inside the try: unreadable markers stop this file's mine rather than classify
+            # without them.
+            flags = sensitive_chunk_flags(
+                [chunk["content"] for chunk, _room, _id in planned], configured_markers()
+            )
+            sensitive = [item for item, flag in zip(planned, flags) if flag]
+            planned = [item for item, flag in zip(planned, flags) if not flag]
             _file_sensitive_chunks(
                 palace_path, source_file, sensitive, wing, agent, extract_mode, authored_at
             )
@@ -1125,10 +1129,10 @@ def _file_sensitive_chunks(
 
     if palace_path is None:
         if items:
-            logger.warning(
-                "%d sensitive chunk(s) of %s withheld: no palace path for the private collection",
-                len(items),
-                source_file,
+            # Raising keeps the shared copies: the caller purges them only after this returns.
+            raise RuntimeError(
+                f"{len(items)} sensitive chunk(s) of {source_file} and no palace path for the "
+                "private collection"
             )
         return
     try:

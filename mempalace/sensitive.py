@@ -15,7 +15,14 @@ tool call rendered at column 0 (``[Tool] …``); see ``_BLOCK_START``.
 
 Markers are regular expressions: :data:`DEFAULT_MARKERS`, plus any listed
 under ``sensitive_markers`` in the palace config. Site-specific names belong
-in the config, not here.
+in the config, not here. A config that cannot be read, or a pattern that does
+not compile, raises :class:`SensitiveMarkersUnavailable` rather than classify
+without it. A marker split across a chunk boundary is still found.
+
+Known limits. The boundaries are read from rendered text, so a private
+file that itself holds a line shaped like a column-0 tool call ends its
+block early. A file already mined and unchanged is not reclassified until it
+changes or is re-mined.
 """
 
 from __future__ import annotations
@@ -44,57 +51,78 @@ DEFAULT_MARKERS: Tuple[str, ...] = (
 _BLOCK_START = re.compile(r"^\[(?:[A-Z][A-Za-z_]*|mcp__[\w-]+|tool)(?:\]|\s)")
 
 
+# How much of the previous chunk is joined to the next when looking for a marker, so one split
+# across a chunk boundary ("cat ~/pri" | "vate/x") is still found.
+_BOUNDARY_OVERLAP = 512
+
+
+class SensitiveMarkersUnavailable(RuntimeError):
+    """The configured markers could not be read or compiled. Classifying without them could file
+    text they mark into the shared collection, so the mine stops instead."""
+
+
 @lru_cache(maxsize=8)
 def _compiled(extra: Tuple[str, ...]) -> Tuple[re.Pattern, ...]:
     out = []
     for pattern in DEFAULT_MARKERS + extra:
         try:
             out.append(re.compile(pattern, re.IGNORECASE))
-        except re.error:
-            logger.warning("sensitive_markers: skipping invalid pattern %r", pattern)
+        except re.error as exc:
+            raise SensitiveMarkersUnavailable(
+                f"invalid sensitive marker {pattern!r}: {exc}"
+            ) from exc
     return tuple(out)
 
 
 def configured_markers() -> Tuple[str, ...]:
-    """The palace config's ``sensitive_markers`` (a list of regular expressions), or none."""
-    try:
-        from .config import MempalaceConfig
+    """The palace config's ``sensitive_markers`` (a list of regular expressions). No config file
+    means none; a config file that cannot be read or parsed raises, failing closed."""
+    from .config import MempalaceConfig
 
-        extra = MempalaceConfig().sensitive_markers
-    except Exception:
-        logger.debug("sensitive_markers: config unreadable; defaults only", exc_info=True)
-        return ()
-    return tuple(p for p in extra if isinstance(p, str) and p)
+    config = MempalaceConfig()
+    if getattr(config, "_file_config_state", "read") in ("unread", "unparsed"):
+        raise SensitiveMarkersUnavailable("palace config unreadable; sensitive_markers unknown")
+    extra = tuple(p for p in config.sensitive_markers if isinstance(p, str) and p)
+    _compiled(extra)  # raise now on an invalid pattern
+    return extra
+
+
+def _last_match_end(text: str, extra: Sequence[str]) -> int:
+    """End offset of the last marker match in ``text``, or -1."""
+    end = -1
+    for pattern in _compiled(tuple(extra)):
+        for match in pattern.finditer(text):
+            end = max(end, match.end())
+    return end
 
 
 def is_marked(text: str, extra: Sequence[str] = ()) -> bool:
-    return any(p.search(text) for p in _compiled(tuple(extra)))
+    return _last_match_end(text, extra) >= 0
 
 
 def sensitive_chunk_flags(contents: Iterable[str], extra: Sequence[str] = ()) -> List[bool]:
     """One flag per chunk, in order: True for a marked chunk and for the chunks that continue it."""
     flags: List[bool] = []
     carrying = False
+    previous = ""
     for text in contents:
-        if is_marked(text, extra):
+        tail = previous[-_BOUNDARY_OVERLAP:]
+        joined = tail + text
+        end = _last_match_end(joined, extra)
+        # A match ending inside the previous chunk was counted there; only one ending in this
+        # chunk (wholly here, or begun across the boundary) marks it.
+        if end > len(tail):
             flags.append(True)
-            # The marked block runs on past this chunk unless a later line here opens a new one.
-            carrying = not any(_BLOCK_START.match(line) for line in _lines_after_match(text, extra))
-            continue
-        lines = text.splitlines()
-        if carrying and lines and not _BLOCK_START.match(lines[0]):
-            flags.append(True)
-            carrying = not any(_BLOCK_START.match(line) for line in lines[1:])
-            continue
-        flags.append(False)
-        carrying = False
+            # The marked block runs on past this chunk unless a tool call opens a new one after it.
+            after = joined[end:].split("\n")[1:]
+            carrying = not any(_BLOCK_START.match(line) for line in after)
+        else:
+            lines = text.split("\n")
+            if carrying and not _BLOCK_START.match(lines[0]):
+                flags.append(True)
+                carrying = not any(_BLOCK_START.match(line) for line in lines[1:])
+            else:
+                flags.append(False)
+                carrying = False
+        previous = text
     return flags
-
-
-def _lines_after_match(text: str, extra: Sequence[str]) -> List[str]:
-    lines = text.splitlines()
-    last = 0
-    for i, line in enumerate(lines):
-        if is_marked(line, extra):
-            last = i
-    return lines[last + 1 :]
