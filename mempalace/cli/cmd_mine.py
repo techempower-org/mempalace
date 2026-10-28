@@ -418,6 +418,71 @@ def _drawer_collection_name_for(adapter) -> Optional[str]:
     return None
 
 
+def _withdraw_shared(collection, source_file: str, keep: set) -> None:
+    """Delete ``source_file``'s drawers from the (shared) ``collection``, except those this run
+    wrote there (``keep``): a public chunk filed earlier in the run stays."""
+    ids, offset = [], 0
+    while True:
+        page = collection.get(
+            where={"source_file": source_file}, include=[], limit=1000, offset=offset
+        )
+        if not page["ids"]:
+            break
+        ids += [i for i in page["ids"] if i not in keep]
+        offset += len(page["ids"])
+    if ids:
+        collection.delete(ids=ids)
+
+
+def _reconcile_snapshot(adapter, palace_path, *, shared, written_shared, written_private) -> None:
+    """Delete, from both collections, drawers in the adapter's snapshot scopes that this completed
+    run did not write there (see ``BaseSourceAdapter.snapshot_scopes``)."""
+    from ..backends import PalaceNotFoundError
+    from ..palace import PRIVATE_COLLECTION_NAME, get_collection
+
+    scopes = adapter.snapshot_scopes()
+    if not scopes:
+        return
+    try:
+        private = get_collection(palace_path, collection_name=PRIVATE_COLLECTION_NAME, create=False)
+    except PalaceNotFoundError:
+        private = None
+    if shared is None:
+        shared = get_collection(palace_path)
+    for collection, written in ((shared, written_shared), (private, written_private)):
+        if collection is None:
+            continue
+        for scope in scopes:
+            stale, offset = [], 0
+            while True:
+                page = collection.get(where=scope, include=[], limit=1000, offset=offset)
+                if not page["ids"]:
+                    break
+                stale += [i for i in page["ids"] if i not in written]
+                offset += len(page["ids"])
+            if stale:
+                collection.delete(ids=stale)
+
+
+def _private_context_for(context, palace_path: str, *, dry_run: bool):
+    """A copy of ``context`` that files into the private collection, for one sensitive record."""
+    import dataclasses
+
+    from ..palace import PRIVATE_COLLECTION_NAME, get_collection
+
+    collection = (
+        _DryRunCollectionProxy()
+        if dry_run
+        else get_collection(palace_path, collection_name=PRIVATE_COLLECTION_NAME)
+    )
+    return dataclasses.replace(
+        context,
+        drawer_collection=collection,
+        knowledge_graph=_SensitiveKnowledgeGraphRefusal(),
+        private_collection=True,
+    )
+
+
 def mine_source_adapter(
     *,
     source_name: str,
@@ -446,6 +511,7 @@ def mine_source_adapter(
         resolve_adapter_for_source,
     )
     from ..media import MediaAsset, MediaAssetError, MediaAssetSetupError, store_media_asset
+    from ..sources.context import _build_drawer_id
 
     logger = logging.getLogger(__name__)
 
@@ -505,6 +571,10 @@ def mine_source_adapter(
                 private_collection=collection_name is not None,
             )
             drawers_written = 0
+            private_context = None
+            written_shared: set = set()
+            written_private: set = set()
+            withdrawn: set = set()
             media_failures = 0
             media_seen = 0
             source_options = {}
@@ -531,7 +601,30 @@ def mine_source_adapter(
                     continue
                 if isinstance(result, DrawerRecord):
                     drawers_written += 1
-                    context.upsert_drawer(result)
+                    if (
+                        result.metadata.get("privacy_class") == "sensitive"
+                        and not context.private_collection
+                    ):
+                        # One sensitive record from an ordinary adapter (a Slack message that
+                        # carries a marker) goes to the private collection on its own.
+                        if private_context is None:
+                            private_context = _private_context_for(
+                                context, palace_path, dry_run=dry_run
+                            )
+                        private_context.upsert_drawer(result)
+                        written_private.add(_build_drawer_id(result))
+                        if not dry_run and result.source_file not in withdrawn:
+                            # Its private copy exists now; take the source's shared copies out
+                            # at once rather than at the end of a run that may yet fail.
+                            withdrawn.add(result.source_file)
+                            _withdraw_shared(
+                                drawer_collection, result.source_file, keep=written_shared
+                            )
+                    else:
+                        context.upsert_drawer(result)
+                        (written_private if context.private_collection else written_shared).add(
+                            _build_drawer_id(result)
+                        )
                     continue
                 if isinstance(result, MediaAsset):
                     media_seen += 1
@@ -568,6 +661,14 @@ def mine_source_adapter(
                     raise MediaAssetError(
                         f"all {media_failures} discovered media assets failed; none were indexed"
                     )
+            if not dry_run:
+                _reconcile_snapshot(
+                    adapter,
+                    palace_path,
+                    shared=None if context.private_collection else drawer_collection,
+                    written_shared=written_shared,
+                    written_private=written_private,
+                )
             return drawers_written
         finally:
             if knowledge_graph is not None and hasattr(knowledge_graph, "close"):

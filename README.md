@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| a slack source adapter files the channels listed under slack_sources as one verbatim transcript per channel per day, and core files any record labelled sensitive into the private collection whatever adapter produced it | — | `HEAD` — pending resolution |
 | a transcript chunk already in the private collection stays private on every re-mine, so a drawer moved there by hand keeps its place without a marker | — | `HEAD` — pending resolution |
 | the convo miner files transcript chunks that carry a sensitive marker (a private path, a pasted call record, a live transcription) verbatim into the private collection, and moves a shared copy filed before the marker was known | — | `HEAD` — pending resolution |
 | a livekit-calls source adapter files phone-call transcripts into a private drawers collection that no search, status or wake-up path opens, and any adapter of privacy class sensitive is routed there | — | [`eaf20ea`](https://github.com/techempower-org/mempalace/commit/eaf20ea) |

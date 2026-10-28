@@ -91,6 +91,7 @@ gemini = "mempalace.sources.gemini:GeminiSourceAdapter"
 aider = "mempalace.sources.aider:AiderSourceAdapter"
 warp = "mempalace.sources.warp:WarpSourceAdapter"
 livekit-calls = "mempalace.sources.livekit_calls:LivekitCallsSourceAdapter"
+slack = "mempalace.sources.slack:SlackSourceAdapter"
 
 [project.optional-dependencies]
 dev = [

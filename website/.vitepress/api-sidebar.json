@@ -748,6 +748,10 @@
         "link": "/reference/python-api/sources/registry"
       },
       {
+        "text": "mempalace.sources.slack",
+        "link": "/reference/python-api/sources/slack"
+      },
+      {
         "text": "mempalace.sources.transforms",
         "link": "/reference/python-api/sources/transforms"
       },
