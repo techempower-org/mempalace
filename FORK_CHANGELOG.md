@@ -18,6 +18,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-10-28]
+
+
+### Added
+
+
+- **an outline source adapter files every published document of an Outline wiki verbatim, one source per document, and an adapter re-run no longer re-embeds a drawer whose content and metadata are unchanged** (`HEAD` — pending resolution)
+  `mempalace mine <dir> --source outline` reads `outline_url` from the
+  palace config and `MEMPALACE_OUTLINE_TOKEN` from the environment, and
+  calls only read methods. Every collection is read, or those listed
+  under `outline_sources` with their wings. Each published document
+  becomes `outline://<team_id>/<document_id>`: a short header plus its
+  markdown, verbatim. A document with a sensitive marker is labelled
+  `sensitive` as a whole, and each collection is a snapshot scope, so
+  deleted, archived or moved documents leave nothing behind.
+
+  `PalaceContext.upsert_drawer` skips a drawer the collection already
+  holds with the same content and the same value for every metadata key.
+  A full re-extract (Slack, Outline) then embeds only what changed.
+
+
 ## [2026-10-27]
 
 

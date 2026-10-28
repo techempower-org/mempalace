@@ -41,7 +41,7 @@ Tiers:
 | Slack (The Homefront) | live (2026-10-27) | 560: #events 108 / 84 days, #yurt 420 / 263 days (wing `homefront`), the morning brief 32 / 15 days (wing `plan_realm_watch`; self-DM, the 15 briefs only); 0 private | `palace-slack-mine.timer` daily 08:30 on familiar: `mempalace mine … --source slack`; channels under `slack_sources` in the palace config; token in `~/.config/palace-slack/env` (0600, from the vault item `slack-te-user-token`) | other channels as asked; re-copy the token if it is rotated |
 | Gmail | missing | 0 | none | Takeout mbox mined locally, or an API adapter |
 | Notion | missing | 0 | none | export adapter |
-| Outline | missing | 0 | none | API export adapter (Outline runs on disks) |
+| Outline (outline.jphe.in) | live (2026-10-28) | dry run: 7,471 drawers from 328 published documents in 8 collections (wing `outline_wiki`), 0 sensitive | `palace-outline-mine.timer` daily on familiar: `mempalace mine … --source outline`; `outline_url` in the palace config; token in `~/.config/palace-outline/env` (0600, from the vault item `Outline API Key (realm-portal)`) | re-copy the token if it is rotated |
 | Home Assistant logs | missing | 0 | none | logbook/recorder export adapter |
 | Google Voice SMS (arrives as Gmail) | candidate | 0 | — | rides on the Gmail adapter |
 | Calendar | candidate | 0 | — | ICS export adapter |

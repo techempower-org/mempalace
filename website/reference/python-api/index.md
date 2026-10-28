@@ -206,6 +206,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.sources.livekit_calls`](./sources/livekit_calls) — livekit-voice call-record source adapter.
 - [`mempalace.sources.media`](./sources/media) — Local image, audio, and video reference adapter.
 - [`mempalace.sources.opencode`](./sources/opencode) — OpenCode source adapter (RFC 002).
+- [`mempalace.sources.outline`](./sources/outline) — Outline source adapter: every published document of the configured collections.
 - [`mempalace.sources.registry`](./sources/registry) — Source adapter registry + entry-point discovery (RFC 002 §3).
 - [`mempalace.sources.slack`](./sources/slack) — Slack source adapter: channel history, one drawer set per channel per day.
 - [`mempalace.sources.transforms`](./sources/transforms) — Reference implementations of the reserved content transformations (RFC 002 §1.4).

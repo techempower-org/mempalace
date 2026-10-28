@@ -744,6 +744,10 @@
         "link": "/reference/python-api/sources/opencode"
       },
       {
+        "text": "mempalace.sources.outline",
+        "link": "/reference/python-api/sources/outline"
+      },
+      {
         "text": "mempalace.sources.registry",
         "link": "/reference/python-api/sources/registry"
       },
