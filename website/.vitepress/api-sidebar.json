@@ -364,6 +364,10 @@
         "link": "/reference/python-api/searcher"
       },
       {
+        "text": "mempalace.sensitive",
+        "link": "/reference/python-api/sensitive"
+      },
+      {
         "text": "mempalace.server_registry",
         "link": "/reference/python-api/server_registry"
       },
