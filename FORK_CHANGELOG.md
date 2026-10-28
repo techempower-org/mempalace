@@ -24,6 +24,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **a slack source adapter files the channels listed under slack_sources as one verbatim transcript per channel per day, and core files any record labelled sensitive into the private collection whatever adapter produced it** (`HEAD` — pending resolution)
+  `mempalace mine <dir> --source slack` reads the channels listed under
+  `slack_sources` in the palace config (`channel`, `wing`, and an
+  optional `require` pattern a top-level message must match, so a
+  direct-message channel can yield one kind of message only). The token
+  comes from `MEMPALACE_SLACK_TOKEN`, and only read methods are called.
+  Each channel-day becomes `slack://<team>/<channel>/<date>`, with
+  thread replies indented under their parent and mentions resolved to
+  names. A day with a chunk that matches a sensitive marker is labelled
+  `sensitive`.
+
+  `mine_source_adapter` now routes a record labelled `sensitive` from an
+  ordinary adapter to the private collection, with a knowledge graph that
+  refuses writes, rather than refusing it.
+
+
 - **the convo miner files transcript chunks that carry a sensitive marker (a private path, a pasted call record, a live transcription) verbatim into the private collection, and moves a shared copy filed before the marker was known** (`HEAD` — pending resolution)
   A session that quoted a phone call put the other party's words in the
   shared drawers collection (#588). `mempalace.sensitive` flags a chunk

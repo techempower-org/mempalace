@@ -418,6 +418,25 @@ def _drawer_collection_name_for(adapter) -> Optional[str]:
     return None
 
 
+def _private_context_for(context, palace_path: str, *, dry_run: bool):
+    """A copy of ``context`` that files into the private collection, for one sensitive record."""
+    import dataclasses
+
+    from ..palace import PRIVATE_COLLECTION_NAME, get_collection
+
+    collection = (
+        _DryRunCollectionProxy()
+        if dry_run
+        else get_collection(palace_path, collection_name=PRIVATE_COLLECTION_NAME)
+    )
+    return dataclasses.replace(
+        context,
+        drawer_collection=collection,
+        knowledge_graph=_SensitiveKnowledgeGraphRefusal(),
+        private_collection=True,
+    )
+
+
 def mine_source_adapter(
     *,
     source_name: str,
@@ -505,6 +524,7 @@ def mine_source_adapter(
                 private_collection=collection_name is not None,
             )
             drawers_written = 0
+            private_context = None
             media_failures = 0
             media_seen = 0
             source_options = {}
@@ -531,7 +551,19 @@ def mine_source_adapter(
                     continue
                 if isinstance(result, DrawerRecord):
                     drawers_written += 1
-                    context.upsert_drawer(result)
+                    if (
+                        result.metadata.get("privacy_class") == "sensitive"
+                        and not context.private_collection
+                    ):
+                        # One sensitive record from an ordinary adapter (a Slack message that
+                        # carries a marker) goes to the private collection on its own.
+                        if private_context is None:
+                            private_context = _private_context_for(
+                                context, palace_path, dry_run=dry_run
+                            )
+                        private_context.upsert_drawer(result)
+                    else:
+                        context.upsert_drawer(result)
                     continue
                 if isinstance(result, MediaAsset):
                     media_seen += 1

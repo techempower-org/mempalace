@@ -38,7 +38,7 @@ Tiers:
 | Codex CLI, Gemini CLI, Aider, OpenCode, Warp sessions | supported | not measured | `mempalace/sources/` adapters, `normalize.py` | a mine target on a host that runs those tools |
 | ChatGPT and claude.ai exports, Slack export JSON, Continue | supported | not measured | `normalize.py` parsers | an export file to mine |
 | livekit-voice phone calls | live (private) | 411 in `mempalace_private_drawers`, 0 in the drawers collection (121 of 139 records have a transcript) | hourly user timer `palace-calls-mine.timer` on familiar: `mempalace mine ~/.local/share/livekit-voice/calls --source livekit-calls`; privacy class `sensitive` | — (session transcripts that quote a call are now filed privately too: #588, #590, #591) |
-| Slack (live workspace) | missing | 0 | none | export or API adapter; token in the vault |
+| Slack (The Homefront) | live (2026-10-27) | dry run: #events 110 drawers / 87 days, #yurt 423 / 269 days, the morning brief 32 / 15 days (self-DM, brief messages only) | `mempalace mine <dir> --source slack` from `palace-slack-mine.timer` (daily) on familiar; channels under `slack_sources` in the palace config; token `MEMPALACE_SLACK_TOKEN` from the vault | other channels as asked |
 | Gmail | missing | 0 | none | Takeout mbox mined locally, or an API adapter |
 | Notion | missing | 0 | none | export adapter |
 | Outline | missing | 0 | none | API export adapter (Outline runs on disks) |
