@@ -13,8 +13,9 @@ Each document is one source, ``outline://<team_id>/<document_id>``: a short
 header (collection, title, last update, URL) and the document's markdown,
 verbatim, chunked like any text. A document that matches a sensitive marker
 (``mempalace.sensitive``) is labelled ``sensitive`` as a whole, and core files it
-into the private collection. Each collection read in full is a snapshot scope,
-so a document deleted, archived or moved out of it leaves nothing behind.
+into the private collection. Each configured collection read in full is a
+snapshot scope (the whole workspace when every collection is read), so a document
+deleted, archived or moved out of it, or a deleted collection, leaves nothing behind.
 """
 
 from __future__ import annotations
@@ -223,6 +224,10 @@ class OutlineSourceAdapter(BaseSourceAdapter):
                     ]
                 }
             )
+        if sources is None:
+            # Every collection was read, so the scope is the whole workspace: a collection deleted
+            # since the last run is covered too.
+            scopes = [{"$and": [{"adapter_name": self.name}, {"outline_team_id": team_id}]}]
         # Published only once every collection was read in full.
         self._scopes = scopes
 

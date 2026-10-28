@@ -305,3 +305,33 @@ def test_a_document_that_gains_a_marker_leaves_the_shared_collection(tmp_path, m
         assert any("acme-call" in d for d in private)
     finally:
         unregister(_Fake.name)
+
+
+def test_a_deleted_collection_leaves_nothing_behind(tmp_path, monkeypatch):
+    from mempalace.cli import mine_source_adapter
+    from mempalace.palace import get_collection
+    from mempalace.sources import register, unregister
+
+    monkeypatch.setenv("MEMPALACE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr("mempalace.sources.outline.configured_markers", lambda: ())
+    state = {
+        "collections": [{"id": "c1", "name": "Gone"}, {"id": "c2", "name": "Kept"}],
+        "docs": {"c1": [_doc(1, "GONE doc")], "c2": [_doc(2, "KEPT doc")]},
+    }
+
+    class _Fake(OutlineSourceAdapter):
+        name = "test-outline-dropcol"
+
+        def __init__(self):
+            super().__init__(call=_fake(state), sources=None)
+
+    palace = str(tmp_path / "palace")
+    register(_Fake.name, _Fake)
+    try:
+        mine_source_adapter(source_name=_Fake.name, source_path=str(tmp_path), palace_path=palace)
+        state["collections"] = [{"id": "c2", "name": "Kept"}]
+        mine_source_adapter(source_name=_Fake.name, source_path=str(tmp_path), palace_path=palace)
+        docs = get_collection(palace).get(include=["documents"])["documents"]
+        assert any("KEPT doc" in d for d in docs) and not any("GONE doc" in d for d in docs)
+    finally:
+        unregister(_Fake.name)

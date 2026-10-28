@@ -17,8 +17,9 @@ Each document is one source, ``outline://&lt;team_id>/&lt;document_id>``: a shor
 header (collection, title, last update, URL) and the document's markdown,
 verbatim, chunked like any text. A document that matches a sensitive marker
 (``mempalace.sensitive``) is labelled ``sensitive`` as a whole, and core files it
-into the private collection. Each collection read in full is a snapshot scope,
-so a document deleted, archived or moved out of it leaves nothing behind.
+into the private collection. Each configured collection read in full is a
+snapshot scope (the whole workspace when every collection is read), so a document
+deleted, archived or moved out of it, or a deleted collection, leaves nothing behind.
 
 ## Classes
 
