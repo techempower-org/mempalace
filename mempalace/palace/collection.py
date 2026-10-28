@@ -347,17 +347,17 @@ def get_collection(
     check exists to prevent never uses this flag and still fails loudly.
     """
     config = MempalaceConfig()
-    if collection_name is None:
-        from ..config import get_configured_collection_name
+    from ..config import get_configured_collection_name
 
+    if get_configured_collection_name() == PRIVATE_COLLECTION_NAME:
+        # Every search, status and wake-up path opens the configured name, explicitly or by
+        # default, so this configuration would serve the private drawers to all of them.
+        raise ValueError(
+            f"the drawers collection may not be configured as {PRIVATE_COLLECTION_NAME!r}; "
+            "that name is reserved for sensitive sources"
+        )
+    if collection_name is None:
         collection_name = get_configured_collection_name()
-        if collection_name == PRIVATE_COLLECTION_NAME:
-            # Every search, status and wake-up path opens the configured name, so this
-            # configuration would serve the private drawers to all of them.
-            raise ValueError(
-                f"the drawers collection may not be configured as {PRIVATE_COLLECTION_NAME!r}; "
-                "that name is reserved for sensitive sources"
-            )
     # Upstream #2347: fail loudly on a name the wrapper does not own. An explicit default name is rejected when a custom
     # name is configured (the silent-miss case); callers that mean "the drawers collection" pass None.
     if not _skip_name_check:

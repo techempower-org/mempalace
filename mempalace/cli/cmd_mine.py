@@ -475,7 +475,12 @@ def mine_source_adapter(
             collection_name = _drawer_collection_name_for(adapter)
             if dry_run:
                 drawer_collection = _DryRunCollectionProxy()
-                knowledge_graph = _DryRunKnowledgeGraphProxy()
+                # a dry run must refuse what the real run refuses
+                knowledge_graph = (
+                    _SensitiveKnowledgeGraphRefusal()
+                    if collection_name is not None
+                    else _DryRunKnowledgeGraphProxy()
+                )
             else:
                 drawer_collection = (
                     get_collection(palace_path)

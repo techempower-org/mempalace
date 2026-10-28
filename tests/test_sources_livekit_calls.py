@@ -140,12 +140,14 @@ def test_sensitive_adapter_cannot_write_the_shared_knowledge_graph(tmp_path, mon
     monkeypatch.setenv("MEMPALACE_CONFIG_DIR", str(tmp_path / "config"))
     register(_TripleWriter.name, _TripleWriter)
     try:
-        with pytest.raises(SensitiveKnowledgeGraphWrite):
-            mine_source_adapter(
-                source_name=_TripleWriter.name,
-                source_path=str(tmp_path),
-                palace_path=str(tmp_path / "palace"),
-            )
+        for dry_run in (True, False):
+            with pytest.raises(SensitiveKnowledgeGraphWrite):
+                mine_source_adapter(
+                    source_name=_TripleWriter.name,
+                    source_path=str(tmp_path),
+                    palace_path=str(tmp_path / "palace"),
+                    dry_run=dry_run,
+                )
     finally:
         unregister(_TripleWriter.name)
 
@@ -160,6 +162,7 @@ def test_task_is_metadata_not_content(calls):
 def test_malformed_records_are_skipped_without_stopping_the_mine(calls):
     (calls / "zz-bad-status.json").write_text(json.dumps(_record("bad-status", status=[])))
     (calls / "zz-nan-start.json").write_text(json.dumps(_record("nan", started=float("nan"))))
+    (calls / "zz-deep.json").write_text("[" * 100_000 + "]" * 100_000)
     ids = {d.metadata["call_id"] for d in _ingest(calls)}
     assert ids == {"out-1", "nan"}
     nan = [d for d in _ingest(calls) if d.metadata["call_id"] == "nan"]
@@ -196,6 +199,8 @@ def test_the_drawers_collection_cannot_be_configured_as_the_private_one(tmp_path
     monkeypatch.setenv("MEMPALACE_COLLECTION_NAME", "mempalace_private_drawers")
     with pytest.raises(ValueError, match="reserved for sensitive sources"):
         get_collection(str(tmp_path / "palace"))
+    with pytest.raises(ValueError, match="reserved for sensitive sources"):
+        get_collection(str(tmp_path / "palace"), collection_name="mempalace_private_drawers")
 
 
 def test_the_legacy_hub_path_files_privately_too(calls, tmp_path, monkeypatch):

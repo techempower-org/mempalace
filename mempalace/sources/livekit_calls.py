@@ -9,8 +9,10 @@ list of ``{"role", "t", "text"}`` turns, ``user`` being the other party and
 A call holds an outside party's words and, often, benefits or health
 details, so the adapter's privacy class is ``sensitive`` (RFC 002 §6) and
 core files its drawers in the private collection that search, status and
-wake-up never open. Only the spoken words are kept: the model-written
-``summary`` is not verbatim, and ``metrics`` carry timings, not content. No
+wake-up never open. Drawer content is only the spoken words: the
+model-written ``summary`` is not verbatim and is dropped, ``metrics`` carry
+timings, not content, and the ``task`` the call was placed for is kept as
+``call_task`` metadata rather than as something said. No
 audio is stored in a record. Records still in progress, and anything under
 ``~/private``, are skipped.
 """
@@ -144,7 +146,7 @@ class LivekitCallsSourceAdapter(BaseSourceAdapter):
         for path in _find_records(self._base_dir(source)):
             try:
                 record, mtime = _read_record(path)
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, RecursionError) as exc:
                 logger.warning("livekit-calls: skipping unreadable %s: %s", path.name, exc)
                 continue
             if not isinstance(record, dict):
