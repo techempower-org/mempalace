@@ -18,6 +18,10 @@ contract is stable.
 
 ## Classes
 
+### `class SensitiveRecordOutsidePrivateCollection(RuntimeError)`
+
+A ``sensitive`` record reached a context whose collection is not the private one.
+
 ### `class PalaceContext`
 
 Per-mine-invocation facade passed to :meth:`BaseSourceAdapter.ingest`.
@@ -37,6 +41,9 @@ Fields:
         core so drawers can carry ``metadata["adapter_name"]``.
     adapter_version: Version of the adapter currently ingesting.
     progress_hooks: Optional callables core invokes on progress events.
+    private_collection: True only when core opened the private drawers
+        collection for this ingest. A record whose ``privacy_class`` is
+        ``sensitive`` is refused anywhere else (RFC 002 §6).
 
 Methods are intentionally thin wrappers so the concrete mine loop in
 core can swap implementations without changing adapter code.

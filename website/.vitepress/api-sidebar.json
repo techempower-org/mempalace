@@ -728,6 +728,10 @@
         "link": "/reference/python-api/sources/gemini"
       },
       {
+        "text": "mempalace.sources.livekit_calls",
+        "link": "/reference/python-api/sources/livekit_calls"
+      },
+      {
         "text": "mempalace.sources.media",
         "link": "/reference/python-api/sources/media"
       },

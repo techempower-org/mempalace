@@ -202,6 +202,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.sources.conversations`](./sources/conversations) — Conversation source adapter (RFC 002 §9).
 - [`mempalace.sources.filesystem`](./sources/filesystem) — Filesystem source adapter (RFC 002 §9).
 - [`mempalace.sources.gemini`](./sources/gemini) — Gemini CLI source adapter (RFC 002).
+- [`mempalace.sources.livekit_calls`](./sources/livekit_calls) — livekit-voice call-record source adapter.
 - [`mempalace.sources.media`](./sources/media) — Local image, audio, and video reference adapter.
 - [`mempalace.sources.opencode`](./sources/opencode) — OpenCode source adapter (RFC 002).
 - [`mempalace.sources.registry`](./sources/registry) — Source adapter registry + entry-point discovery (RFC 002 §3).

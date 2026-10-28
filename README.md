@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| a livekit-calls source adapter files phone-call transcripts into a private drawers collection that no search, status or wake-up path opens, and any adapter of privacy class sensitive is routed there | — | `HEAD` — pending resolution |
 | a new postgres palace gets an expression index on metadata->>'source_file', and the any-size scoped prefetch is taken only where pg_index shows that index, so a palace without it no longer turns every per-file lookup into a full scan | — | [`eb65e60`](https://github.com/techempower-org/mempalace/commit/eb65e60) |
 | the KG write-through replaces a drawer's MENTIONS edges in three statements instead of CREATE-ing one more edge per mention on every re-file, so a re-mined drawer no longer gains a duplicate set of edges | — | [`2b7f7d5`](https://github.com/techempower-org/mempalace/commit/2b7f7d5) |
 | on postgres a convo re-mine no longer re-stamps every unchanged chunk; completeness is recorded in one source-manifest row per (source_file, extract_mode), written last in the pass, so re-mining an appended live session updates its new chunks plus chunk 0 instead of every chunk | — | [`7357095`](https://github.com/techempower-org/mempalace/commit/7357095) |
