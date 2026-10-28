@@ -410,7 +410,7 @@ class SensitiveKnowledgeGraphWrite(RuntimeError):
 
 def _drawer_collection_name_for(adapter) -> Optional[str]:
     """The collection an adapter's drawers file into: the private collection for a ``sensitive``
-    source (RFC 002 §6), otherwise ``None``, meaning the configured drawers collection."""
+    source (RFC 002's privacy classes), otherwise ``None``, meaning the configured drawers collection."""
     from ..palace import PRIVATE_COLLECTION_NAME
 
     if getattr(adapter, "default_privacy_class", None) == "sensitive":

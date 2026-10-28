@@ -217,7 +217,7 @@ def _enforce_embedder_identity(
 CLOSETS_COLLECTION_NAME = "mempalace_closets"
 ASSETS_COLLECTION_NAME = "mempalace_assets"
 # Drawers from a source adapter whose privacy class is ``sensitive`` (RFC 002
-# §6: known PII, health or financial content, such as phone calls with outside
+# privacy classes: known PII, health or financial content, such as phone calls with outside
 # parties). Search, status, wake-up and the daemon's fast paths open only the
 # configured drawers collection, so nothing reads this one unless it is named.
 PRIVATE_COLLECTION_NAME = "mempalace_private_drawers"
