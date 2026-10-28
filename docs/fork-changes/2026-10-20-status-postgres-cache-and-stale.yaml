@@ -2,7 +2,7 @@ seq: 182
 id: status-postgres-cache-and-stale
 date: '2026-10-20'
 bucket: Fixed
-commit: HEAD
+commit: 63aac38
 area: MCP server
 summary: on postgres, tool_status reuses a result for 60 s, runs one build at a time, and when the count queries miss their timeout it serves the last result (marked stale, for up to 30 min) instead of falling back to the full metadata sweep
 body: |
@@ -20,6 +20,7 @@ body: |
   result exists at all does it return None, so the caller falls back
   to the sweep as before.
 tests: '6 new (test_tool_status_postgres_cache: a fresh result is reused without querying; a failure serves the last result marked stale; a failure with nothing cached returns None; a result past the stale limit is not served; a cached result is not mutated by callers; tool_status on postgres does not sweep when a stale result exists). A zero TTL (2 failed), no stale serving (3 failed) or returning the cached dict itself (1 failed) each turns tests red'
+fork_pr: 573
 files:
 - mempalace/mcp_server.py
 - tests/conftest.py

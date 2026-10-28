@@ -2,7 +2,7 @@ seq: 185
 id: kg-writethrough-replace-mentions
 date: '2026-10-24'
 bucket: Fixed
-commit: HEAD
+commit: 2b7f7d5
 area: Knowledge graph
 summary: the KG write-through replaces a drawer's MENTIONS edges in three statements instead of CREATE-ing one more edge per mention on every re-file, so a re-mined drawer no longer gains a duplicate set of edges
 body: |
@@ -26,3 +26,4 @@ body: |
   skipped rather than failing the drawer. Both hooks use it when the KG
   has it, and a drawer whose new content has no entities still loses
   its old edges. A KG without it keeps the per-mention loop.
+fork_pr: 581

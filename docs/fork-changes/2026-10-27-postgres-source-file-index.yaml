@@ -2,7 +2,7 @@ seq: 186
 id: postgres-source-file-index
 date: '2026-10-27'
 bucket: Performance
-commit: HEAD
+commit: eb65e60
 area: Postgres backend
 summary: a new postgres palace gets an expression index on metadata->>'source_file', and the any-size scoped prefetch is taken only where pg_index shows that index, so a palace without it no longer turns every per-file lookup into a full scan
 body: |
@@ -29,3 +29,4 @@ body: |
   `prefetch_mined_set` over all 60 took 1.47 s. Before this change, a
   convo mine of more than 10 files took the whole-palace scan, about
   9 min per the #548 measurements.
+fork_pr: 585

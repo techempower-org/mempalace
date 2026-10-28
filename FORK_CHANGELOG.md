@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Performance
 
 
-- **a new postgres palace gets an expression index on metadata->>'source_file', and the any-size scoped prefetch is taken only where pg_index shows that index, so a palace without it no longer turns every per-file lookup into a full scan** (`HEAD` — pending resolution)
+- **a new postgres palace gets an expression index on metadata->>'source_file', and the any-size scoped prefetch is taken only where pg_index shows that index, so a palace without it no longer turns every per-file lookup into a full scan** ([`eb65e60`](https://github.com/techempower-org/mempalace/commit/eb65e60))
   Every per-file lookup compiles to `metadata->>'source_file' = %s`,
   covering the mine's scoped prefetch, `file_already_mined` and the
   purge before a re-file. The metadata GIN serves `@>`, not `->>`, so
@@ -56,7 +56,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **the KG write-through replaces a drawer's MENTIONS edges in three statements instead of CREATE-ing one more edge per mention on every re-file, so a re-mined drawer no longer gains a duplicate set of edges** (`HEAD` — pending resolution)
+- **the KG write-through replaces a drawer's MENTIONS edges in three statements instead of CREATE-ing one more edge per mention on every re-file, so a re-mined drawer no longer gains a duplicate set of edges** ([`2b7f7d5`](https://github.com/techempower-org/mempalace/commit/2b7f7d5))
   An incremental re-mine upserts a changed drawer under its old id with
   no delete-through, and `add_mention` always CREATEs, so every re-file
   added a full second set of MENTIONS edges. The chunker-version re-file
@@ -85,7 +85,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **on postgres a convo re-mine no longer re-stamps every unchanged chunk; completeness is recorded in one source-manifest row per (source_file, extract_mode), written last in the pass, so re-mining an appended live session updates its new chunks plus chunk 0 instead of every chunk** (`HEAD` — pending resolution)
+- **on postgres a convo re-mine no longer re-stamps every unchanged chunk; completeness is recorded in one source-manifest row per (source_file, extract_mode), written last in the pass, so re-mining an appended live session updates its new chunks plus chunk 0 instead of every chunk** ([`7357095`](https://github.com/techempower-org/mempalace/commit/7357095))
   Every re-mine of a live transcript refreshed each unchanged chunk's
   `source_mtime`/`chunk_total` so the completeness readers would see
   one coherent group (#2183). On postgres, `metadata` is GIN-indexed,
@@ -119,7 +119,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **AGE knowledge-graph setup commits on every path through the Drawer-index check, so its connection no longer sits idle in transaction holding a snapshot after an early return** (`HEAD` — pending resolution)
+- **AGE knowledge-graph setup commits on every path through the Drawer-index check, so its connection no longer sits idle in transaction holding a snapshot after an early return** ([`556d420`](https://github.com/techempower-org/mempalace/commit/556d420))
   `_ensure_drawer_unique_index` committed only on the path that created
   the index. Since #570 the common path returns early because the index
   exists, so every KG setup left its connection "idle in transaction"
@@ -136,7 +136,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/knowledge_graph_age.py`, `tests/test_knowledge_graph_age_drawer_index.py`
 
 
-- **on postgres, tool_status reuses a result for 60 s, runs one build at a time, and when the count queries miss their timeout it serves the last result (marked stale, for up to 30 min) instead of falling back to the full metadata sweep** (`HEAD` — pending resolution)
+- **on postgres, tool_status reuses a result for 60 s, runs one build at a time, and when the count queries miss their timeout it serves the last result (marked stale, for up to 30 min) instead of falling back to the full metadata sweep** ([`63aac38`](https://github.com/techempower-org/mempalace/commit/63aac38))
   Every SessionStart hook calls status. On postgres, status ran three
   whole-table count queries under a 3 s statement timeout, and on a
   miss it fell back to the legacy sweep of every drawer's metadata. On
@@ -155,7 +155,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/mcp_server.py`, `tests/conftest.py`, `tests/test_tool_status_postgres_cache.py`
 
 
-- **on postgres, a graph build serves for five minutes even after a write empties the graph cache, so a palace being mined no longer re-runs the room aggregate on nearly every graph_stats call** (`HEAD` — pending resolution)
+- **on postgres, a graph build serves for five minutes even after a write empties the graph cache, so a palace being mined no longer re-runs the room aggregate on nearly every graph_stats call** ([`7eb0dae`](https://github.com/techempower-org/mempalace/commit/7eb0dae))
   After #568, graph_stats on familiar still ran about 85 times an hour.
   Every mine write calls invalidate_graph_cache(), so nearly every call
   re-ran the room aggregate over 1.18M drawers. Under load it hit the
@@ -173,7 +173,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/palace_graph.py`, `tests/conftest.py`, `tests/test_palace_graph_single_flight.py`
 
 
-- **a Claude Code transcript's tool output that isn't text (a binary piped to stdout, or a minified-code line) is replaced by a marker giving its size before it is filed, so it no longer becomes drawers that recall surfaces as "essential story"** (`HEAD` — pending resolution)
+- **a Claude Code transcript's tool output that isn't text (a binary piped to stdout, or a minified-code line) is replaced by a marker giving its size before it is filed, so it no longer becomes drawers that recall surfaces as "essential story"** ([`990d331`](https://github.com/techempower-org/mempalace/commit/990d331))
   jp-92's post-compaction recovery block on 2026-10-20 pulled drawers
   from wing plan_realm_watch that were binary garbage: UTF-16 and
   U+FFFD fragments from a binary dumped through Bash, and minified JS
@@ -194,7 +194,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/normalize.py`, `tests/test_normalize_non_text.py`
 
 
-- **AGE knowledge-graph setup no longer counts duplicate Drawer ids when the drawer_id_unique index is already installed, so opening the graph stops running a COUNT(DISTINCT) over every Drawer row** (`HEAD` — pending resolution)
+- **AGE knowledge-graph setup no longer counts duplicate Drawer ids when the drawer_id_unique index is already installed, so opening the graph stops running a COUNT(DISTINCT) over every Drawer row** ([`c643e0b`](https://github.com/techempower-org/mempalace/commit/c643e0b))
   `_ensure_drawer_unique_index` ran on every KG setup. Before checking
   whether the index existed, it counted duplicate ids with
   `COUNT(*) - COUNT(DISTINCT (properties::text)::jsonb->>'id')` over the
@@ -209,7 +209,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/knowledge_graph_age.py`, `tests/test_knowledge_graph_age_drawer_index.py`
 
 
-- **on the postgres backend a paged get() that continues the previous page of the same filter reads `id > <last id>` instead of OFFSET, and a read that doesn't ask for documents no longer fetches them, so a full walk over the drawers table is linear in pages rather than quadratic** (`HEAD` — pending resolution)
+- **on the postgres backend a paged get() that continues the previous page of the same filter reads `id > <last id>` instead of OFFSET, and a read that doesn't ask for documents no longer fetches them, so a full walk over the drawers table is linear in pages rather than quadratic** ([`dba9212`](https://github.com/techempower-org/mempalace/commit/dba9212))
   OFFSET re-walks every earlier row, so `get(limit=, offset=)` loops
   were O(n^2) in pages. On familiar on 2026-10-20 (1.18M drawers, load
   49), three of them ran over the whole table: the miner's prefetch
@@ -240,7 +240,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/backends/postgres.py`, `tests/test_postgres_keyset_paging.py`
 
 
-- **on postgres, build_graph runs one aggregate at a time and never falls back to a row walk when the aggregate fails; it serves the last good graph instead, or raises GraphUnavailableError when there is none, so a statement timeout under load no longer turns every graph_stats call into an OFFSET walk over every drawer** (`HEAD` — pending resolution)
+- **on postgres, build_graph runs one aggregate at a time and never falls back to a row walk when the aggregate fails; it serves the last good graph instead, or raises GraphUnavailableError when there is none, so a statement timeout under load no longer turns every graph_stats call into an OFFSET walk over every drawer** ([`9a12d49`](https://github.com/techempower-org/mempalace/commit/9a12d49))
   On familiar on 2026-10-20 (load 49, 16.8 GB swap) graph_stats ran
   with up to 8 calls in flight, because every SessionStart hook calls
   status and every mine write empties the 60 s graph cache. Each call
@@ -268,7 +268,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **a convo mine of at most ten files reads only its own files' and wing's drawers before mining, instead of two scans of every drawer in the palace, so a one-file drain mine in the `money` wing spends 84 s in prefetch rather than two scans of 1.16M drawers** (`HEAD` — pending resolution)
+- **a convo mine of at most ten files reads only its own files' and wing's drawers before mining, instead of two scans of every drawer in the palace, so a one-file drain mine in the `money` wing spends 84 s in prefetch rather than two scans of 1.16M drawers** ([`c19726e`](https://github.com/techempower-org/mempalace/commit/c19726e))
   Before deciding what to mine, the convo miner ran two whole-palace
   scans, `prefetch_mined_set` and `prefetch_content_hashes`, paging
   through every drawer in every wing. That suits a thousand-file sweep,

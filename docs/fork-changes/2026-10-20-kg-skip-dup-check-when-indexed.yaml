@@ -2,7 +2,7 @@ seq: 179
 id: kg-skip-dup-check-when-indexed
 date: '2026-10-20'
 bucket: Fixed
-commit: HEAD
+commit: c643e0b
 area: Knowledge graph
 summary: AGE knowledge-graph setup no longer counts duplicate Drawer ids when the drawer_id_unique index is already installed, so opening the graph stops running a COUNT(DISTINCT) over every Drawer row
 body: |
@@ -16,6 +16,7 @@ body: |
   returns when it's there. A missing index is still created only when
   the table has no duplicates.
 tests: '4 new (test_knowledge_graph_age_drawer_index: an installed index skips the duplicate count and the CREATE; a missing index is created when there are no duplicates; duplicates still block it; no Drawer table does nothing). Removing the early return turns tests red'
+fork_pr: 570
 files:
 - mempalace/knowledge_graph_age.py
 - tests/test_knowledge_graph_age_drawer_index.py

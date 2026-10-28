@@ -2,7 +2,7 @@ seq: 180
 id: normalize-omit-binary-tool-output
 date: '2026-10-20'
 bucket: Fixed
-commit: HEAD
+commit: 990d331
 area: Mining
 summary: a Claude Code transcript's tool output that isn't text (a binary piped to stdout, or a minified-code line) is replaced by a marker giving its size before it is filed, so it no longer becomes drawers that recall surfaces as "essential story"
 body: |
@@ -22,6 +22,7 @@ body: |
   plan_realm_watch, the same rules flag 8 binary and 13 minified-code
   drawers, and no JSON, prose or ordinary code.
 tests: '6 new (test_normalize_non_text: UTF-16 and U+FFFD output are omitted; a minified line is omitted and its neighbours kept; JSON, CSS, prose and a stray U+FFFD are kept; verbatim mode omits too; Bash output keeps its other lines). Not calling the filter (2 failed), dropping the punctuation floor (1 failed) or switching off the binary rule (3 failed) each turns tests red'
+fork_pr: 571
 files:
 - mempalace/normalize.py
 - tests/test_normalize_non_text.py

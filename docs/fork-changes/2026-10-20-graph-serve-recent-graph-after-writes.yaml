@@ -2,7 +2,7 @@ seq: 181
 id: graph-serve-recent-graph-after-writes
 date: '2026-10-20'
 bucket: Fixed
-commit: HEAD
+commit: 7eb0dae
 area: Graph
 summary: on postgres, a graph build serves for five minutes even after a write empties the graph cache, so a palace being mined no longer re-runs the room aggregate on nearly every graph_stats call
 body: |
@@ -19,6 +19,7 @@ body: |
   60 s cache and its write invalidation are unchanged for the other
   backends.
 tests: '2 new in test_palace_graph_single_flight: five writes inside the window run the aggregate once; after the window a write rebuilds. A zero window, or never stamping the build time, each turns a test red'
+fork_pr: 572
 files:
 - mempalace/palace_graph.py
 - tests/conftest.py

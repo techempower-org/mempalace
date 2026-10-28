@@ -63,6 +63,11 @@ exclude = [
     # them adds noise without catching real drift.
     '^https://platform\.claude\.com/docs/.*/(managed-agents|dreams)',
 
+    # A dead third-party post cited in a captured research artifact
+    # (docs/research/compass_artifact_*). The capture is kept verbatim, so the
+    # link stays; it has returned 404 since at least 2026-10-28.
+    '^https://apidog\.com/blog/mirofish-swarm-intelligence-simulation-engine/',
+
     # Mailto and tel: schemes — not useful to validate.
     '^mailto:',
     '^tel:',
