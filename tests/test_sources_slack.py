@@ -341,3 +341,57 @@ def test_scopes_name_the_workspace(monkeypatch):
     drawers = _ingest(adapter)
     assert {d.metadata["slack_team_id"] for d in drawers} == {"T1"}
     assert {"slack_team_id": "T1"} in adapter.snapshot_scopes()[0]["$and"]
+
+
+def test_a_channel_listed_twice_is_refused_before_anything_is_written(monkeypatch):
+    from mempalace.sources import SourceNotFoundError
+
+    monkeypatch.setattr("mempalace.sources.slack.configured_markers", lambda: ())
+    adapter = SlackSourceAdapter(
+        call=_fake({"C1": [{"ts": str(T0), "user": "U1", "text": "hi"}]}),
+        sources=[{"channel": "events"}, {"channel": "C1", "require": "hi"}],
+        tz_name="UTC",
+    )
+    with pytest.raises(SourceNotFoundError):
+        _ingest(adapter)
+
+
+def test_withdrawal_keeps_a_public_chunk_written_earlier_in_the_run(tmp_path, monkeypatch):
+    from mempalace.cli import mine_source_adapter
+    from mempalace.palace import get_collection
+    from mempalace.sources import BaseSourceAdapter, DrawerRecord, register, unregister
+    from mempalace.sources.base import AdapterSchema, FieldSpec
+
+    monkeypatch.setenv("MEMPALACE_CONFIG_DIR", str(tmp_path / "config"))
+
+    class _Mixed(BaseSourceAdapter):
+        name = "test-mixed"
+
+        def ingest(self, *, source, palace):
+            yield DrawerRecord(
+                content="PUBLIC chunk",
+                source_file="mixed://a",
+                chunk_index=0,
+                metadata={"wing": "w", "room": "general"},
+            )
+            yield DrawerRecord(
+                content="SECRET chunk",
+                source_file="mixed://a",
+                chunk_index=1,
+                metadata={"wing": "w", "room": "general", "privacy_class": "sensitive"},
+            )
+
+        def describe_schema(self):
+            return AdapterSchema(
+                fields={"source_file": FieldSpec(type="string", required=True, description="x")},
+                version="1",
+            )
+
+    register(_Mixed.name, _Mixed)
+    try:
+        palace = str(tmp_path / "palace")
+        mine_source_adapter(source_name=_Mixed.name, source_path=str(tmp_path), palace_path=palace)
+        shared = get_collection(palace).get(include=["documents"])["documents"]
+        assert shared == ["PUBLIC chunk"]
+    finally:
+        unregister(_Mixed.name)

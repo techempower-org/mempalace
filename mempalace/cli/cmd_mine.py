@@ -418,8 +418,9 @@ def _drawer_collection_name_for(adapter) -> Optional[str]:
     return None
 
 
-def _withdraw_shared(collection, source_file: str) -> None:
-    """Delete every drawer of ``source_file`` from the (shared) ``collection``."""
+def _withdraw_shared(collection, source_file: str, keep: set) -> None:
+    """Delete ``source_file``'s drawers from the (shared) ``collection``, except those this run
+    wrote there (``keep``): a public chunk filed earlier in the run stays."""
     ids, offset = [], 0
     while True:
         page = collection.get(
@@ -427,7 +428,7 @@ def _withdraw_shared(collection, source_file: str) -> None:
         )
         if not page["ids"]:
             break
-        ids += page["ids"]
+        ids += [i for i in page["ids"] if i not in keep]
         offset += len(page["ids"])
     if ids:
         collection.delete(ids=ids)
@@ -616,7 +617,9 @@ def mine_source_adapter(
                             # Its private copy exists now; take the source's shared copies out
                             # at once rather than at the end of a run that may yet fail.
                             withdrawn.add(result.source_file)
-                            _withdraw_shared(drawer_collection, result.source_file)
+                            _withdraw_shared(
+                                drawer_collection, result.source_file, keep=written_shared
+                            )
                     else:
                         context.upsert_drawer(result)
                         (written_private if context.private_collection else written_shared).add(

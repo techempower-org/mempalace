@@ -201,6 +201,11 @@ class SlackSourceAdapter(BaseSourceAdapter):
             )
         }
         markers = configured_markers()
+        resolved = [channels.get(spec["channel"], spec["channel"]) for spec in sources]
+        if len(set(resolved)) != len(resolved):
+            # Two entries for one channel would file the same day twice, possibly with different
+            # privacy labels; refuse before anything is written.
+            raise SourceNotFoundError("slack: slack_sources lists a channel more than once")
         for spec in sources:
             channel = spec["channel"]
             channel_id = channels.get(channel, channel)
