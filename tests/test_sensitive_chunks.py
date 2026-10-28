@@ -27,11 +27,18 @@ def test_flags_mark_the_chunk_and_its_continuation_only():
         "> next question",
     ]
     assert sensitive_chunk_flags(chunks) == [False, True, True, True, False, False]
+    # The "> next question" chunk is not held: a tool call ended the block before it.
 
 
-def test_a_user_turn_ends_a_continuation():
-    chunks = ["[Read /home/jp/private/x.md]\n→ private", "> a new question from the user"]
-    assert sensitive_chunk_flags(chunks) == [True, False]
+def test_only_a_column_zero_tool_call_ends_a_continuation():
+    chunks = [
+        "[Read /home/jp/private/x.md]\n→ private start",
+        "> a line quoted inside the private file",
+        "  [Bash] an indented line inside the private file",
+        "> a new question from the user",
+        "[Bash] date\n→ Tue",
+    ]
+    assert sensitive_chunk_flags(chunks) == [True, True, True, True, False]
 
 
 def test_config_markers_extend_the_defaults_and_bad_ones_are_skipped():

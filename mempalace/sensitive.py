@@ -10,8 +10,8 @@ re-mine of a growing session classifies every chunk the same way again.
 
 A chunk is sensitive when it matches a marker, or when it continues one that
 did: a tool output longer than a chunk spills into the next ones, and only
-the first names the file it came from. A continuation ends at the next user
-turn (``>``) or the next tool call (``[Tool] …``).
+the first names the file it came from. A continuation ends only at the next
+tool call rendered at column 0 (``[Tool] …``); see ``_BLOCK_START``.
 
 Markers are regular expressions: :data:`DEFAULT_MARKERS`, plus any listed
 under ``sensitive_markers`` in the palace config. Site-specific names belong
@@ -37,9 +37,11 @@ DEFAULT_MARKERS: Tuple[str, ...] = (
     r"=== listening (?:started|stopped)",
 )
 
-# A line that opens a new block: a user turn, or a tool call as normalize renders it.
-# normalize renders a tool call as "[Bash] cmd", "[Read /path]", "[mcp__x__y] …" or "[tool] …".
-_BLOCK_START = re.compile(r"^\s*(?:>|\[(?:[A-Z][A-Za-z_]*|mcp__[\w-]+|tool)(?:\]|\s))")
+# The only line that ends a sensitive block: a tool call exactly as normalize renders it, at
+# column 0 ("[Bash] cmd", "[Read /path]", "[mcp__x__y] …", "[tool] …"). A ">" line does not end
+# one, because tool output can hold quoted lines; a real user turn after a sensitive output is
+# then held privately until the next tool call. Failing that way keeps the text private.
+_BLOCK_START = re.compile(r"^\[(?:[A-Z][A-Za-z_]*|mcp__[\w-]+|tool)(?:\]|\s)")
 
 
 @lru_cache(maxsize=8)
