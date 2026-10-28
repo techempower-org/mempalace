@@ -1,0 +1,26 @@
+seq: 187
+id: livekit-calls-private-collection
+date: '2026-10-27'
+bucket: Added
+commit: HEAD
+area: Sources
+summary: a livekit-calls source adapter files phone-call transcripts into a private drawers collection that no search, status or wake-up path opens, and any adapter of privacy class sensitive is routed there
+body: |
+  A phone call carries an outside party's words and often benefits or
+  health details. RFC 002 §6 defines a `sensitive` privacy class but
+  nothing enforced it. Core now files a `sensitive` adapter's drawers in
+  `mempalace_private_drawers`, which joins the wrapper-owned collection
+  names. Every reader opens the configured drawers collection, so none
+  sees the private one unless it is named, and configuring the drawers
+  collection as that name is refused. `PalaceContext.upsert_drawer`
+  refuses a sensitive record anywhere else. Both mine paths give a
+  sensitive adapter a knowledge graph that refuses writes, because the
+  graph is shared.
+
+  `livekit-calls` reads `~/.local/share/livekit-voice/calls/*.json` and
+  keeps only spoken user/assistant turns. It drops the model-written
+  summary, timing metrics and other roles, and keeps the task as
+  metadata. It skips records not in a final status, symlinks and
+  malformed fields, and never reads under `~/private`. The live palace
+  holds 411 drawers from 121 calls in the private collection, and 0 in
+  the drawers collection.

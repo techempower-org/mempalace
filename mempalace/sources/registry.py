@@ -40,10 +40,12 @@ _lock = Lock()
 
 def _register_builtins() -> None:
     """Install first-party adapters lazily, preserving explicit overrides."""
+    from .livekit_calls import LivekitCallsSourceAdapter
     from .media import MediaAdapter
 
     with _lock:
         _registry.setdefault(MediaAdapter.name, MediaAdapter)
+        _registry.setdefault(LivekitCallsSourceAdapter.name, LivekitCallsSourceAdapter)
 
 
 def register(name: str, adapter_cls: Type[BaseSourceAdapter]) -> None:

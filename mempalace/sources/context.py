@@ -46,6 +46,10 @@ class _KnowledgeGraphLike(Protocol):
 ProgressHook = Callable[..., None]
 
 
+class SensitiveRecordOutsidePrivateCollection(RuntimeError):
+    """A ``sensitive`` record reached a context whose collection is not the private one."""
+
+
 @dataclass
 class PalaceContext:
     """Per-mine-invocation facade passed to :meth:`BaseSourceAdapter.ingest`.
@@ -65,6 +69,9 @@ class PalaceContext:
             core so drawers can carry ``metadata["adapter_name"]``.
         adapter_version: Version of the adapter currently ingesting.
         progress_hooks: Optional callables core invokes on progress events.
+        private_collection: True only when core opened the private drawers
+            collection for this ingest. A record whose ``privacy_class`` is
+            ``sensitive`` is refused anywhere else (RFC 002 §6).
 
     Methods are intentionally thin wrappers so the concrete mine loop in
     core can swap implementations without changing adapter code.
@@ -78,6 +85,7 @@ class PalaceContext:
     adapter_name: str = ""
     adapter_version: str = ""
     progress_hooks: list[ProgressHook] = field(default_factory=list)
+    private_collection: bool = False
 
     # Internal: flag set by :meth:`skip_current_item` and checked by the core
     # mine loop between yields. Not part of the adapter-facing contract; the
@@ -100,6 +108,11 @@ class PalaceContext:
         number ``sync`` weighs a removal against.
         """
         meta = dict(record.metadata)
+        if meta.get("privacy_class") == "sensitive" and not self.private_collection:
+            raise SensitiveRecordOutsidePrivateCollection(
+                f"{record.source_file}: a sensitive record may only be filed into the private "
+                "drawers collection"
+            )
         meta.setdefault("source_file", record.source_file)
         meta.setdefault("chunk_index", record.chunk_index)
         # A drawer an adapter files names a source the same way a mined one

@@ -405,4 +405,5 @@ class TestGetCollectionNameValidation:
         assert "mempalace_drawers" in allowed
         assert "mempalace_closets" in allowed
         assert ASSETS_COLLECTION_NAME in allowed
-        assert len(allowed) == 3
+        assert "mempalace_private_drawers" in allowed
+        assert len(allowed) == 4

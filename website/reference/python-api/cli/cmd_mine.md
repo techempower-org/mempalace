@@ -12,6 +12,10 @@ Raised when an explicit ``--source`` name is absent from the registry.
 
 Raised when an adapter requires runner semantics not implemented yet.
 
+### `class SensitiveKnowledgeGraphWrite(RuntimeError)`
+
+Raised when a ``sensitive`` adapter calls a knowledge-graph mutation.
+
 ## Functions
 
 ### `cmd_mine`

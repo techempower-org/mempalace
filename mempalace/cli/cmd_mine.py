@@ -392,6 +392,32 @@ class _DryRunKnowledgeGraphProxy:
         self.operations.append(("supersede", args, kwargs))
 
 
+class _SensitiveKnowledgeGraphRefusal:
+    """KG facade for a ``sensitive`` adapter: the knowledge graph is shared and searched, so a
+    triple from private content would publish what the private collection keeps unread."""
+
+    def _refuse(self, *args, **kwargs):
+        raise SensitiveKnowledgeGraphWrite(
+            "a sensitive source adapter may not write the shared knowledge graph"
+        )
+
+    add_entity = add_triple = invalidate = supersede = _refuse
+
+
+class SensitiveKnowledgeGraphWrite(RuntimeError):
+    """Raised when a ``sensitive`` adapter calls a knowledge-graph mutation."""
+
+
+def _drawer_collection_name_for(adapter) -> Optional[str]:
+    """The collection an adapter's drawers file into: the private collection for a ``sensitive``
+    source (RFC 002's privacy classes), otherwise ``None``, meaning the configured drawers collection."""
+    from ..palace import PRIVATE_COLLECTION_NAME
+
+    if getattr(adapter, "default_privacy_class", None) == "sensitive":
+        return PRIVATE_COLLECTION_NAME
+    return None
+
+
 def mine_source_adapter(
     *,
     source_name: str,
@@ -446,13 +472,27 @@ def mine_source_adapter(
     with lock:
         knowledge_graph = None
         try:
+            collection_name = _drawer_collection_name_for(adapter)
             if dry_run:
                 drawer_collection = _DryRunCollectionProxy()
-                knowledge_graph = _DryRunKnowledgeGraphProxy()
+                # a dry run must refuse what the real run refuses
+                knowledge_graph = (
+                    _SensitiveKnowledgeGraphRefusal()
+                    if collection_name is not None
+                    else _DryRunKnowledgeGraphProxy()
+                )
             else:
-                drawer_collection = get_collection(palace_path)
-                knowledge_graph = KnowledgeGraph(
-                    db_path=os.path.join(palace_path, "knowledge_graph.sqlite3")
+                drawer_collection = (
+                    get_collection(palace_path)
+                    if collection_name is None
+                    else get_collection(palace_path, collection_name=collection_name)
+                )
+                knowledge_graph = (
+                    _SensitiveKnowledgeGraphRefusal()
+                    if collection_name is not None
+                    else KnowledgeGraph(
+                        db_path=os.path.join(palace_path, "knowledge_graph.sqlite3")
+                    )
                 )
             context = PalaceContext(
                 drawer_collection=drawer_collection,
@@ -461,6 +501,8 @@ def mine_source_adapter(
                 config=MempalaceConfig(palace_path=palace_path),
                 adapter_name=adapter.name,
                 adapter_version=adapter.adapter_version,
+                # the dry-run proxy writes nowhere, so a dry run takes the same routing
+                private_collection=collection_name is not None,
             )
             drawers_written = 0
             media_failures = 0
