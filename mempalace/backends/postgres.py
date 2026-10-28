@@ -1454,10 +1454,11 @@ class PostgresCollection(BaseCollection):
                   AND am.amname = 'btree'
                   AND idx.indisvalid
                   AND idx.indpred IS NULL
-                  -- the deparse wraps an expression key in parentheses
-                  -- ("((metadata ->> 'source_file'::text))"); compare without them
-                  AND regexp_replace(pg_get_indexdef(idx.indexrelid, 1, false), '[()[:space:]]', '', 'g')
-                      = 'metadata->>''source_file''::text'
+                  -- key 1 only; the deparse wraps an expression in parentheses
+                  -- ("((metadata ->> 'source_file'::text))"), so trim them at the
+                  -- ends alone: a key literal such as 'source_(file)' must not match
+                  AND btrim(pg_get_indexdef(idx.indexrelid, 1, false), '()')
+                      = 'metadata ->> ''source_file''::text'
                 LIMIT 1
                 """,
                 (self.table_name,),

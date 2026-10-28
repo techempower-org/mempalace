@@ -378,16 +378,21 @@ def test_new_collection_indexes_source_file_and_reports_it(tmp_path, caplog):
             )
         assert bare.has_source_file_index()
 
-        # A partial index does not serve every lookup, so it does not count.
-        with conn.cursor() as cur:
-            cur.execute(f'DROP INDEX "{index}"')
-            cur.execute(
-                f'CREATE INDEX "{index}" ON "{col.table_name}" '
-                "((metadata->>'source_file')) WHERE wing = 'w'"
-            )
-        assert not PostgresCollection(
-            POSTGRES_DSN, table_name=col.table_name
-        ).has_source_file_index()
+        # None of these serves `metadata->>'source_file' = %s`, so none counts: a partial
+        # index, the expression as a second key, and keys whose literal differs only in
+        # the characters a looser comparison would strip.
+        for shape in (
+            "((metadata->>'source_file')) WHERE wing = 'w'",
+            "(wing, (metadata->>'source_file'))",
+            "((metadata->>'source_(file)'))",
+            "((metadata->>'source_ file'))",
+        ):
+            with conn.cursor() as cur:
+                cur.execute(f'DROP INDEX IF EXISTS "{index}"')
+                cur.execute(f'CREATE INDEX "{index}" ON "{col.table_name}" {shape}')
+            assert not PostgresCollection(
+                POSTGRES_DSN, table_name=col.table_name
+            ).has_source_file_index(), shape
     finally:
         with conn.cursor() as cur:
             cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
