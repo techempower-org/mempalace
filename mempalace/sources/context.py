@@ -192,7 +192,15 @@ def _stored_matches(collection, drawer_id: str, content: str, meta: dict) -> boo
         return False
     stored_doc = (got.get("documents") or [None])[0]
     stored_meta = (got.get("metadatas") or [None])[0] or {}
-    return stored_doc == content and all(stored_meta.get(k) == v for k, v in meta.items())
+    # The whole metadata, typed: a removed key, or True where 1 was stored, is a change. A backend
+    # that adds keys of its own simply never matches, which costs a re-embed and nothing else.
+    return stored_doc == content and _canonical(stored_meta) == _canonical(meta)
+
+
+def _canonical(meta: dict) -> str:
+    import json
+
+    return json.dumps(meta, sort_keys=True, default=repr)
 
 
 def _build_drawer_id(record: DrawerRecord) -> str:

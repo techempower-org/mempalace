@@ -51,8 +51,19 @@ _PAGE = 100
 OutlineCall = Callable[[str, dict], dict]
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would carry the bearer token to wherever it points; refuse every one."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            req.full_url, code, f"refused redirect to {newurl}", headers, fp
+        )
+
+
 def _http_call(base_url: str, token: str) -> OutlineCall:
-    opener = urllib.request.build_opener()
+    if not base_url.startswith("https://"):
+        raise SourceNotFoundError("outline: outline_url must be https://")
+    opener = urllib.request.build_opener(_NoRedirect)
 
     def call(method: str, body: dict) -> dict:
         request = urllib.request.Request(
@@ -72,10 +83,20 @@ def _http_call(base_url: str, token: str) -> OutlineCall:
     return call
 
 
+def _data(response: dict, method: str):
+    """The response's ``data``; anything but a successful envelope raises, so a failed read can
+    never pass for an empty collection and publish a scope that would delete it."""
+    if not isinstance(response, dict) or response.get("ok") is False or "data" not in response:
+        raise RuntimeError(f"outline {method}: unexpected response")
+    return response["data"]
+
+
 def _paged(call: OutlineCall, method: str, body: dict) -> Iterator[dict]:
     offset = 0
     while True:
-        page = call(method, dict(body, limit=_PAGE, offset=offset)).get("data") or []
+        page = _data(call(method, dict(body, limit=_PAGE, offset=offset)), method)
+        if not isinstance(page, list):
+            raise RuntimeError(f"outline {method}: data is not a list")
         yield from page
         if len(page) < _PAGE:
             return
@@ -138,7 +159,7 @@ class OutlineSourceAdapter(BaseSourceAdapter):
     def ingest(self, *, source: SourceRef, palace: PalaceContext) -> Iterator[DrawerRecord]:
         self._scopes = []
         call = self._client()
-        auth = call("auth.info", {}).get("data") or {}
+        auth = _data(call("auth.info", {}), "auth.info") or {}
         team_id = (auth.get("team") or {}).get("id") or "team"
         base_url = ((auth.get("team") or {}).get("url") or "").rstrip("/")
         collections = list(_paged(call, "collections.list", {}))

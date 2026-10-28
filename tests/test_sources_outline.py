@@ -171,3 +171,137 @@ def test_a_metadata_only_change_is_still_written(tmp_path, monkeypatch):
         assert {m["wing"] for m in metas} == {"second"}
     finally:
         unregister(_Fake.name)
+
+
+def test_an_error_envelope_aborts_without_deleting_anything(tmp_path, monkeypatch):
+    from mempalace.cli import mine_source_adapter
+    from mempalace.palace import get_collection
+    from mempalace.sources import register, unregister
+
+    monkeypatch.setenv("MEMPALACE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr("mempalace.sources.outline.configured_markers", lambda: ())
+    state = {"collections": [{"id": "c1", "name": "P"}], "docs": {"c1": [_doc(1, "STILL here")]}}
+    broken = {"on": False}
+
+    def call(method, body):
+        if broken["on"] and method == "documents.list":
+            return {"ok": False, "error": "internal", "data": []}
+        return _fake(state)(method, body)
+
+    class _Fake(OutlineSourceAdapter):
+        name = "test-outline-error"
+
+        def __init__(self):
+            super().__init__(call=call, sources=None)
+
+    palace = str(tmp_path / "palace")
+    register(_Fake.name, _Fake)
+    try:
+        mine_source_adapter(source_name=_Fake.name, source_path=str(tmp_path), palace_path=palace)
+        broken["on"] = True
+        with pytest.raises(Exception):
+            mine_source_adapter(
+                source_name=_Fake.name, source_path=str(tmp_path), palace_path=palace
+            )
+        assert any(
+            "STILL here" in d
+            for d in get_collection(palace).get(include=["documents"])["documents"]
+        )
+    finally:
+        unregister(_Fake.name)
+
+
+def test_a_redirect_is_refused_and_the_token_goes_nowhere():
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+
+    from mempalace.sources.outline import _NoRedirect
+
+    seen = []
+
+    class Target(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+
+        do_GET = do_POST  # urllib turns a 302 on POST into a GET and keeps Authorization
+
+        def log_message(self, *a):
+            pass
+
+    target = http.server.HTTPServer(("127.0.0.1", 0), Target)
+
+    class Redirector(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{target.server_port}/steal")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    source = http.server.HTTPServer(("127.0.0.1", 0), Redirector)
+    for srv in (target, source):
+        threading.Thread(target=srv.handle_request, daemon=True).start()
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{source.server_port}/api/auth.info",
+        data=b"{}",
+        method="POST",
+        headers={"Authorization": "Bearer SECRET"},
+    )
+    with pytest.raises(urllib.error.HTTPError):
+        opener.open(req, timeout=5)
+    assert seen == []
+    target.server_close()
+    source.server_close()
+
+
+def test_the_unchanged_skip_sees_removed_keys_and_types():
+    from mempalace.sources.context import _stored_matches
+
+    class Col:
+        def __init__(self, meta):
+            self.meta = meta
+
+        def get(self, ids, include):
+            return {"ids": ids, "documents": ["x"], "metadatas": [self.meta]}
+
+    assert _stored_matches(Col({"a": 1}), "i", "x", {"a": 1})
+    assert not _stored_matches(Col({"a": 1, "gone": "restricted"}), "i", "x", {"a": 1})
+    assert not _stored_matches(Col({"flag": 1}), "i", "x", {"flag": True})
+    assert not _stored_matches(Col({"a": 1}), "i", "y", {"a": 1})
+
+
+def test_a_document_that_gains_a_marker_leaves_the_shared_collection(tmp_path, monkeypatch):
+    from mempalace.cli import mine_source_adapter
+    from mempalace.palace import PRIVATE_COLLECTION_NAME, get_collection
+    from mempalace.sources import register, unregister
+
+    monkeypatch.setenv("MEMPALACE_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setattr("mempalace.sources.outline.configured_markers", lambda: ("acme-call",))
+    state = {"collections": [{"id": "c1", "name": "P"}], "docs": {"c1": [_doc(1, "NOTES plain")]}}
+
+    class _Fake(OutlineSourceAdapter):
+        name = "test-outline-relabel"
+
+        def __init__(self):
+            super().__init__(call=_fake(state), sources=None)
+
+    palace = str(tmp_path / "palace")
+    register(_Fake.name, _Fake)
+    try:
+        mine_source_adapter(source_name=_Fake.name, source_path=str(tmp_path), palace_path=palace)
+        state["docs"]["c1"] = [_doc(1, "NOTES now from the acme-call")]
+        mine_source_adapter(source_name=_Fake.name, source_path=str(tmp_path), palace_path=palace)
+        shared = get_collection(palace).get(include=["documents"])["documents"]
+        private = get_collection(palace, collection_name=PRIVATE_COLLECTION_NAME).get(
+            include=["documents"]
+        )["documents"]
+        assert not any("NOTES" in d for d in shared)
+        assert any("acme-call" in d for d in private)
+    finally:
+        unregister(_Fake.name)

@@ -64,8 +64,17 @@ _LINK = re.compile(r"<(https?://[^|>]+)\|([^>]+)>")
 SlackCall = Callable[[str, Dict[str, str]], dict]
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would carry the bearer token to wherever it points; refuse every one."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            req.full_url, code, f"refused redirect to {newurl}", headers, fp
+        )
+
+
 def _http_call(token: str) -> SlackCall:
-    opener = urllib.request.build_opener()
+    opener = urllib.request.build_opener(_NoRedirect)
 
     def call(method: str, params: Dict[str, str]) -> dict:
         url = _API + method + ("?" + urllib.parse.urlencode(params) if params else "")
