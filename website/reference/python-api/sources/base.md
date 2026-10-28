@@ -164,3 +164,14 @@ def close(self) -> None
 ```
 
 Release any resources the adapter holds. Default: no-op.
+
+#### `snapshot_scopes`
+
+```python
+def snapshot_scopes(self) -> List[dict]
+```
+
+``where`` filters naming every drawer the last completed :meth:`ingest` re-extracted
+in full. After such an ingest core deletes, from the drawers and the private collection,
+each drawer in these scopes that the run did not write, so a shrunk, removed, filtered-out
+or re-classified item leaves nothing stale behind. Default: none (nothing is deleted).

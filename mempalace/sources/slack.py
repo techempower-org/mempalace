@@ -15,10 +15,13 @@ and only read methods are called.
 
 Each day of a channel becomes one verbatim transcript (``[HH:MM] Name: text``,
 thread replies indented under their parent), chunked like a conversation, with
-``source_file`` ``slack://<team>/<channel>/<YYYY-MM-DD>``. A chunk that matches a
+``source_file`` ``slack://<team_id>/<channel_id>/<YYYY-MM-DD>`` (stable ids, and the day in
+``slack_timezone`` from the palace config, UTC by default). A chunk that matches a
 sensitive marker (``mempalace.sensitive``) labels its whole day ``sensitive``,
-and core files that day into the private collection. Every run re-reads the full history:
-ids are deterministic, so a re-run replaces drawers rather than adding new ones.
+and core files that day into the private collection. Every run re-reads the full history and
+declares each channel a snapshot scope, so core removes whatever the run no longer
+produced: a shrunk or vanished day, a message the filter now excludes, or a day's
+copy in the collection it no longer belongs to.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Dict, Iterator, List, Optional
 
 from ..convo_miner import chunk_exchanges, detect_convo_room
@@ -106,8 +109,12 @@ def _render(text: str, names: Dict[str, str]) -> str:
     return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 
 
-def _line(message: dict, names: Dict[str, str], indent: str = "") -> str:
-    when = datetime.fromtimestamp(float(message["ts"])).strftime("%H:%M")
+def _local(ts: str, tz) -> datetime:
+    return datetime.fromtimestamp(float(ts), tz=tz)
+
+
+def _line(message: dict, names: Dict[str, str], tz, indent: str = "") -> str:
+    when = _local(message["ts"], tz).strftime("%H:%M")
     who = names.get(message.get("user", ""), message.get("username") or message.get("user") or "?")
     body = _render(message.get("text", ""), names).strip()
     return indent + f"[{when}] {who}: " + body.replace("\n", "\n" + indent + "    ")
@@ -122,9 +129,31 @@ class SlackSourceAdapter(BaseSourceAdapter):
     declared_transformations = frozenset({"slack_day_transcript", "chunk_exchanges"})
     default_privacy_class = "pii_potential"
 
-    def __init__(self, call: Optional[SlackCall] = None, sources: Optional[List[dict]] = None):
+    def __init__(
+        self,
+        call: Optional[SlackCall] = None,
+        sources: Optional[List[dict]] = None,
+        tz_name: Optional[str] = None,
+    ):
         self._call = call
         self._sources = sources
+        self._tz_name = tz_name
+        self._scopes: List[dict] = []
+
+    def snapshot_scopes(self) -> List[dict]:
+        return list(self._scopes)
+
+    def _tz(self):
+        name = self._tz_name
+        if name is None:
+            from ..config import MempalaceConfig
+
+            name = MempalaceConfig()._file_config.get("slack_timezone", "UTC")
+        if name == "UTC":
+            return timezone.utc
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(name)
 
     def _client(self) -> SlackCall:
         if self._call is not None:
@@ -149,11 +178,15 @@ class SlackSourceAdapter(BaseSourceAdapter):
         return sources
 
     def ingest(self, *, source: SourceRef, palace: PalaceContext) -> Iterator[DrawerRecord]:
+        self._scopes = []
         sources = self._configured()
         if not sources:
             raise SourceNotFoundError("slack: no slack_sources configured")
         call = self._client()
-        team = _ok(call("auth.test", {}), "auth.test").get("team", "slack")
+        tz = self._tz()
+        auth = _ok(call("auth.test", {}), "auth.test")
+        team, team_id = auth.get("team", "slack"), auth.get("team_id", "T")
+        scopes = []
         names = {
             u["id"]: (u.get("real_name") or u.get("name") or u["id"])
             for u in _paged(call, "users.list", "members", {})
@@ -179,13 +212,20 @@ class SlackSourceAdapter(BaseSourceAdapter):
                 _paged(call, "conversations.history", "messages", {"channel": channel_id}),
                 key=lambda m: float(m["ts"]),
             )
+            seen = set()
             for message in messages:
                 if message.get("subtype") in ("channel_join", "channel_leave"):
                     continue
+                # A reply also sent to the channel (thread_broadcast) is filed under its parent.
+                if message.get("thread_ts") and message.get("thread_ts") != message.get("ts"):
+                    continue
+                if message["ts"] in seen:
+                    continue
                 if require and not require.search(message.get("text") or ""):
                     continue
-                day = datetime.fromtimestamp(float(message["ts"])).strftime("%Y-%m-%d")
-                days[day].append(_line(message, names))
+                seen.add(message["ts"])
+                day = _local(message["ts"], tz).strftime("%Y-%m-%d")
+                days[day].append(_line(message, names, tz))
                 if message.get("reply_count") and not require:
                     replies = _paged(
                         call,
@@ -194,8 +234,9 @@ class SlackSourceAdapter(BaseSourceAdapter):
                         {"channel": channel_id, "ts": message["ts"]},
                     )
                     for reply in replies:
-                        if reply.get("ts") != message["ts"]:
-                            days[day].append(_line(reply, names, indent="    "))
+                        if reply.get("ts") != message["ts"] and reply["ts"] not in seen:
+                            seen.add(reply["ts"])
+                            days[day].append(_line(reply, names, tz, indent="    "))
             for day, lines in sorted(days.items()):
                 transcript = f"Slack #{label} ({team}), {day}\n" + "\n".join(lines) + "\n"
                 room = detect_convo_room(transcript)
@@ -203,17 +244,19 @@ class SlackSourceAdapter(BaseSourceAdapter):
                     c if isinstance(c, str) else c.get("content", str(c))
                     for c in chunk_exchanges(transcript)
                 ]
-                # A day is small: one marked chunk files the whole day privately (fail closed).
-                sensitive = any(is_marked(c, markers) for c in chunks)
+                # Checked on the whole day, so a marker split by chunking still counts, and one hit
+                # files the whole day privately (fail closed).
+                sensitive = is_marked(transcript, markers)
                 for i, content in enumerate(chunks):
                     yield DrawerRecord(
                         content=content,
-                        source_file=f"slack://{team}/{label}/{day}",
+                        source_file=f"slack://{team_id}/{channel_id}/{day}",
                         chunk_index=i,
                         metadata={
                             "wing": wing,
                             "room": room,
                             "slack_channel": label,
+                            "slack_channel_id": channel_id,
                             "slack_date": day,
                             "privacy_class": "sensitive"
                             if sensitive
@@ -221,6 +264,9 @@ class SlackSourceAdapter(BaseSourceAdapter):
                         },
                         route_hint=RouteHint(wing=wing, room=room),
                     )
+            scopes.append({"$and": [{"adapter_name": self.name}, {"slack_channel_id": channel_id}]})
+        # Published only once every channel was read in full, so core never deletes on a partial run.
+        self._scopes = scopes
 
     def describe_schema(self) -> AdapterSchema:
         return AdapterSchema(

@@ -19,10 +19,13 @@ and only read methods are called.
 
 Each day of a channel becomes one verbatim transcript (``[HH:MM] Name: text``,
 thread replies indented under their parent), chunked like a conversation, with
-``source_file`` ``slack://&lt;team>/&lt;channel>/&lt;YYYY-MM-DD>``. A chunk that matches a
+``source_file`` ``slack://&lt;team_id>/&lt;channel_id>/&lt;YYYY-MM-DD>`` (stable ids, and the day in
+``slack_timezone`` from the palace config, UTC by default). A chunk that matches a
 sensitive marker (``mempalace.sensitive``) labels its whole day ``sensitive``,
-and core files that day into the private collection. Every run re-reads the full history:
-ids are deterministic, so a re-run replaces drawers rather than adding new ones.
+and core files that day into the private collection. Every run re-reads the full history and
+declares each channel a snapshot scope, so core removes whatever the run no longer
+produced: a shrunk or vanished day, a message the filter now excludes, or a day's
+copy in the collection it no longer belongs to.
 
 ## Classes
 
@@ -33,7 +36,13 @@ Ingest the Slack channels configured under ``slack_sources``.
 #### `__init__`
 
 ```python
-def __init__(self, call: Optional[SlackCall] = None, sources: Optional[List[dict]] = None)
+def __init__(self, call: Optional[SlackCall] = None, sources: Optional[List[dict]] = None, tz_name: Optional[str] = None)
+```
+
+#### `snapshot_scopes`
+
+```python
+def snapshot_scopes(self) -> List[dict]
 ```
 
 #### `ingest`
