@@ -2,7 +2,7 @@ seq: 178
 id: postgres-keyset-paging
 date: '2026-10-20'
 bucket: Fixed
-commit: HEAD
+commit: dba9212
 area: Backends
 summary: on the postgres backend a paged get() that continues the previous page of the same filter reads `id > <last id>` instead of OFFSET, and a read that doesn't ask for documents no longer fetches them, so a full walk over the drawers table is linear in pages rather than quadratic
 body: |
@@ -32,6 +32,7 @@ body: |
   `delete(ids=..., where={"$or": ...})`, which bound as
   `id IN (...) AND (a) OR (b)` and deleted every row matching `b`.
 tests: '17 new or kept fake-connection tests in test_postgres_keyset_paging: a walk continues by keyset; a filtered walk keeps its filter; an unreached offset, another filter or an expired entry uses OFFSET; the memo is bounded; an empty page writes nothing; an id lookup never uses it; the document is selected only when asked for; a $or filter is parenthesised before the keyset clause. Plus a real-postgres walk (TEST_POSTGRES_DSN) that matches the full id order with and without a filter, documents included, a $or walk ends, and delete(ids=, where=$or) removes only the intersection. Never resuming, remembering the wrong next offset, always selecting the document, never expiring an entry, or dropping the parentheses each turns tests red'
+fork_pr: 569
 files:
 - mempalace/backends/postgres.py
 - tests/test_postgres_keyset_paging.py

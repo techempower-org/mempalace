@@ -2,7 +2,7 @@ seq: 184
 id: convo-source-manifest
 date: '2026-10-21'
 bucket: Fixed
-commit: HEAD
+commit: '7357095'
 area: Mining
 summary: on postgres a convo re-mine no longer re-stamps every unchanged chunk; completeness is recorded in one source-manifest row per (source_file, extract_mode), written last in the pass, so re-mining an appended live session updates its new chunks plus chunk 0 instead of every chunk
 body: |
@@ -29,6 +29,7 @@ body: |
   to them when there is no row or the read fails. Other backends keep
   the per-chunk refresh unchanged.
 tests: '9 new (test_source_manifest: with a manifest only chunk 0 is refreshed, and nothing without a content hash; without the capability every unchanged drawer is, including a MagicMock collection; manifest reads fail toward the drawer groups; only a current-schema row with an mtime counts; prefetch reads a generator of source files twice). Against real postgres: a re-mine of an appended session updates only chunk 0 and moves the manifest, which both readers see; a pass that fails mid-upsert leaves the manifest stale and the file not mined; without the capability the old refresh runs. Refreshing every unchanged chunk, never writing the manifest, readers ignoring it, or writing it before the upserts each turns tests red'
+fork_pr: 576
 files:
 - mempalace/backends/postgres.py
 - mempalace/convo_miner.py

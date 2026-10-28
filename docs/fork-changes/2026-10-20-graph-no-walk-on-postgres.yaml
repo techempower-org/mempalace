@@ -2,7 +2,7 @@ seq: 177
 id: graph-no-walk-on-postgres
 date: '2026-10-20'
 bucket: Fixed
-commit: HEAD
+commit: 9a12d49
 area: Graph
 summary: on postgres, build_graph runs one aggregate at a time and never falls back to a row walk when the aggregate fails; it serves the last good graph instead, or raises GraphUnavailableError when there is none, so a statement timeout under load no longer turns every graph_stats call into an OFFSET walk over every drawer
 body: |
@@ -23,6 +23,7 @@ body: |
   failure, callers get the same answer without retrying. An unavailable
   fast path (no psycopg2, no dsn) still walks, as before.
 tests: '6 new (test_palace_graph_single_flight: a failure with no earlier graph raises and never walks; a failure after a write serves the last good graph; a recent failure is not retried by the next caller; a retry happens after the window; 8 concurrent callers share one aggregate; an unavailable fast path still walks), and test_build_graph_falls_back_to_walk_on_postgres_failure became test_build_graph_does_not_walk_on_postgres_failure. Restoring the walk on failure (5 failed), removing the build lock (1 failed) or removing the retry window (1 failed) each turns tests red'
+fork_pr: 568
 files:
 - mempalace/palace_graph.py
 - tests/conftest.py

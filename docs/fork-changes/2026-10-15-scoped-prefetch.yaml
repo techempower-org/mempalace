@@ -2,7 +2,7 @@ seq: 176
 id: scoped-prefetch
 date: '2026-10-15'
 bucket: Fixed
-commit: HEAD
+commit: c19726e
 area: Mining
 summary: a convo mine of at most ten files reads only its own files' and wing's drawers before mining, instead of two scans of every drawer in the palace, so a one-file drain mine in the `money` wing spends 84 s in prefetch rather than two scans of 1.16M drawers
 body: |
@@ -33,6 +33,7 @@ body: |
   is ten files rather than more. Larger mines keep the single scan. The
   `prefetch` phase record now carries `scoped`.
 tests: '29 new (test_scoped_prefetch: the scoped mined set equals the full scan restricted to the files, across four scopes and three extract modes; the completeness rule holds; the scoped hash map equals the full scan for the wing, across three wings and three modes, splitting comma-joined hashes; neither scoped path issues an unfiltered or unpaged read, and repeated paths are looked up once; pages hold one page at a time; the unscoped path still scans; a small mine passes its files and wing, a mine over the threshold passes neither; a scoped re-mine skips both files and adds no drawers). Keying the file lookup by wing, never taking the scoped path, dropping the de-duplication of repeated paths, replacing the wing scope with a full read, filtering the wing lookup by the wrong field, or stopping after the first page each turns tests red'
+fork_pr: 566
 files:
 - mempalace/palace.py
 - mempalace/convo_miner.py
