@@ -121,7 +121,9 @@ def sensitive_chunk_flags(contents: Iterable[str], extra: Sequence[str] = ()) ->
             carrying = not any(_BLOCK_START.match(line) for line in after)
         else:
             lines = text.split("\n")
-            if carrying and not _BLOCK_START.match(lines[0]):
+            if carrying:
+                # A chunk boundary can fall mid-line, so a continuation's first line is never
+                # taken as a tool call: only a later line can end the block.
                 flags.append(True)
                 carrying = not any(_BLOCK_START.match(line) for line in lines[1:])
             else:

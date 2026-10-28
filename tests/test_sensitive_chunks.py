@@ -39,10 +39,16 @@ def test_only_a_column_zero_tool_call_ends_a_continuation():
         "[Read /home/jp/private/x.md]\n→ private start",
         "> a line quoted inside the private file",
         "  [Bash] an indented line inside the private file",
-        "> a new question from the user",
-        "[Bash] date\n→ Tue",
+        "> a new question from the user\n[Bash] date\n→ Tue",
+        "[Bash] uptime\n→ up",
     ]
     assert sensitive_chunk_flags(chunks) == [True, True, True, True, False]
+
+
+def test_a_continuation_chunk_starting_with_a_tool_call_shape_stays_private():
+    # The boundary may have split a line, so "[Bash]" there may be file content.
+    chunks = ["[Read ~/private/x]\n→ private text: ", "[Bash] embedded file content\nSECRET"]
+    assert sensitive_chunk_flags(chunks) == [True, True]
 
 
 def test_config_markers_extend_the_defaults():
@@ -63,7 +69,7 @@ def test_a_marker_split_across_chunks_is_found():
 
 
 def test_a_match_spanning_the_boundary_marks_both_chunks():
-    chunks = ["> q\nBEGIN\nsecret payload\nEN", "D\ncontinuation", "[Bash] date\n→ Tue"]
+    chunks = ["> q\nBEGIN\nsecret payload\nEN", "D\ncontinuation\n[Bash] date", "[Bash] ls\n→ x"]
     assert sensitive_chunk_flags(chunks, ["BEGIN\\n[\\s\\S]*END"]) == [True, True, False]
 
 
