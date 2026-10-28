@@ -202,3 +202,49 @@ def test_a_private_filing_failure_leaves_the_shared_drawers_untouched(session, m
     convo_miner.mine_convos(str(convos), palace, wing="w")
     assert not any(SECRET in d for d in _docs(palace, "mempalace_drawers"))
     assert any(SECRET in d for d in _docs(palace, "mempalace_private_drawers"))
+
+
+def test_a_hand_moved_chunk_stays_private_on_every_remine(tmp_path, monkeypatch):
+    from mempalace.palace import PRIVATE_COLLECTION_NAME, get_collection
+
+    monkeypatch.setenv("MEMPALACE_CONFIG_DIR", str(tmp_path / "config"))
+    convos = tmp_path / "convos"
+    convos.mkdir()
+    path = convos / "relay.txt"
+    relay = (
+        "> How did the call go?\nThey said the appointment moved to Thursday at noon, unmarked.\n\n"
+    )
+    path.write_text(relay + "> And the weather?\nSunny all afternoon.\n")
+    palace = str(tmp_path / "palace")
+    convo_miner.mine_convos(str(convos), palace, wing="w")
+    shared = get_collection(palace)
+    got = shared.get(include=["documents", "metadatas"])
+    moved = [
+        (i, d, m)
+        for i, d, m in zip(got["ids"], got["documents"], got["metadatas"])
+        if "Thursday" in d
+    ]
+    assert moved
+    private = get_collection(palace, collection_name=PRIVATE_COLLECTION_NAME)
+    private.upsert(
+        ids=[i for i, _d, _m in moved],
+        documents=[d for _i, d, _m in moved],
+        metadatas=[m for _i, _d, m in moved],
+    )
+    shared.delete(ids=[i for i, _d, _m in moved])
+
+    for extra in ("> Lunch?\nSandwiches.\n", "> Dinner?\nSoup.\n"):
+        path.write_text(path.read_text() + "\n" + extra)
+        os.utime(path, (os.path.getmtime(path) + 5,) * 2)
+        convo_miner.mine_convos(str(convos), palace, wing="w")
+        assert not any("Thursday" in d for d in _docs(palace, "mempalace_drawers"))
+        assert any("Thursday" in d for d in _docs(palace, "mempalace_private_drawers"))
+    assert any("Soup" in d for d in _docs(palace, "mempalace_drawers"))
+
+
+def test_a_palace_without_a_private_collection_mines_normally(session):
+    convos, path, palace = session
+    path.write_text("> Plain question?\nPlain answer with nothing private in it at all.\n")
+    convo_miner.mine_convos(str(convos), palace, wing="w")
+    assert any("Plain answer" in d for d in _docs(palace, "mempalace_drawers"))
+    assert _docs(palace, "mempalace_private_drawers") == []
