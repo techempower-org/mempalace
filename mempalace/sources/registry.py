@@ -42,12 +42,14 @@ def _register_builtins() -> None:
     """Install first-party adapters lazily, preserving explicit overrides."""
     from .livekit_calls import LivekitCallsSourceAdapter
     from .media import MediaAdapter
+    from .outline import OutlineSourceAdapter
     from .slack import SlackSourceAdapter
 
     with _lock:
         _registry.setdefault(MediaAdapter.name, MediaAdapter)
         _registry.setdefault(LivekitCallsSourceAdapter.name, LivekitCallsSourceAdapter)
         _registry.setdefault(SlackSourceAdapter.name, SlackSourceAdapter)
+        _registry.setdefault(OutlineSourceAdapter.name, OutlineSourceAdapter)
 
 
 def register(name: str, adapter_cls: Type[BaseSourceAdapter]) -> None:

@@ -141,6 +141,10 @@ class PalaceContext:
         if self.adapter_version:
             meta.setdefault("adapter_version", self.adapter_version)
         drawer_id = _build_drawer_id(record)
+        if _stored_matches(self.drawer_collection, drawer_id, record.content, meta):
+            # A full re-extract (Slack, Outline) re-yields every unchanged item; re-embedding
+            # them all each run is the whole cost of the run.
+            return
         self.drawer_collection.upsert(
             documents=[record.content],
             ids=[drawer_id],
@@ -172,6 +176,31 @@ class PalaceContext:
                 import logging
 
                 logging.getLogger(__name__).exception("progress hook failed on %r", event)
+
+
+def _stored_matches(collection, drawer_id: str, content: str, meta: dict) -> bool:
+    """True when ``collection`` already holds ``drawer_id`` with this exact content and every
+    key of ``meta`` at the same value. Any doubt (no ``get``, a read error) answers False."""
+    get = getattr(collection, "get", None)
+    if get is None:
+        return False
+    try:
+        got = get(ids=[drawer_id], include=["documents", "metadatas"])
+    except Exception:
+        return False
+    if not got or not got.get("ids"):
+        return False
+    stored_doc = (got.get("documents") or [None])[0]
+    stored_meta = (got.get("metadatas") or [None])[0] or {}
+    # The whole metadata, typed: a removed key, or True where 1 was stored, is a change. A backend
+    # that adds keys of its own simply never matches, which costs a re-embed and nothing else.
+    return stored_doc == content and _canonical(stored_meta) == _canonical(meta)
+
+
+def _canonical(meta: dict) -> str:
+    import json
+
+    return json.dumps(meta, sort_keys=True, default=repr)
 
 
 def _build_drawer_id(record: DrawerRecord) -> str:
