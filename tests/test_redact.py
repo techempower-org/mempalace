@@ -53,7 +53,8 @@ def test_text_without_secrets_is_returned_unchanged():
 
 def test_config_patterns_extend_the_defaults(_config):
     (_config / "config.json").write_text('{"secret_patterns": ["acme_[0-9]{8}"]}')
-    assert redact("key acme_12345678 end") == f"key {_placeholder('custom', 'acme_12345678')} end"
+    # No hash for a configured pattern: its value may be guessable.
+    assert redact("key acme_12345678 end") == "key [redacted custom] end"
 
 
 @pytest.mark.parametrize(
@@ -288,7 +289,7 @@ def test_configured_patterns_may_share_a_group_name(_config):
     (_config / "config.json").write_text(
         '{"secret_patterns": ["(?P<t>foo_[0-9]{6})", "(?P<t>bar_[0-9]{6})"]}'
     )
-    assert redact("foo_123456 bar_654321").count("[redacted custom sha256:") == 2
+    assert redact("foo_123456 bar_654321") == "[redacted custom] [redacted custom]"
 
 
 @pytest.mark.parametrize(

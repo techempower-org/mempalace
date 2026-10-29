@@ -13,7 +13,9 @@ metadata through :func:`redact` before the backend sees them; see
 ``BaseCollection.__init_subclass__``. A secret becomes
 ``[redacted &lt;kind> sha256:&lt;first 8 hex>]``. The short hash lets someone who
 already holds a candidate check it against the drawer (a vault item, a leak
-report); for a provider token it recovers nothing. Existing placeholders are
+report); for a provider token, a long random string, it recovers nothing. A
+match of a configured pattern, which may be a guessable value, is
+``[redacted custom]`` with no hash. Existing placeholders are
 never matched again, so a write is redacted the same way however many layers
 pass it through.
 

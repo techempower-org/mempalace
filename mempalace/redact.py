@@ -9,7 +9,9 @@ metadata through :func:`redact` before the backend sees them; see
 ``BaseCollection.__init_subclass__``. A secret becomes
 ``[redacted <kind> sha256:<first 8 hex>]``. The short hash lets someone who
 already holds a candidate check it against the drawer (a vault item, a leak
-report); for a provider token it recovers nothing. Existing placeholders are
+report); for a provider token, a long random string, it recovers nothing. A
+match of a configured pattern, which may be a guessable value, is
+``[redacted custom]`` with no hash. Existing placeholders are
 never matched again, so a write is redacted the same way however many layers
 pass it through.
 
@@ -61,7 +63,7 @@ class SecretPatternsUnavailable(RuntimeError):
 # A placeholder this module wrote. Every pass matches it first and keeps it as it is, so a later
 # pass never rewrites an earlier one's work, and redaction is idempotent even when a configured
 # pattern would match its hex.
-_PLACEHOLDER = r"\[redacted [a-z]+ sha256:[0-9a-f]{8}\]"
+_PLACEHOLDER = r"\[redacted (?:[a-z]+ sha256:[0-9a-f]{8}|custom)\]"
 
 Pass = Tuple[re.Pattern, List[str]]
 
@@ -139,6 +141,10 @@ def patterns() -> List[Pass]:
 
 
 def _placeholder(kind: str, value: str) -> str:
+    if kind == "custom":
+        # A configured pattern may catch a guessable value (a password); an unkeyed hash of it
+        # would let any reader test guesses, so it gets none.
+        return "[redacted custom]"
     return f"[redacted {kind} sha256:{hashlib.sha256(value.encode()).hexdigest()[:8]}]"
 
 
