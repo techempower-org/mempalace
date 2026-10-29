@@ -91,6 +91,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.query_sanitizer`](./query_sanitizer) — query_sanitizer.py — Mitigate system prompt contamination in search queries.
 - [`mempalace.ratings`](./ratings) — Feedback ratings for search results (#159, Tier 1).
 - [`mempalace.recency`](./recency) — Recency weighting for search results (#158).
+- [`mempalace.redact`](./redact) — Secrets never reach a drawer: every write replaces them with a placeholder first.
 - [`mempalace.repair`](./repair) — repair.py — Scan, prune corrupt entries, and rebuild HNSW index
 - [`mempalace.replica`](./replica) — replica.py — Per-palace replica identity (RFC 004 transport seam / provenance)
 - [`mempalace.result_ordering`](./result_ordering) — Curated-over-transcript ordering for near-duplicate search hits.

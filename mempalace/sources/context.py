@@ -194,7 +194,12 @@ def _stored_matches(collection, drawer_id: str, content: str, meta: dict) -> boo
     stored_meta = (got.get("metadatas") or [None])[0] or {}
     # The whole metadata, typed: a removed key, or True where 1 was stored, is a change. A backend
     # that adds keys of its own simply never matches, which costs a re-embed and nothing else.
-    return stored_doc == content and _canonical(stored_meta) == _canonical(meta)
+    # What was stored went through mempalace.redact, so compare against that.
+    from ..redact import redact, redact_metadatas
+
+    return stored_doc == redact(content) and _canonical(stored_meta) == _canonical(
+        redact_metadatas(meta)
+    )
 
 
 def _canonical(meta: dict) -> str:

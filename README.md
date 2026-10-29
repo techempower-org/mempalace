@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| every backend write replaces credential-shaped text with a placeholder before it is stored, so a token printed in a session transcript never reaches a drawer, shared or private | — | `HEAD` — pending resolution |
 | an outline source adapter files every published document of an Outline wiki verbatim, one source per document, and an adapter re-run no longer re-embeds a drawer whose content and metadata are unchanged | — | `HEAD` — pending resolution |
 | a slack source adapter files the channels listed under slack_sources as one verbatim transcript per channel per day, and core files any record labelled sensitive into the private collection whatever adapter produced it | — | `HEAD` — pending resolution |
 | a transcript chunk already in the private collection stays private on every re-mine, so a drawer moved there by hand keeps its place without a marker | — | `HEAD` — pending resolution |

@@ -332,6 +332,10 @@
         "link": "/reference/python-api/recency"
       },
       {
+        "text": "mempalace.redact",
+        "link": "/reference/python-api/redact"
+      },
+      {
         "text": "mempalace.repair",
         "link": "/reference/python-api/repair"
       },

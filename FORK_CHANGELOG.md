@@ -24,6 +24,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **every backend write replaces credential-shaped text with a placeholder before it is stored, so a token printed in a session transcript never reaches a drawer, shared or private** (`HEAD` — pending resolution)
+  `BaseCollection.__init_subclass__` wraps each backend's own `add`,
+  `upsert` and `update`, so no caller can skip it. Documents and the
+  string values of metadata pass through `mempalace.redact`, which turns
+  a match into `[redacted <kind> sha256:<first 8 hex>]`. Defaults cover
+  Anthropic, OpenAI, GitHub, Slack, AWS access key ids, Google API keys
+  and Notion tokens; `secret_patterns` in the palace config adds more
+  (kind `custom`). Patterns are shapes, never values. A config that
+  cannot be read, or a pattern that does not compile, fails the write.
+  An adapter re-run compares the stored drawer against the redacted
+  record, so an unchanged document holding a secret is still skipped.
+
+
 - **an outline source adapter files every published document of an Outline wiki verbatim, one source per document, and an adapter re-run no longer re-embeds a drawer whose content and metadata are unchanged** (`HEAD` — pending resolution)
   `mempalace mine <dir> --source outline` reads `outline_url` from the
   palace config and `MEMPALACE_OUTLINE_TOKEN` from the environment, and

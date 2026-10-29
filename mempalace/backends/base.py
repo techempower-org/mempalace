@@ -13,6 +13,8 @@ registry-ready ABC. Embedder injection, maintenance hooks, and the full
 conformance suite land in follow-up PRs.
 """
 
+import functools
+import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import ClassVar, Optional, Protocol, runtime_checkable
@@ -469,11 +471,62 @@ def initialize_last_modified_metadata(metadatas):
     return result
 
 
+def _redacting_write(fn):
+    """Wrap a collection write so its documents and metadata strings are redacted first (#600)."""
+    if getattr(fn, "__redacts_secrets__", False):
+        return fn
+
+    signature = inspect.signature(fn)
+    var_keyword = next(
+        (p.name for p in signature.parameters.values() if p.kind is p.VAR_KEYWORD), None
+    )
+    # Named parameters only: a "**documents" catch-all is not the documents argument.
+    explicit = {
+        p.name
+        for p in signature.parameters.values()
+        if p.kind not in (p.VAR_KEYWORD, p.VAR_POSITIONAL)
+    }
+
+    @functools.wraps(fn)
+    def write(self, *args, **kwargs):
+        from ..redact import redact_documents, redact_metadatas
+
+        # Bound against the real signature, so a positional document is redacted too. Both calls
+        # check the patterns even with nothing to scan: a broken config fails every write.
+        bound = signature.bind(self, *args, **kwargs)
+        bound.apply_defaults()  # a default argument is written too
+        for name, redact in (("documents", redact_documents), ("metadatas", redact_metadatas)):
+            if name in explicit:
+                bound.arguments[name] = redact(bound.arguments[name])
+            elif var_keyword and name in bound.arguments.get(var_keyword, {}):
+                # Passed through the method's **kwargs rather than a named parameter.
+                bound.arguments[var_keyword] = {
+                    **bound.arguments[var_keyword],
+                    name: redact(bound.arguments[var_keyword][name]),
+                }
+            else:
+                redact(None)
+        return fn(*bound.args, **bound.kwargs)
+
+    write.__redacts_secrets__ = True
+    return write
+
+
 class BaseCollection(ABC):
     """Per-collection read/write surface every backend must implement."""
 
     # Chroma retains omitted metadata fields on upsert; replacing backends do not.
     upsert_merges_metadata = False
+
+    def __init_subclass__(cls, **kwargs):
+        # Every backend's writes redact secrets before they run, so no caller can skip it
+        # (mempalace.redact). Resolved through the MRO, so a write a mixin or this base supplies is
+        # wrapped too. A wrapper collection redacts again; existing placeholders are left alone.
+        super().__init_subclass__(**kwargs)
+        for name in ("add", "upsert", "update"):
+            fn = getattr(cls, name, None)
+            if callable(fn) and not getattr(fn, "__isabstractmethod__", False):
+                setattr(cls, name, _redacting_write(fn))
 
     @abstractmethod
     def add(
