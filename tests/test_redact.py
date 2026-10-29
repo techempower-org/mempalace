@@ -1,4 +1,4 @@
-"""Secrets are replaced by a placeholder before any backend stores a drawer (#600)."""
+"""Secrets are replaced by a placeholder before any backend stores a drawer (#596)."""
 
 from __future__ import annotations
 

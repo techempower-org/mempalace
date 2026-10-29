@@ -472,7 +472,7 @@ def initialize_last_modified_metadata(metadatas):
 
 
 def _redacting_write(fn):
-    """Wrap a collection write so its documents and metadata strings are redacted first (#600)."""
+    """Wrap a collection write so its documents and metadata strings are redacted first (#596)."""
     if getattr(fn, "__redacts_secrets__", False):
         return fn
 

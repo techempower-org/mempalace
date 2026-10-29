@@ -7,7 +7,7 @@ Secrets never reach a drawer: every write replaces them with a placeholder first
 A session transcript can print a credential: a shell expansion, an ``env``
 dump, a config file read for debugging. Mined as is, the value lands in a
 drawer that any agent can search, and in the private collection it would
-still be a stored copy (#600). So every backend collection's ``add``,
+still be a stored copy (#596). So every backend collection's ``add``,
 ``upsert`` and ``update`` pass their documents and the string values of their
 metadata through :func:`redact` before the backend sees them; see
 ``BaseCollection.__init_subclass__``. A secret becomes
