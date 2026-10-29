@@ -4,7 +4,7 @@ date: '2026-05-25'
 bucket: Added
 commit: 59ac0bc
 area: Knowledge Graph
-summary: 'LLM-based KG triple extraction: queue table, async worker, llama.cpp on familiar'
+summary: 'LLM-based KG triple extraction: queue table, async worker, llama.cpp on the palace host'
 body: |
   Two-layer KG architecture: the existing regex extractor produces
   ``MENTIONS`` edges inline on every write; a new LLM-based pipeline

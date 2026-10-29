@@ -38,7 +38,7 @@ body: |
   elsewhere with `--palace` — that's the right "your data is at
   the daemon, not local" signpost.
 
-  Live smoke against `disks.jphe.in:8085`: `mempalace status`
+  Live smoke against `<palace-host>:8085`: `mempalace status`
   returns 160,351 drawers, `mempalace search "daemon routing"`
   returns properly-formatted hits.
 tests: |

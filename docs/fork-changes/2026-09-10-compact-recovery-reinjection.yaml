@@ -12,7 +12,7 @@ body: |
   they are not repeated; after a compaction those drawers are gone from the
   agent and still marked shown, so the dedupe suppressed exactly the
   material that had just been lost — and suppressed more of it the longer
-  the session ran (measured on katana 2026-09-10: one live session's
+  the session ran (measured on the desktop 2026-09-10: one live session's
   ``~/.mempalace/auto_query/injected/<session>.json`` held 119 ids). The
   hooks then offered a pointer, "run ``mempalace wake-up``", and fleet
   evidence from 2026-09-03 is that agents do not act on invitations; hooks
@@ -25,14 +25,14 @@ body: |
   recovery aid can never fail a session; with the daemon down the dedupe is
   still cleared and the visible line says so, and a clear that could not
   remove the file reports 0 rather than the count it wanted. Measured end
-  to end against familiar: 125 ms total, 46 ms of it the daemon, ~900
+  to end against the palace host: 125 ms total, 46 ms of it the daemon, ~900
   tokens injected. The dedupe file moved to ``auto_query.injected`` so the
   SessionStart path can clear it without importing the classifier, and
   ``runner`` gained two public seams so the recovery reuses one daemon
   transport and one hook-safe key lookup. Capped by
   ``compact_recovery.max_chars`` (``COMPACT_RECOVERY_MAX_CHARS``, default
   4000 chars ~= 1000 tokens). The daemon timeout is sized for the
-  *sleeping* host rather than the happy path: familiar is Slumber-Ward
+  *sleeping* host rather than the happy path: the palace host is Slumber-Ward
   sleepable and a sleeping host blackholes the SYN instead of refusing it,
   so ``connect()`` blocks for the whole ceiling — measured 4,074 ms, 81% of
   the hook's own 5 s timeout and 8x the 500 ms startup-injection budget,

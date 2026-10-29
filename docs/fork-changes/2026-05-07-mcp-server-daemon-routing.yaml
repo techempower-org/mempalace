@@ -48,7 +48,7 @@ tests: |
   surfacing as JSON-RPC error envelope, forwarded
   `initialize`/`tools/call`/error propagation, sentinel TOOLS
   patch proving no local handler runs in strict mode. End-to-end
-  smoke against `disks.jphe.in:8085` returns 160,351 drawers
+  smoke against `<palace-host>:8085` returns 160,351 drawers
   from the canonical palace. Suite 1577 passed.
 files:
 - mempalace/mcp_server.py

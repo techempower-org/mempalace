@@ -52,7 +52,7 @@ body: |
   queries), and the `MempalaceConfig.kg_backend` routing flag.
 tests: |
   1854 passed, 1 skipped, 106 deselected (with `TEST_POSTGRES_DSN`
-  set against the homelab mempalace-db at disks.jphe.in:5433).
+  set against the homelab mempalace-db at <db-host>:5433).
   +3 vs the post-sync 1851 baseline; zero regressions.
 files:
 - mempalace/knowledge_graph_age.py

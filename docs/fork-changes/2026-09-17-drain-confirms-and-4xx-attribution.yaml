@@ -47,7 +47,7 @@ body: |
   has carried since #44 — not 2 ("palace unavailable"), which is what it
   printed.
 
-      before  exit=1   palace daemon unreachable at http://familiar:8085 …
+      before  exit=1   palace daemon unreachable at http://<palace-host>:8085 …
       after   exit=64  daemon rejected the request (400): room 'diary' is
                        not in the canonical set (valid: architecture, …)
 
