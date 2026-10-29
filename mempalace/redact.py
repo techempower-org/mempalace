@@ -69,6 +69,9 @@ Pass = Tuple[re.Pattern, List[str]]
 
 # "\1".."\99" not itself escaped, or a numbered conditional "(?(1)…)" in any spelling an older
 # Python accepts ("(?(+1)", "(?( 1)", a non-ASCII digit; ``\d`` is Unicode here).
+# "(?i)", "(?ms)" and the like: a flag group closed with ")" rather than scoped with ":".
+_GLOBAL_INLINE_FLAG = re.compile(r"(?<!\\)(?:\\\\)*\(\?[aiLmsux]+\)")
+
 _NUMBERED_GROUP_REF = re.compile(r"(?<!\\)(?:\\\\)*\\[1-9]|\(\?\(\s*[+-]?\d")
 
 
@@ -91,6 +94,11 @@ def _compile(extra: Tuple[str, ...]) -> List[Pass]:
             re.compile(pattern)
         except re.error as exc:
             raise SecretPatternsUnavailable(f"invalid secret pattern {pattern!r}: {exc}") from exc
+        if _GLOBAL_INLINE_FLAG.search(pattern):
+            # Python 3.10 only warns about one inside a group; 3.11+ refuses it. Refuse it on all.
+            raise SecretPatternsUnavailable(
+                f"secret pattern {pattern!r} uses a global inline flag; scope it as (?i:...)"
+            )
         if _NUMBERED_GROUP_REF.search(pattern):
             # Wrapped in a group, "\2" would point at another group and quietly stop matching.
             raise SecretPatternsUnavailable(
