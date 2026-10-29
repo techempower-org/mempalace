@@ -194,7 +194,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `source_mtime`/`chunk_total` so the completeness readers would see
   one coherent group (#2183). On postgres, `metadata` is GIN-indexed,
   so each refresh was a non-HOT UPDATE that wrote all eight drawer
-  indexes, HNSW included. On familiar on 2026-10-21 the drainer re-mined
+  indexes, HNSW included. On the palace host on 2026-10-21 the drainer re-mined
   one 33,443-chunk transcript 45 times in 13 h. In three minutes
   pg_statio showed the HNSW index reading 1.18 GB and the text GINs
   about 1.2 GB, with no seq scans. That was most of the NVMe load, and
@@ -227,7 +227,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `_ensure_drawer_unique_index` committed only on the path that created
   the index. Since #570 the common path returns early because the index
   exists, so every KG setup left its connection "idle in transaction"
-  with a snapshot (`backend_xmin` set). On familiar at 23:51 on
+  with a snapshot (`backend_xmin` set). On the palace host at 23:51 on
   2026-10-20, this blocked a `CREATE INDEX CONCURRENTLY` in its
   "waiting for old snapshots" phase, and it holds back vacuum's horizon
   for as long as the connection stays idle. The "no Drawer table" return
@@ -244,7 +244,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Every SessionStart hook calls status. On postgres, status ran three
   whole-table count queries under a 3 s statement timeout, and on a
   miss it fell back to the legacy sweep of every drawer's metadata. On
-  familiar on 2026-10-20 (1.18M drawers, NVMe 89% busy during a
+  the palace host on 2026-10-20 (1.18M drawers, NVMe 89% busy during a
   20,569-chunk mine) the counts kept missing, so each status call added
   a full-table read exactly when the disk was saturated. realm.db, on
   the same NVMe, took a 16.7 s lock hold at 22:41.
@@ -260,7 +260,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
 - **on postgres, a graph build serves for five minutes even after a write empties the graph cache, so a palace being mined no longer re-runs the room aggregate on nearly every graph_stats call** ([`7eb0dae`](https://github.com/techempower-org/mempalace/commit/7eb0dae))
-  After #568, graph_stats on familiar still ran about 85 times an hour.
+  After #568, graph_stats on the palace host still ran about 85 times an hour.
   Every mine write calls invalidate_graph_cache(), so nearly every call
   re-ran the room aggregate over 1.18M drawers. Under load it hit the
   30 s statement timeout 12 times in 38 minutes, and the last good
@@ -302,9 +302,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `_ensure_drawer_unique_index` ran on every KG setup. Before checking
   whether the index existed, it counted duplicate ids with
   `COUNT(*) - COUNT(DISTINCT (properties::text)::jsonb->>'id')` over the
-  whole Drawer label table: 1.2M rows and 401 MB on familiar on
+  whole Drawer label table: 1.2M rows and 401 MB on the palace host on
   2026-10-20, where the index had long been installed. jp-92 saw that
-  statement among the active queries while familiar sat at load 48.
+  statement among the active queries while the palace host sat at load 48.
   Setup now looks up `drawer_id_unique` in `pg_indexes` first, and
   returns when it's there. A missing index is still created only when
   the table has no duplicates.
@@ -315,7 +315,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **on the postgres backend a paged get() that continues the previous page of the same filter reads `id > <last id>` instead of OFFSET, and a read that doesn't ask for documents no longer fetches them, so a full walk over the drawers table is linear in pages rather than quadratic** ([`dba9212`](https://github.com/techempower-org/mempalace/commit/dba9212))
   OFFSET re-walks every earlier row, so `get(limit=, offset=)` loops
-  were O(n^2) in pages. On familiar on 2026-10-20 (1.18M drawers, load
+  were O(n^2) in pages. On the palace host on 2026-10-20 (1.18M drawers, load
   49), three of them ran over the whole table: the miner's prefetch
   (scoped by #566), the graph fallback (removed by #568) and
   `compute_hallways_for_wing`, which pages every drawer and keeps one
@@ -345,7 +345,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
 - **on postgres, build_graph runs one aggregate at a time and never falls back to a row walk when the aggregate fails; it serves the last good graph instead, or raises GraphUnavailableError when there is none, so a statement timeout under load no longer turns every graph_stats call into an OFFSET walk over every drawer** ([`9a12d49`](https://github.com/techempower-org/mempalace/commit/9a12d49))
-  On familiar on 2026-10-20 (load 49, 16.8 GB swap) graph_stats ran
+  On the palace host on 2026-10-20 (load 49, 16.8 GB swap) graph_stats ran
   with up to 8 calls in flight, because every SessionStart hook calls
   status and every mine write empties the 60 s graph cache. Each call
   ran its own room aggregate. Under that load the aggregate hit the
@@ -523,7 +523,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **the Claude Code plugin's MCP server runs the shipped mempalace-mcp console script again, so palace search works on any host instead of only where a hand-built venv exists** ([`5558069`](https://github.com/techempower-org/mempalace/commit/5558069))
   ``.claude-plugin/.mcp.json`` had drifted from upstream to
   ``${CLAUDE_PLUGIN_ROOT}/venv/bin/python …/palace-daemon/clients/mempalace-mcp.py
-  --daemon http://familiar:8085``. That venv is never committed and never synced
+  --daemon http://<palace-host>:8085``. That venv is never committed and never synced
   between hosts, so wherever nobody had built it by hand the server failed to
   start. ``claude mcp list`` on the palace host reported ``Failed to connect``
   with ``ENOENT … posix_spawn 'stdio'``. Every Claude Code session outside the
@@ -1592,7 +1592,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   has carried since #44 — not 2 ("palace unavailable"), which is what it
   printed.
 
-      before  exit=1   palace daemon unreachable at http://familiar:8085 …
+      before  exit=1   palace daemon unreachable at http://<palace-host>:8085 …
       after   exit=64  daemon rejected the request (400): room 'diary' is
                        not in the canonical set (valid: architecture, …)
 
@@ -2646,7 +2646,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   they are not repeated; after a compaction those drawers are gone from the
   agent and still marked shown, so the dedupe suppressed exactly the
   material that had just been lost — and suppressed more of it the longer
-  the session ran (measured on katana 2026-09-10: one live session's
+  the session ran (measured on the desktop 2026-09-10: one live session's
   ``~/.mempalace/auto_query/injected/<session>.json`` held 119 ids). The
   hooks then offered a pointer, "run ``mempalace wake-up``", and fleet
   evidence from 2026-09-03 is that agents do not act on invitations; hooks
@@ -2659,14 +2659,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   recovery aid can never fail a session; with the daemon down the dedupe is
   still cleared and the visible line says so, and a clear that could not
   remove the file reports 0 rather than the count it wanted. Measured end
-  to end against familiar: 125 ms total, 46 ms of it the daemon, ~900
+  to end against the palace host: 125 ms total, 46 ms of it the daemon, ~900
   tokens injected. The dedupe file moved to ``auto_query.injected`` so the
   SessionStart path can clear it without importing the classifier, and
   ``runner`` gained two public seams so the recovery reuses one daemon
   transport and one hook-safe key lookup. Capped by
   ``compact_recovery.max_chars`` (``COMPACT_RECOVERY_MAX_CHARS``, default
   4000 chars ~= 1000 tokens). The daemon timeout is sized for the
-  *sleeping* host rather than the happy path: familiar is Slumber-Ward
+  *sleeping* host rather than the happy path: the palace host is Slumber-Ward
   sleepable and a sleeping host blackholes the SYN instead of refusing it,
   so ``connect()`` blocks for the whole ceiling — measured 4,074 ms, 81% of
   the hook's own 5 s timeout and 8x the 500 ms startup-injection budget,
@@ -3118,7 +3118,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   substitutes an empty string that the ``.get`` default passed
   through, breaking every URL join; ``or``-fallbacks fix that.
   The nightly schedule could never succeed from hosted runners —
-  ``outline.jphe.in`` resolves to a Tailscale CGNAT address — so
+  the self-hosted Outline's name resolves to a Tailscale CGNAT address — so
   the cron trigger is retired in favor of manual dispatch until
   the homelab-timer half of #368 lands.
 
@@ -3826,7 +3826,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
 - **mempalace_kg_stats returns structured backend-unavailable envelope on transient psycopg failures (#299)** ([`8fd0b01`](https://github.com/techempower-org/mempalace/commit/8fd0b01))
-  Observed in production 2026-05-28 09:59 PDT (familiar): postgres
+  Observed in production 2026-05-28 09:59 PDT (the palace host): postgres
   OOM-killed under writethrough load. The `mempalace_kg_stats` MCP
   tool propagated the raw `psycopg.OperationalError` to the
   envelope as `Tool error in mempalace_kg_stats` — an opaque
@@ -4351,7 +4351,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **LLM-based KG triple extraction: queue table, async worker, llama.cpp on familiar** ([`59ac0bc`](https://github.com/techempower-org/mempalace/commit/59ac0bc))
+- **LLM-based KG triple extraction: queue table, async worker, llama.cpp on the palace host** ([`59ac0bc`](https://github.com/techempower-org/mempalace/commit/59ac0bc))
   Two-layer KG architecture: the existing regex extractor produces
   ``MENTIONS`` edges inline on every write; a new LLM-based pipeline
   produces typed ``(Entity)-[:RELATION]->(Entity)`` triples
@@ -5264,7 +5264,7 @@ on failure, error cleared on successful reopen).
   queries), and the `MempalaceConfig.kg_backend` routing flag.
 
   *Tests:* 1854 passed, 1 skipped, 106 deselected (with `TEST_POSTGRES_DSN`
-set against the homelab mempalace-db at disks.jphe.in:5433).
+set against the homelab mempalace-db at <db-host>:5433).
 +3 vs the post-sync 1851 baseline; zero regressions.
 
   *Files:* `mempalace/knowledge_graph_age.py`, `tests/test_knowledge_graph_age.py`
@@ -5367,7 +5367,7 @@ set against the homelab mempalace-db at disks.jphe.in:5433).
     without postgres still see a green floor.
 
   Substrate stood up on the homelab: `mempalace-db` container at
-  `disks.jphe.in:5433` (LAN-bound, internal-only) running PG16 +
+  `<db-host>:5433` (LAN-bound, internal-only) running PG16 +
   pgvector 0.8.2 + AGE 1.6.0 via `apache/age:release_PG16_1.6.0` +
   apt-installed `postgresql-16-pgvector`. Password in Vaultwarden
   as `mempalace-db-postgres`. Init via `init.sql` mounted at
@@ -5618,7 +5618,7 @@ regressions in non-postgres paths.
   elsewhere with `--palace` — that's the right "your data is at
   the daemon, not local" signpost.
 
-  Live smoke against `disks.jphe.in:8085`: `mempalace status`
+  Live smoke against `<palace-host>:8085`: `mempalace status`
   returns 160,351 drawers, `mempalace search "daemon routing"`
   returns properly-formatted hits.
 
@@ -5674,7 +5674,7 @@ semantics, `_forward_to_daemon` body shape, network-failure
 surfacing as JSON-RPC error envelope, forwarded
 `initialize`/`tools/call`/error propagation, sentinel TOOLS
 patch proving no local handler runs in strict mode. End-to-end
-smoke against `disks.jphe.in:8085` returns 160,351 drawers
+smoke against `<palace-host>:8085` returns 160,351 drawers
 from the canonical palace. Suite 1577 passed.
 
   *Files:* `mempalace/mcp_server.py`, `tests/conftest.py`, `tests/test_mcp_server_daemon.py`

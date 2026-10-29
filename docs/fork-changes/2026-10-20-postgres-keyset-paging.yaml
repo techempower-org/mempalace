@@ -7,7 +7,7 @@ area: Backends
 summary: on the postgres backend a paged get() that continues the previous page of the same filter reads `id > <last id>` instead of OFFSET, and a read that doesn't ask for documents no longer fetches them, so a full walk over the drawers table is linear in pages rather than quadratic
 body: |
   OFFSET re-walks every earlier row, so `get(limit=, offset=)` loops
-  were O(n^2) in pages. On familiar on 2026-10-20 (1.18M drawers, load
+  were O(n^2) in pages. On the palace host on 2026-10-20 (1.18M drawers, load
   49), three of them ran over the whole table: the miner's prefetch
   (scoped by #566), the graph fallback (removed by #568) and
   `compute_hallways_for_wing`, which pages every drawer and keeps one

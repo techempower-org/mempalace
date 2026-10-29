@@ -6,7 +6,7 @@ commit: 8fd0b01
 area: MCP
 summary: mempalace_kg_stats returns structured backend-unavailable envelope on transient psycopg failures (#299)
 body: |
-  Observed in production 2026-05-28 09:59 PDT (familiar): postgres
+  Observed in production 2026-05-28 09:59 PDT (the palace host): postgres
   OOM-killed under writethrough load. The `mempalace_kg_stats` MCP
   tool propagated the raw `psycopg.OperationalError` to the
   envelope as `Tool error in mempalace_kg_stats` — an opaque

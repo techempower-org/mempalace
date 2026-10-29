@@ -96,7 +96,7 @@ jobs:
       - run: ruff format --check .
 
   # Postgres-backed tests run against `apache/age:release_PG16_1.6.0`, the
-  # same image production (`mempalace-db` on familiar) is built on. The AGE
+  # same image production (`mempalace-db` on the palace host) is built on. The AGE
   # image is just `postgres:16` with the AGE extension compiled in, so we
   # apt-install `postgresql-16-pgvector` into the running service container
   # at job start. That matches the substrate documented in

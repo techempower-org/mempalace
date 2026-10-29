@@ -70,7 +70,7 @@ body: |
     without postgres still see a green floor.
 
   Substrate stood up on the homelab: `mempalace-db` container at
-  `disks.jphe.in:5433` (LAN-bound, internal-only) running PG16 +
+  `<db-host>:5433` (LAN-bound, internal-only) running PG16 +
   pgvector 0.8.2 + AGE 1.6.0 via `apache/age:release_PG16_1.6.0` +
   apt-installed `postgresql-16-pgvector`. Password in Vaultwarden
   as `mempalace-db-postgres`. Init via `init.sql` mounted at

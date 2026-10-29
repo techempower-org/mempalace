@@ -8,7 +8,7 @@ summary: the Claude Code plugin's MCP server runs the shipped mempalace-mcp cons
 body: |
   ``.claude-plugin/.mcp.json`` had drifted from upstream to
   ``${CLAUDE_PLUGIN_ROOT}/venv/bin/python …/palace-daemon/clients/mempalace-mcp.py
-  --daemon http://familiar:8085``. That venv is never committed and never synced
+  --daemon http://<palace-host>:8085``. That venv is never committed and never synced
   between hosts, so wherever nobody had built it by hand the server failed to
   start. ``claude mcp list`` on the palace host reported ``Failed to connect``
   with ``ENOENT … posix_spawn 'stdio'``. Every Claude Code session outside the

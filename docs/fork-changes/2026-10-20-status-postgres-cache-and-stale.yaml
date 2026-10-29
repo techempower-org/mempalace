@@ -9,7 +9,7 @@ body: |
   Every SessionStart hook calls status. On postgres, status ran three
   whole-table count queries under a 3 s statement timeout, and on a
   miss it fell back to the legacy sweep of every drawer's metadata. On
-  familiar on 2026-10-20 (1.18M drawers, NVMe 89% busy during a
+  the palace host on 2026-10-20 (1.18M drawers, NVMe 89% busy during a
   20,569-chunk mine) the counts kept missing, so each status call added
   a full-table read exactly when the disk was saturated. realm.db, on
   the same NVMe, took a 16.7 s lock hold at 22:41.

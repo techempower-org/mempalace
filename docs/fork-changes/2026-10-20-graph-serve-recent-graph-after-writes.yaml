@@ -6,7 +6,7 @@ commit: 7eb0dae
 area: Graph
 summary: on postgres, a graph build serves for five minutes even after a write empties the graph cache, so a palace being mined no longer re-runs the room aggregate on nearly every graph_stats call
 body: |
-  After #568, graph_stats on familiar still ran about 85 times an hour.
+  After #568, graph_stats on the palace host still ran about 85 times an hour.
   Every mine write calls invalidate_graph_cache(), so nearly every call
   re-ran the room aggregate over 1.18M drawers. Under load it hit the
   30 s statement timeout 12 times in 38 minutes, and the last good

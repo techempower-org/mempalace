@@ -10,7 +10,7 @@ body: |
   `source_mtime`/`chunk_total` so the completeness readers would see
   one coherent group (#2183). On postgres, `metadata` is GIN-indexed,
   so each refresh was a non-HOT UPDATE that wrote all eight drawer
-  indexes, HNSW included. On familiar on 2026-10-21 the drainer re-mined
+  indexes, HNSW included. On the palace host on 2026-10-21 the drainer re-mined
   one 33,443-chunk transcript 45 times in 13 h. In three minutes
   pg_statio showed the HNSW index reading 1.18 GB and the text GINs
   about 1.2 GB, with no seq scans. That was most of the NVMe load, and

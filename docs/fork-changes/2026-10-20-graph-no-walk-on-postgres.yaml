@@ -6,7 +6,7 @@ commit: 9a12d49
 area: Graph
 summary: on postgres, build_graph runs one aggregate at a time and never falls back to a row walk when the aggregate fails; it serves the last good graph instead, or raises GraphUnavailableError when there is none, so a statement timeout under load no longer turns every graph_stats call into an OFFSET walk over every drawer
 body: |
-  On familiar on 2026-10-20 (load 49, 16.8 GB swap) graph_stats ran
+  On the palace host on 2026-10-20 (load 49, 16.8 GB swap) graph_stats ran
   with up to 8 calls in flight, because every SessionStart hook calls
   status and every mine write empties the 60 s graph cache. Each call
   ran its own room aggregate. Under that load the aggregate hit the

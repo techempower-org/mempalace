@@ -10,7 +10,7 @@ body: |
   substitutes an empty string that the ``.get`` default passed
   through, breaking every URL join; ``or``-fallbacks fix that.
   The nightly schedule could never succeed from hosted runners —
-  ``outline.jphe.in`` resolves to a Tailscale CGNAT address — so
+  the self-hosted Outline's name resolves to a Tailscale CGNAT address — so
   the cron trigger is retired in favor of manual dispatch until
   the homelab-timer half of #368 lands.
 files:

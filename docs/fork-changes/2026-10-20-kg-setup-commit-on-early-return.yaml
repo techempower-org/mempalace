@@ -9,7 +9,7 @@ body: |
   `_ensure_drawer_unique_index` committed only on the path that created
   the index. Since #570 the common path returns early because the index
   exists, so every KG setup left its connection "idle in transaction"
-  with a snapshot (`backend_xmin` set). On familiar at 23:51 on
+  with a snapshot (`backend_xmin` set). On the palace host at 23:51 on
   2026-10-20, this blocked a `CREATE INDEX CONCURRENTLY` in its
   "waiting for old snapshots" phase, and it holds back vacuum's horizon
   for as long as the connection stays idle. The "no Drawer table" return
