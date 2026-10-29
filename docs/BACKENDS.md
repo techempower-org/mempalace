@@ -5,7 +5,12 @@ What feeds the production palace and what it runs on, tiered by status.
 (the "Backends grow continually" rule, 2026-10-27): add one adapter per
 idle slot, then add or move its row here in the same PR.
 
-Every status below was measured on familiar on 2026-10-27, read-only
+Each adapter timer's unit retries a failed run every 10 minutes, at most six
+times in four hours: a run fails when another mine holds the palace lock,
+which is how the Slack run of 2026-10-28 08:34 was lost. Every write redacts
+credential-shaped text first (#596).
+
+Every status below was measured on the palace host on 2026-10-27, read-only
 against the live palace (1,261,277 drawers): drawer counts come from
 `metadata->>'source_file'` and model names from the running daemon's
 environment. A service's name in a drawer path is not ingest: every
@@ -37,15 +42,15 @@ Tiers:
 | Diary and hook saves | live | 67,222 (no `source_file`) | `tool_diary_write` (silent hook save) | — |
 | Codex CLI, Gemini CLI, Aider, OpenCode, Warp sessions | supported | not measured | `mempalace/sources/` adapters, `normalize.py` | a mine target on a host that runs those tools |
 | ChatGPT and claude.ai exports, Slack export JSON, Continue | supported | not measured | `normalize.py` parsers | an export file to mine |
-| livekit-voice phone calls | live (private) | 411 in `mempalace_private_drawers`, 0 in the drawers collection (121 of 139 records have a transcript) | hourly user timer `palace-calls-mine.timer` on familiar: `mempalace mine ~/.local/share/livekit-voice/calls --source livekit-calls`; privacy class `sensitive` | — (session transcripts that quote a call are now filed privately too: #588, #590, #591) |
-| Slack (The Homefront) | live (2026-10-27) | 560: #events 108 / 84 days, #yurt 420 / 263 days (wing `homefront`), the morning brief 32 / 15 days (wing `plan_realm_watch`; self-DM, the 15 briefs only); 0 private | `palace-slack-mine.timer` daily 08:30 on familiar: `mempalace mine … --source slack`; channels under `slack_sources` in the palace config; token in `~/.config/palace-slack/env` (0600, from the vault item `slack-te-user-token`) | other channels as asked; re-copy the token if it is rotated |
+| livekit-voice phone calls | live (private) | 411 in `mempalace_private_drawers`, 0 in the drawers collection (121 of 139 records have a transcript) | hourly user timer `palace-calls-mine.timer` on the palace host: `mempalace mine ~/.local/share/livekit-voice/calls --source livekit-calls`; privacy class `sensitive` | — (session transcripts that quote a call are now filed privately too: #588, #590, #591) |
+| Slack (The Homefront) | live (2026-10-27) | 560: #events 108 / 84 days, #yurt 420 / 263 days (wing `homefront`), the morning brief 32 / 15 days (wing `plan_realm_watch`; self-DM, the 15 briefs only); 0 private | `palace-slack-mine.timer` daily 08:30 on the palace host: `mempalace mine … --source slack`; channels under `slack_sources` in the palace config; token in `~/.config/palace-slack/env` (0600, from the vault item `slack-te-user-token`) | other channels as asked; re-copy the token if it is rotated |
 | Gmail | missing | 0 | none | Takeout mbox mined locally, or an API adapter |
 | Notion | missing | 0 | none | export adapter |
-| Outline (outline.jphe.in) | live (2026-10-28) | dry run: 7,471 drawers from 328 published documents in 8 collections (wing `outline_wiki`), 0 sensitive | `palace-outline-mine.timer` daily on familiar: `mempalace mine … --source outline`; `outline_url` in the palace config; token in `~/.config/palace-outline/env` (0600, from the vault item `Outline API Key (realm-portal)`) | re-copy the token if it is rotated |
+| Outline (self-hosted) | live (2026-10-28) | 7,471 drawers from 328 published documents in 8 collections (wing `outline_wiki`), 0 sensitive (first run 2026-10-28; the daily timer runs from 2026-10-29) | `palace-outline-mine.timer` daily on the palace host: `mempalace mine … --source outline`; `outline_url` in the palace config; token in `~/.config/palace-outline/env` (0600, from the vault) | re-copy the token if it is rotated |
 | Home Assistant logs | missing | 0 | none | logbook/recorder export adapter |
 | Google Voice SMS (arrives as Gmail) | candidate | 0 | — | rides on the Gmail adapter |
 | Calendar | candidate | 0 | — | ICS export adapter |
-| Browser history on katana | candidate | 0 | — | JP's call (privacy) before any work |
+| Browser history on the desktop | candidate | 0 | — | JP's call (privacy) before any work |
 | YouTube transcripts of the show | candidate | 0 | — | caption download plus a transcript normalizer |
 
 ## Model and storage backends
