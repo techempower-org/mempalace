@@ -39,6 +39,19 @@ canonical fields are ignored, so it cannot be used to overwrite or
 drop them. Returns the drawer id, or None when ``text`` is empty
 after stripping.
 
+### `size_cap_for`
+
+```python
+def size_cap_for(path) -> int
+```
+
+Largest file, in bytes, the convo miner will read from ``path``.
+
+A ``.jsonl`` is streamed by ``normalize_conversations`` (#412), so it gets
+the streaming bound instead of the whole-file cap; everything else keeps
+MAX_FILE_SIZE. palace-daemon reads this to log, rather than silently
+"mine", a transcript the miner would skip.
+
 ### `chunk_exchanges`
 
 ```python
