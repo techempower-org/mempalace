@@ -24,6 +24,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Performance
 
 
+- **a Claude Code transcript is normalized streamed, line by line, and a .jsonl is no longer skipped for being over the 500 MB whole-file cap, so long-running sessions keep reaching the palace** (`HEAD` — pending resolution)
+  `normalize_conversations` read a transcript whole and split it again,
+  about four times the file at peak, so `scan_convos` skipped anything
+  over 500 MB. On familiar, jp-eb's 601 MB lead transcript was skipped by
+  every mine from 10-31 on, while each mine exited 0. Lcstyle's
+  `_try_claude_code_jsonl_lines` (#412) streams the parser over the open
+  file, now opened through the same guards as the eager read (no symlinks,
+  a FIFO fails instead of hanging, BOM-tolerant). `convo_miner.size_cap_for`
+  gives `.jsonl` a 4 GiB runaway bound and every other format keeps
+  `MAX_FILE_SIZE`; a non-Claude `.jsonl` over 500 MB still falls through to
+  the eager read and is refused there. Measured: the 601 MB transcript
+  normalizes at 245 MB peak RSS in 9.5 s, and 13 real transcripts up to
+  183 MB produce identical output streamed and eager.
+
+
 - **the session-manifest mine streams a transcript line by line instead of reading it whole, and no longer loses user messages that carry a raw U+2028, U+2029 or U+0085** (`HEAD` — pending resolution)
   `mine_sessions` read each transcript with `f.read()` and then copied it
   again with `splitlines()`. On familiar a 601 MB live transcript was

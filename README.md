@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| a Claude Code transcript is normalized streamed, line by line, and a .jsonl is no longer skipped for being over the 500 MB whole-file cap, so long-running sessions keep reaching the palace | — | `HEAD` — pending resolution |
 | the session-manifest mine streams a transcript line by line instead of reading it whole, and no longer loses user messages that carry a raw U+2028, U+2029 or U+0085 | — | `HEAD` — pending resolution |
 | every backend write replaces credential-shaped text with a placeholder before it is stored, so a token printed in a session transcript never reaches a drawer, shared or private | — | `HEAD` — pending resolution |
 | an outline source adapter files every published document of an Outline wiki verbatim, one source per document, and an adapter re-run no longer re-embeds a drawer whose content and metadata are unchanged | — | `HEAD` — pending resolution |
