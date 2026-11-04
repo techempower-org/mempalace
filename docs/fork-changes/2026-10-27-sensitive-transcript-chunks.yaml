@@ -2,8 +2,7 @@ seq: 188
 id: sensitive-transcript-chunks
 date: '2026-10-27'
 bucket: Added
-commit: HEAD
-fork_pr: 590
+commit: 9c719af
 area: Mining
 summary: the convo miner files transcript chunks that carry a sensitive marker (a private path, a pasted call record, a live transcription) verbatim into the private collection, and moves a shared copy filed before the marker was known
 body: |
@@ -20,3 +19,4 @@ body: |
   private-filing failure stops that file's mine with the shared drawers
   untouched. A call id alone is not a marker, because reports link calls
   by id.
+fork_pr: 590
