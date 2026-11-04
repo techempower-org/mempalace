@@ -20,3 +20,4 @@
 560  CI-only change; lychee config: excludes the private familiar.realm.watch repo (404 to unauthenticated checkers) and accepts 202. Nothing a FORK_CHANGELOG reader needs.
 597  docs only: docs/BACKENDS.md status rows (Outline live, timer retry note, homelab names replaced by roles). Nothing a FORK_CHANGELOG reader needs.
 598  docs only: homelab host names in current docs and changelog prose become roles; no behaviour change. Nothing a FORK_CHANGELOG reader needs.
+601  docs only: resolves seven fork-change entries' commit: HEAD to their squash shas and re-renders. Nothing a FORK_CHANGELOG reader needs.
