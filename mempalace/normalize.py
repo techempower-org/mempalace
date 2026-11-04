@@ -127,15 +127,18 @@ def strip_noise(text: str, verbatim: bool = False) -> str:
     return text.strip()
 
 
-def _read_transcript_file(filepath: str) -> str:
-    """Read a transcript source file with the same safety checks normalize()
-    and normalize_conversations() both need: no symlinks, regular files only,
-    size-capped, BOM-tolerant.
+# A Claude Code ``.jsonl`` is streamed line by line, so the whole-file cap
+# does not apply to it; this bound only stops a runaway file. Long-lived lead
+# sessions pass 500 MB (601 MB on familiar, 2026-11-04) and were skipped whole.
+JSONL_STREAM_MAX_BYTES = 4 * 1024 * 1024 * 1024
+TRANSCRIPT_MAX_BYTES = 500 * 1024 * 1024
+
+
+def _open_transcript_file(filepath: str, max_bytes: int):
+    """Open a transcript source with the checks every reader needs: no
+    symlinks, regular files only (a FIFO fails instead of hanging), at most
+    ``max_bytes``, BOM-tolerant text. Raises IOError("Could not read ...").
     """
-    # O_NONBLOCK keeps the "not a regular file" check below reachable: a
-    # blocking open of a FIFO waits in the kernel for a writer, so the
-    # S_ISREG test never runs. See ``miner._read_text_no_follow``, including
-    # why the EAGAIN branch re-checks the type and retries without the flag.
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     if os.path.islink(filepath):
         raise IOError(f"Could not read {filepath}: symlinked files are skipped")
@@ -149,15 +152,12 @@ def _read_transcript_file(filepath: str) -> str:
             fd = os.open(filepath, flags & ~getattr(os, "O_NONBLOCK", 0))
         file_stat = os.fstat(fd)
         if not stat.S_ISREG(file_stat.st_mode):
-            # Text stays prefix-free: this raise is inside the ``try``, so the
-            # ``except OSError`` below composes "Could not read <path>: ...".
             raise IOError("not a regular file")
-        if file_stat.st_size > 500 * 1024 * 1024:  # 500 MB safety limit
-            # Prefix-free for the same reason as the branch above.
+        if file_stat.st_size > max_bytes:
             raise IOError(f"file too large ({file_stat.st_size // (1024 * 1024)} MB)")
-        with os.fdopen(fd, "r", encoding="utf-8-sig", errors="replace") as f:
-            fd = -1
-            return f.read()
+        f = os.fdopen(fd, "r", encoding="utf-8-sig", errors="replace")
+        fd = -1
+        return f
     except OSError as e:
         raise IOError(f"Could not read {filepath}: {e}") from e
     finally:
@@ -166,6 +166,15 @@ def _read_transcript_file(filepath: str) -> str:
                 os.close(fd)
             except OSError:
                 pass
+
+
+def _read_transcript_file(filepath: str) -> str:
+    """Read a transcript source file with the same safety checks normalize()
+    and normalize_conversations() both need: no symlinks, regular files only,
+    size-capped, BOM-tolerant.
+    """
+    with _open_transcript_file(filepath, TRANSCRIPT_MAX_BYTES) as f:
+        return f.read()
 
 
 def normalize(filepath: str, verbatim: bool = False) -> str:
@@ -220,15 +229,18 @@ def normalize_conversations(filepath: str, verbatim: bool = False) -> list:
     always normalize to one conversation, so this returns a one-element
     list for those — identical dedup granularity to before.
     """
-    # LOCAL PATCH (normalize_streaming): stream .jsonl before the whole-file read.
-    # _try_normalize_json_split tries claude_code_jsonl FIRST, so when this
-    # succeeds it returns exactly what the eager path would have returned --
-    # and when it returns None we fall through to that path untouched.
-    if Path(filepath).suffix.lower() == ".jsonl" and not os.path.islink(filepath):
+    # Stream a .jsonl before the whole-file read (Lcstyle, #412): peak memory
+    # follows the parsed messages, not 4x the file plus a split copy.
+    # _try_normalize_json_split tries the Claude Code parser FIRST, so a
+    # streamed result is exactly what the eager path would have returned, and
+    # None falls through to that path untouched (which keeps its 500 MB cap).
+    # The open carries the same guards as the eager read, with the larger
+    # streaming bound.
+    if Path(filepath).suffix.lower() == ".jsonl":
         try:
-            with open(filepath, "r", encoding="utf-8", errors="replace") as _fh:
+            with _open_transcript_file(filepath, JSONL_STREAM_MAX_BYTES) as _fh:
                 _streamed = _try_claude_code_jsonl_lines(_fh, verbatim=verbatim)
-        except OSError:
+        except (IOError, OSError):
             _streamed = None
         if _streamed:
             return [_streamed]
@@ -327,18 +339,17 @@ def _try_normalize_json_split(content: str, verbatim: bool = False) -> Optional[
 
 def _try_claude_code_jsonl(content: str, verbatim: bool = False) -> Optional[str]:
     """Claude Code JSONL sessions."""
-    # LOCAL PATCH (normalize_streaming): delegate to the line-iterator form so the
-    # streaming caller and the string caller run byte-identical logic.
+    # The line-iterator form, so the streaming and string callers run the
+    # same logic.
     return _try_claude_code_jsonl_lines(content.strip().split("\n"), verbatim=verbatim)
 
 
 def _try_claude_code_jsonl_lines(line_iter, verbatim: bool = False) -> Optional[str]:
     """Claude Code JSONL sessions, from any iterable of lines.
 
-    LOCAL PATCH (normalize_streaming): this is the original body of
-    _try_claude_code_jsonl, unchanged except that it consumes an iterator
-    rather than a pre-split string. Feeding it an open file avoids holding
-    the whole transcript (and a second split copy) in memory.
+    The original body of _try_claude_code_jsonl, unchanged except that it
+    consumes an iterator rather than a pre-split string. Feeding it an open
+    file avoids holding the whole transcript (and a second split copy).
     """
     lines = (line.strip() for line in line_iter if line.strip())
     messages = []

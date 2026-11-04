@@ -202,6 +202,21 @@ MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB — skip files larger than this.
 # use also scales with source size.
 
 
+def size_cap_for(path) -> int:
+    """Largest file, in bytes, the convo miner will read from ``path``.
+
+    A ``.jsonl`` is streamed by ``normalize_conversations`` (#412), so it gets
+    the streaming bound instead of the whole-file cap; everything else keeps
+    MAX_FILE_SIZE. palace-daemon reads this to log, rather than silently
+    "mine", a transcript the miner would skip.
+    """
+    from .normalize import JSONL_STREAM_MAX_BYTES
+
+    if str(path).lower().endswith(".jsonl"):
+        return JSONL_STREAM_MAX_BYTES
+    return MAX_FILE_SIZE
+
+
 def _path_within_root(path: Path, root: Path) -> bool:
     try:
         path.expanduser().resolve().relative_to(root.expanduser().resolve())
@@ -228,7 +243,7 @@ def _is_regular_source_file(filepath: Path, root: Path) -> bool:
                 raise
             fd = os.open(filepath, flags & ~getattr(os, "O_NONBLOCK", 0))
         st = os.fstat(fd)
-        return stat.S_ISREG(st.st_mode) and st.st_size <= MAX_FILE_SIZE
+        return stat.S_ISREG(st.st_mode) and st.st_size <= size_cap_for(filepath)
     except OSError:
         return False
     finally:
@@ -751,10 +766,11 @@ def scan_convos(convo_dir: str, include_subagents: bool = False) -> list:
                         )
                         continue
                     file_size = file_stat.st_size
-                    if file_size > MAX_FILE_SIZE:
+                    cap = size_cap_for(filepath)
+                    if file_size > cap:
                         print(
                             f"  SKIP: {filepath.name} ({file_size / (1024 * 1024):.1f} MB)"
-                            f" exceeds {MAX_FILE_SIZE // (1024 * 1024)} MB limit",
+                            f" exceeds {cap // (1024 * 1024)} MB limit",
                             file=sys.stderr,
                         )
                         continue
