@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| the session-manifest mine streams a transcript line by line instead of reading it whole, and no longer loses user messages that carry a raw U+2028, U+2029 or U+0085 | — | `HEAD` — pending resolution |
 | every backend write replaces credential-shaped text with a placeholder before it is stored, so a token printed in a session transcript never reaches a drawer, shared or private | — | `HEAD` — pending resolution |
 | an outline source adapter files every published document of an Outline wiki verbatim, one source per document, and an adapter re-run no longer re-embeds a drawer whose content and metadata are unchanged | — | `HEAD` — pending resolution |
 | a slack source adapter files the channels listed under slack_sources as one verbatim transcript per channel per day, and core files any record labelled sensitive into the private collection whatever adapter produced it | — | `HEAD` — pending resolution |
