@@ -2,8 +2,7 @@ seq: 189
 id: sticky-private-chunks
 date: '2026-10-27'
 bucket: Changed
-commit: HEAD
-fork_pr: 591
+commit: 791afc5
 area: Mining
 summary: a transcript chunk already in the private collection stays private on every re-mine, so a drawer moved there by hand keeps its place without a marker
 body: |
@@ -14,3 +13,4 @@ body: |
   id the private collection already holds for that source as sensitive.
   A palace with no private collection mines as before; any other failure
   reading it stops the file's mine with the shared drawers untouched.
+fork_pr: 591

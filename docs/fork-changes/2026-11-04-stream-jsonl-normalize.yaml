@@ -2,8 +2,7 @@ seq: 194
 id: stream-jsonl-normalize
 date: '2026-11-04'
 bucket: Performance
-commit: HEAD
-fork_pr: 600
+commit: 8108ade
 area: Mining
 summary: a Claude Code transcript is normalized streamed, line by line, and a .jsonl is no longer skipped for being over the 500 MB whole-file cap, so long-running sessions keep reaching the palace
 body: |
@@ -19,3 +18,4 @@ body: |
   the eager read and is refused there. Measured: the 601 MB transcript
   normalizes at 245 MB peak RSS in 9.5 s, and 13 real transcripts up to
   183 MB produce identical output streamed and eager.
+fork_pr: 600

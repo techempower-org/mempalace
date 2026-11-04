@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Performance
 
 
-- **a Claude Code transcript is normalized streamed, line by line, and a .jsonl is no longer skipped for being over the 500 MB whole-file cap, so long-running sessions keep reaching the palace** (`HEAD` — pending resolution)
+- **a Claude Code transcript is normalized streamed, line by line, and a .jsonl is no longer skipped for being over the 500 MB whole-file cap, so long-running sessions keep reaching the palace** ([`8108ade`](https://github.com/techempower-org/mempalace/commit/8108ade))
   `normalize_conversations` read a transcript whole and split it again,
   about four times the file at peak, so `scan_convos` skipped anything
   over 500 MB. On familiar, jp-eb's 601 MB lead transcript was skipped by
@@ -39,7 +39,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   183 MB produce identical output streamed and eager.
 
 
-- **the session-manifest mine streams a transcript line by line instead of reading it whole, and no longer loses user messages that carry a raw U+2028, U+2029 or U+0085** (`HEAD` — pending resolution)
+- **the session-manifest mine streams a transcript line by line instead of reading it whole, and no longer loses user messages that carry a raw U+2028, U+2029 or U+0085** ([`625faad`](https://github.com/techempower-org/mempalace/commit/625faad))
   `mine_sessions` read each transcript with `f.read()` and then copied it
   again with `splitlines()`. On familiar a 601 MB live transcript was
   re-mined that way every 30 minutes. The field scan now lives in
@@ -56,7 +56,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **every backend write replaces credential-shaped text with a placeholder before it is stored, so a token printed in a session transcript never reaches a drawer, shared or private** (`HEAD` — pending resolution)
+- **every backend write replaces credential-shaped text with a placeholder before it is stored, so a token printed in a session transcript never reaches a drawer, shared or private** ([`9e07638`](https://github.com/techempower-org/mempalace/commit/9e07638))
   `BaseCollection.__init_subclass__` wraps each backend's own `add`,
   `upsert` and `update`, so no caller can skip it. Documents and the
   string values of metadata pass through `mempalace.redact`, which turns
@@ -70,7 +70,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   record, so an unchanged document holding a secret is still skipped.
 
 
-- **an outline source adapter files every published document of an Outline wiki verbatim, one source per document, and an adapter re-run no longer re-embeds a drawer whose content and metadata are unchanged** (`HEAD` — pending resolution)
+- **an outline source adapter files every published document of an Outline wiki verbatim, one source per document, and an adapter re-run no longer re-embeds a drawer whose content and metadata are unchanged** ([`71a247a`](https://github.com/techempower-org/mempalace/commit/71a247a))
   `mempalace mine <dir> --source outline` reads `outline_url` from the
   palace config and `MEMPALACE_OUTLINE_TOKEN` from the environment, and
   calls only read methods. Every collection is read, or those listed
@@ -91,7 +91,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **a slack source adapter files the channels listed under slack_sources as one verbatim transcript per channel per day, and core files any record labelled sensitive into the private collection whatever adapter produced it** (`HEAD` — pending resolution)
+- **a slack source adapter files the channels listed under slack_sources as one verbatim transcript per channel per day, and core files any record labelled sensitive into the private collection whatever adapter produced it** ([`d568cce`](https://github.com/techempower-org/mempalace/commit/d568cce))
   `mempalace mine <dir> --source slack` reads the channels listed under
   `slack_sources` in the palace config (`channel`, `wing`, and an
   optional `require` pattern a top-level message must match, so a
@@ -107,7 +107,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   refuses writes, rather than refusing it.
 
 
-- **the convo miner files transcript chunks that carry a sensitive marker (a private path, a pasted call record, a live transcription) verbatim into the private collection, and moves a shared copy filed before the marker was known** (`HEAD` — pending resolution)
+- **the convo miner files transcript chunks that carry a sensitive marker (a private path, a pasted call record, a live transcription) verbatim into the private collection, and moves a shared copy filed before the marker was known** ([`9c719af`](https://github.com/techempower-org/mempalace/commit/9c719af))
   A session that quoted a phone call put the other party's words in the
   shared drawers collection (#588). `mempalace.sensitive` flags a chunk
   that matches a marker, and every chunk that continues its tool output up
@@ -147,7 +147,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **a transcript chunk already in the private collection stays private on every re-mine, so a drawer moved there by hand keeps its place without a marker** (`HEAD` — pending resolution)
+- **a transcript chunk already in the private collection stays private on every re-mine, so a drawer moved there by hand keeps its place without a marker** ([`791afc5`](https://github.com/techempower-org/mempalace/commit/791afc5))
   Convo drawer ids are positional, so a re-mine plans the same id for
   the same chunk. A relayed phone call carries no marker, so the
   classifier cannot see it and a re-mine filed it back into the shared

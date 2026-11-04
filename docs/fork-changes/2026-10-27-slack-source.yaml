@@ -2,7 +2,7 @@ seq: 190
 id: slack-source
 date: '2026-10-27'
 bucket: Added
-commit: HEAD
+commit: d568cce
 area: Sources
 summary: a slack source adapter files the channels listed under slack_sources as one verbatim transcript per channel per day, and core files any record labelled sensitive into the private collection whatever adapter produced it
 body: |
