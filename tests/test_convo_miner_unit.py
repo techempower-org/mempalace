@@ -1478,3 +1478,74 @@ def test_mine_convos_passes_the_directory_it_read_from(tmp_path, monkeypatch):
     convo_miner.mine_convos(str(transcripts), str(tmp_path / "palace"))
 
     assert seen.get("source_dir_ino") == si.directory_identity(transcripts)
+
+
+class TestSessionManifestFields:
+    @staticmethod
+    def _line(text, ts, cwd="/w"):
+        import json
+
+        return (
+            json.dumps(
+                {
+                    "cwd": cwd,
+                    "timestamp": ts,
+                    "message": {"role": "user", "content": [{"type": "text", "text": text}]},
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+    def test_fields_from_streamed_file(self, tmp_path):
+        from mempalace.convo_miner import _session_manifest_fields
+
+        p = tmp_path / "s.jsonl"
+        p.write_text(
+            self._line("first", "t1") + "not json\n\n" + self._line("last", "t2"),
+            encoding="utf-8",
+        )
+        with p.open("r", encoding="utf-8") as f:
+            got = _session_manifest_fields(f)
+        assert got == {
+            "first_user_msg": "first",
+            "last_user_msg": "last",
+            "first_ts": "t1",
+            "last_ts": "t2",
+            "user_count": 2,
+            "cwd": "/w",
+        }
+
+    def test_raw_unicode_line_separators_stay_one_entry(self, tmp_path):
+        # json.dumps(ensure_ascii=False) leaves U+2028/U+2029/U+0085 raw.
+        # str.splitlines() broke such a line in two and lost the message.
+        from mempalace.convo_miner import _session_manifest_fields
+
+        p = tmp_path / "s.jsonl"
+        p.write_text(
+            self._line("a b", "t1") + self._line("c\u0085d e", "t2"),
+            encoding="utf-8",
+        )
+        with p.open("r", encoding="utf-8") as f:
+            got = _session_manifest_fields(f)
+        assert got["user_count"] == 2
+        assert got["first_user_msg"] == "a b"
+        assert got["last_user_msg"] == "c\u0085d e"
+
+    def test_mine_sessions_does_not_hold_the_whole_file(self, tmp_path, capsys):
+        import tracemalloc
+
+        from mempalace.convo_miner import mine_sessions
+
+        filler = "x" * 4000
+        body = "".join(self._line(f"{i} {filler}", f"t{i}") for i in range(2500))
+        (tmp_path / "big.jsonl").write_text(body, encoding="utf-8")
+        size = len(body)  # ~10 MB
+        tracemalloc.start()
+        try:
+            mine_sessions(str(tmp_path), str(tmp_path / "palace"), wing="w", dry_run=True)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert "2500 exchanges" in capsys.readouterr().out
+        assert peak < size // 4, (peak, size)

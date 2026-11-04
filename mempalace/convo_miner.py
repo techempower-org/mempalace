@@ -1306,6 +1306,69 @@ def _refresh_unchanged_drawers(
     return True
 
 
+def _session_manifest_fields(lines) -> dict:
+    """Scan transcript lines for the session-manifest fields, one line at a time.
+
+    ``lines`` is any iterable of str, normally the open file itself, so a
+    transcript is never held whole: a 601 MB one (familiar, 2026-11-04) cost
+    ``f.read()`` plus a ``splitlines()`` copy on every 30-minute re-mine.
+    Iterating the file also splits only at real newlines; ``str.splitlines()``
+    breaks at U+2028/U+2029/U+0085 too, which JSON may carry raw inside a
+    string, and the two halves of such a line both failed ``json.loads``.
+    """
+    import json as _json
+
+    first_user_msg = ""
+    last_user_msg = ""
+    first_ts = ""
+    last_ts = ""
+    user_count = 0
+    cwd = ""
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = _json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("cwd") and not cwd:
+            cwd = str(entry["cwd"])
+        ts = entry.get("timestamp") or ""
+        msg = entry.get("message", {})
+        if isinstance(msg, dict) and msg.get("role") == "user":
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                # Newer Claude transcripts use content blocks; concat the text blocks.
+                text = " ".join(
+                    b.get("text", "")
+                    for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                )
+            else:
+                text = str(content)
+            text = text.strip()
+            if not text or "<command-message>" in text:
+                continue
+            user_count += 1
+            if not first_user_msg:
+                first_user_msg = text[:400]
+                first_ts = ts
+            last_user_msg = text[:400]
+            last_ts = ts
+
+    return {
+        "first_user_msg": first_user_msg,
+        "last_user_msg": last_user_msg,
+        "first_ts": first_ts,
+        "last_ts": last_ts,
+        "user_count": user_count,
+        "cwd": cwd,
+    }
+
+
 def mine_sessions(
     convo_dir: str,
     palace_path: str,
@@ -1346,7 +1409,6 @@ def mine_sessions(
     rules. Room is hard-coded ``sessions`` (canonical).
     """
     import hashlib
-    import json as _json
 
     from .config import normalize_wing_name
 
@@ -1380,53 +1442,17 @@ def mine_sessions(
     for filepath in files:
         try:
             with filepath.open("r", encoding="utf-8", errors="replace") as f:
-                raw = f.read()
+                # Parse JSONL transcript (Claude Code shape), streamed.
+                fields = _session_manifest_fields(f)
         except OSError:
             skipped += 1
             continue
-
-        # Parse JSONL transcript (Claude Code shape). Tolerate non-JSONL
-        # files by falling through to "single-blob" manifest.
-        first_user_msg = ""
-        last_user_msg = ""
-        first_ts = ""
-        last_ts = ""
-        user_count = 0
-        cwd = ""
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = _json.loads(line)
-            except Exception:
-                continue
-            if not isinstance(entry, dict):
-                continue
-            if entry.get("cwd") and not cwd:
-                cwd = str(entry["cwd"])
-            ts = entry.get("timestamp") or ""
-            msg = entry.get("message", {})
-            if isinstance(msg, dict) and msg.get("role") == "user":
-                content = msg.get("content", "")
-                if isinstance(content, list):
-                    # Newer Claude transcripts use content blocks; concat the text blocks.
-                    text = " ".join(
-                        b.get("text", "")
-                        for b in content
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    )
-                else:
-                    text = str(content)
-                text = text.strip()
-                if not text or "<command-message>" in text:
-                    continue
-                user_count += 1
-                if not first_user_msg:
-                    first_user_msg = text[:400]
-                    first_ts = ts
-                last_user_msg = text[:400]
-                last_ts = ts
+        first_user_msg = fields["first_user_msg"]
+        last_user_msg = fields["last_user_msg"]
+        first_ts = fields["first_ts"]
+        last_ts = fields["last_ts"]
+        user_count = fields["user_count"]
+        cwd = fields["cwd"]
 
         if user_count == 0:
             skipped += 1

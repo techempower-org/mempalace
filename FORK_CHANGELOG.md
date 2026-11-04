@@ -18,6 +18,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-11-04]
+
+
+### Performance
+
+
+- **the session-manifest mine streams a transcript line by line instead of reading it whole, and no longer loses user messages that carry a raw U+2028, U+2029 or U+0085** (`HEAD` — pending resolution)
+  `mine_sessions` read each transcript with `f.read()` and then copied it
+  again with `splitlines()`. On familiar a 601 MB live transcript was
+  re-mined that way every 30 minutes. The field scan now lives in
+  `_session_manifest_fields`, which iterates the open file, so peak memory
+  is one line rather than about twice the file. Iterating the file also
+  splits only at real newlines: `str.splitlines()` broke at U+2028/U+2029/
+  U+0085, which `json.dumps(ensure_ascii=False)` leaves raw inside a string,
+  and both halves of such a line failed to parse, dropping that message.
+
+
 ## [2026-10-28]
 
 
