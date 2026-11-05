@@ -21,3 +21,4 @@
 597  docs only: docs/BACKENDS.md status rows (Outline live, timer retry note, homelab names replaced by roles). Nothing a FORK_CHANGELOG reader needs.
 598  docs only: homelab host names in current docs and changelog prose become roles; no behaviour change. Nothing a FORK_CHANGELOG reader needs.
 601  docs only: resolves seven fork-change entries' commit: HEAD to their squash shas and re-renders. Nothing a FORK_CHANGELOG reader needs.
+602  docs only: decision spec for a fleet dreaming job (docs/superpowers/specs/2026-11-05-dreaming-decision.md); no behaviour change. Nothing a FORK_CHANGELOG reader needs.
