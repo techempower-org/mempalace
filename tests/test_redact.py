@@ -543,3 +543,21 @@ def test_a_google_oauth_client_secret_is_redacted_and_a_bare_prefix_is_not():
     )
     text = 'search for "GOCSPX-" with grep -F'
     assert redact(text) is text
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "xo" + "xb-1234-5678-" + "abcd" * 6,
+        "xa" + "pp-1-A0B1C2D3E4-5678-" + "ab12" * 16,
+        "xo" + "xe-1-" + "Zz09" * 10,
+        "xo" + "xe.xoxp-1-" + "Qq77" * 10,
+    ],
+)
+def test_every_slack_token_class_is_redacted(value):
+    assert redact(f"token {value} end") == f"token {_placeholder('slack', value)} end"
+
+
+def test_slack_placeholders_in_docs_are_left_alone():
+    text = "paste the xoxb-your-token or the xapp-... from the app page"
+    assert redact(text) is text

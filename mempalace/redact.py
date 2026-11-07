@@ -54,7 +54,8 @@ DEFAULT_PATTERNS: Dict[str, str] = {
     "anthropic": r"sk-ant-[A-Za-z0-9_-]{30,}",
     "openai": r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{40,}",
     "github": r"(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,}",
-    "slack": r"xox[abposr]-[0-9]+-[A-Za-z0-9-]{20,}",
+    # Bot, user, app-level, refresh and rotated tokens: xoxb-, xoxp-, xapp-, xoxe-, xoxe.xoxp-.
+    "slack": r"(?:xox[abposre](?:\.xox[abposre])?|xapp)-[0-9]+-[A-Za-z0-9-]{20,}",
     "aws": r"(?:AKIA|ASIA)[0-9A-Z]{16}",
     # An API key, and an OAuth client secret (2026-11-07: one read off the GCP console was mined).
     "google": r"AIza[0-9A-Za-z_-]{35}|GOCSPX-[0-9A-Za-z_-]{28}(?![0-9A-Za-z_-])",
