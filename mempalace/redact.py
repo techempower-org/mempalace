@@ -23,8 +23,15 @@ scan: a config that cannot be read, or a pattern that does not compile,
 raises :class:`SecretPatternsUnavailable` and the write fails rather than
 store text unscanned.
 
-Known limits. Shapes catch tokens with a recognisable prefix; a bare
-password or a provider without one passes through. Embeddings passed in by
+Known limits. Shapes catch tokens with a recognisable prefix. A bare
+password or a provider token without one is caught only beside a secret-ish
+name (``NEXTAUTH_SECRET=…``, ``"password": "…"``) or as a URL's password
+(``postgres://user:…@``), by :func:`_redact_assignments`, which keeps the
+name and writes ``[redacted assignment]``; one printed alone passes through.
+A quoted value, or one after a tight ``=``, is replaced whatever it looks
+like; a bare value after ``: `` or `` = `` (YAML, prose, code) only when it is
+8+ characters of two or more kinds, so ``password: hunter2`` stays readable.
+A quote that never closes leaves only its first word redacted. Embeddings passed in by
 the caller were computed from the text before redaction. Configured patterns
 are trusted like the rest of the config: one with nested quantifiers can
 backtrack badly on long text, so keep them to a prefix and a character class.
@@ -47,9 +54,11 @@ DEFAULT_PATTERNS: Dict[str, str] = {
     "anthropic": r"sk-ant-[A-Za-z0-9_-]{30,}",
     "openai": r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{40,}",
     "github": r"(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,}",
-    "slack": r"xox[abposr]-[0-9]+-[A-Za-z0-9-]{20,}",
+    # Bot, user, app-level, refresh and rotated tokens: xoxb-, xoxp-, xapp-, xoxe-, xoxe.xoxp-.
+    "slack": r"(?:xox[abposre](?:\.xox[abposre])?|xapp)-[0-9]+-[A-Za-z0-9-]{20,}",
     "aws": r"(?:AKIA|ASIA)[0-9A-Z]{16}",
-    "google": r"AIza[0-9A-Za-z_-]{35}",
+    # An API key, and an OAuth client secret (2026-11-07: one read off the GCP console was mined).
+    "google": r"AIza[0-9A-Za-z_-]{35}|GOCSPX-[0-9A-Za-z_-]{28}(?![0-9A-Za-z_-])",
     # No word boundary: a raw JSONL line holds a literal "\n" escape right before the token.
     "notion": r"ntn_[A-Za-z0-9]{40,}|secret_[A-Za-z0-9]{43}(?![A-Za-z0-9])",
 }
@@ -63,7 +72,7 @@ class SecretPatternsUnavailable(RuntimeError):
 # A placeholder this module wrote. Every pass matches it first and keeps it as it is, so a later
 # pass never rewrites an earlier one's work, and redaction is idempotent even when a configured
 # pattern would match its hex.
-_PLACEHOLDER = r"\[redacted (?:[a-z]+ sha256:[0-9a-f]{8}|custom)\]"
+_PLACEHOLDER = r"\[redacted (?:[a-z]+ sha256:[0-9a-f]{8}|custom|assignment)\]"
 
 Pass = Tuple[re.Pattern, List[str]]
 
@@ -171,7 +180,256 @@ def redact(text: str) -> str:
             return _placeholder(kind, m.group(0))
 
         clean = combined.sub(replace, clean)
+    clean = _redact_assignments(clean)
     return text if clean == text else clean
+
+
+# --- Values named as secrets -------------------------------------------------------------------
+# A bare password or a random key has no shape to match, but it is usually printed beside its
+# name: an ``env`` dump, a ``.env`` file, a JS or JSON config, a connection URL (2026-11-07: a
+# session printed an attacker's dump of a calcom env, a database URL password and NEXTAUTH_SECRET,
+# and no shape above matched either). This pass keeps the name and replaces only the value with
+# ``[redacted assignment]``, with no hash because a password may be guessable.
+
+# The key's last word names a secret: PASSWORD, NEXTAUTH_SECRET, apiKey, client_secret, DB_PASS,
+# GOOGLE_API_CREDENTIALS, CALENDSO_ENCRYPTION_KEY. The word starts the key, follows "_", "." or
+# "-", or starts a camelCase hump (case-sensitive), and ends it; so "bypass", "max_tokens" and
+# "SECRET_FILE" are not secret names.
+_SECRET_NAME = re.compile(
+    r"(?:^|(?<=[_.\-])|(?<=[a-z0-9])(?=[A-Z]))"
+    r"(?i:pass(?:word|wd|phrase)?|pwd|secret|token|credentials?|"
+    r"(?:api|access|private|secret|encryption|signing|auth|master|client)[_\-]?key)$"
+)
+
+# A key and its "=" or ":": KEY=, KEY: , "key": , key=', a JSON-escaped \"key\": in a raw JSONL
+# line, --password=. Only the key is matched here, never its value, so a key that names no secret
+# cannot swallow one that follows it ("user: password=...").
+_KEY = re.compile(
+    r"(?<![A-Za-z0-9_.])(?P<name>[A-Za-z_][A-Za-z0-9_.\-]{0,80})(?:\\?[\"'])?(?P<sep>[ \t]*[=:][ \t]*)"
+)
+# Bare after a tight "=" (KEY=value: env files, CLI flags, kwargs): everything to whitespace.
+# A quote mid-value is part of it ("ab''cd", "ab'\\xcd"); one followed by whitespace, , ; ) } ],
+# the end or a raw JSONL escape closes an enclosing string. A backslash is part of it too, except
+# one starting a raw JSONL escape (\n, \r, \t, \"), which ends the line or the string; \\ is a
+# literal backslash.
+_BARE_TIGHT = re.compile(r"(?:[^\s\"'\\]|\\\\|\\(?![nrt\"\\])|[\"'](?![\s,;)}\]]|$|\\[nrt\"]))+")
+# Bare after ": " or " = " (YAML, prose, code): stops at punctuation that ends an expression.
+_BARE_LOOSE = re.compile(r"(?P<v>[^\s\"'\\,;)}\]\[<>(]+)(?P<after>[(\[]?)")
+# YAML block scalar: "password: |" then lines indented deeper than the key.
+_BLOCK = re.compile(r"[|>][-+]?[ \t]*(?=\n|$)")
+
+# The start of scheme://user: , where the password follows. The scheme is bounded and may not start
+# mid-word; the user may hold "@" and "'" (smtp://jp@example.org:…). The password itself runs to the
+# LAST "@" in its whitespace-delimited run, so one holding "@" or "/" is replaced whole. A path or
+# query holding "@" is replaced with it: over-redaction, never a leak (see _redact_url_passwords).
+# A backslash is part of the user and the run, as in _BARE_TIGHT ("pa\ss", "DOMAIN\user", "\\" in a
+# raw JSONL line), unless it starts a raw JSONL escape. The two backslash forms are disjoint, so a
+# long run of them cannot backtrack exponentially.
+_URL_BACKSLASH = r"\\\\|\\(?![nrt\"\\])"
+_URL_HEAD = re.compile(
+    r"(?<![a-z0-9+.\-])[a-z][a-z0-9+.\-]{0,30}://(?:[^\s:/\"\\]|" + _URL_BACKSLASH + r")+:", re.I
+)
+_URL_RUN = re.compile(r"(?:[^\s\"\\]|" + _URL_BACKSLASH + r")*")
+# A URL password kept as written: a reference or a placeholder, never a word.
+_URL_REFERENCE = re.compile(
+    r"\$\{[^{}\n]{1,200}\}|\$[A-Z_][A-Z0-9_]{0,80}|\{\{[^{}\n]{1,200}\}\}|"
+    + _PLACEHOLDER
+    + r"|\[(?:REDACTED|redacted)\]"
+)
+
+# A whole value that is a reference or a mask, not a secret: $VAR (upper case: "$ecr3t" is a
+# value), ${VAR}, $(cmd), %(name)s, {{ x }}, <your key>, a placeholder this module wrote or a bare
+# [REDACTED], ***, xxxx, ..., and a few words. Every part is bounded, so checking stays linear.
+_NOT_A_VALUE = re.compile(
+    r"(?:\$[A-Z_][A-Z0-9_]{0,80}|\$\{[^{}\n]{1,200}\}|\$\([^()\n]{1,200}\)"
+    r"|%\([A-Za-z_][A-Za-z0-9_]{0,80}\)s|\{\{[^{}\n]{1,200}\}\}|<[^<>\n]{1,100}>"
+    r"|" + _PLACEHOLDER + r"|\[(?:REDACTED|redacted)\]|\[REDACTED-[A-Z0-9\-]{1,40}\]\**"
+    r"|\*{1,64}|[xX]{3,64}|\.{3,8}|\u2026"
+    r"|(?i:changeme|example|redacted|none|null|nil|true|false|undefined|placeholder|dummy"
+    r"|your[_\-](?:api[_\-]?key|key|token|secret|password)))"
+)
+# The same, at the start of a tight bare value, for a reference that holds spaces
+# ("$(bw get password db)", "<your key>", "{{ vault_db }}", "[redacted github sha256:…]"). It is
+# kept only when the value ends right after it; "${VAR}secret" is redacted, reference and all.
+_LEADING_REFERENCE = re.compile(
+    r"\$\{[^{}\n]{1,200}\}|\$\([^()\n]{1,200}\)|\{\{[^{}\n]{1,200}\}\}|<[^<>\n]{1,100}>"
+    r"|" + _PLACEHOLDER + r"|\[(?:REDACTED|redacted)\]"
+)
+_DOTTED_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$")
+
+ASSIGNMENT_PLACEHOLDER = "[redacted assignment]"
+
+
+def _placeholder_value(value: str) -> bool:
+    return _NOT_A_VALUE.fullmatch(value) is not None
+
+
+def _mixed(value: str) -> bool:
+    """For a bare value after ": " or " = ", where prose and code live: at least 8 characters of
+    at least two kinds (lower, upper, digit, symbol), so "rotated", "compromised",
+    "authenticationrequired" and "default_credentials_provider" stay readable."""
+    kinds = (
+        any(c.islower() for c in value),
+        any(c.isupper() for c in value),
+        any(c.isdigit() for c in value),
+        any(not c.isalnum() and c not in "_.-" for c in value),
+    )
+    return len(value) >= 8 and sum(kinds) >= 2
+
+
+def _plain_quote_end(text: str, i: int, quote: str):
+    """Index of the quote closing a value that starts at ``i``, honouring backslash escapes and
+    spanning lines; None when the text ends first."""
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            i += 2
+        elif c == quote:
+            return i
+        else:
+            i += 1
+    return None
+
+
+def _escaped_quote_end(text: str, i: int):
+    """For a value inside a JSON string that is itself inside a JSON string (a raw JSONL line:
+    {\"password\":\"…\"}), the index of the \" closing it. Each raw escape is decoded first, then
+    the inner string's own escapes are honoured, so \\\" inside the value does not close it."""
+    n, inner_escaped = len(text), False
+    while i < n:
+        c = text[i]
+        if c == '"':
+            return None  # the outer string ended: not the shape we thought
+        if c != "\\":
+            inner_escaped, i = False, i + 1
+            continue
+        if i + 1 >= n:
+            return None
+        u = text[i + 1]
+        if inner_escaped:
+            inner_escaped = False
+        elif u == "\\":
+            inner_escaped = True
+        elif u == '"':
+            return i
+        i += 2
+    return None
+
+
+def _block_span(text: str, key_start: int, at: int):
+    """The lines of a YAML block scalar after "key: |": those indented deeper than the key."""
+    line_start = text.rfind("\n", 0, key_start) + 1
+    indent = len(text[line_start:key_start]) - len(text[line_start:key_start].lstrip(" "))
+    end = text.find("\n", at)
+    if end == -1:
+        return None
+    first = pos = end + 1
+    last = None
+    while pos < len(text):
+        nl = text.find("\n", pos)
+        line = text[pos : nl if nl != -1 else len(text)]
+        if line.strip() and len(line) - len(line.lstrip(" ")) <= indent:
+            break
+        if line.strip():
+            last = pos + len(line)
+        if nl == -1:
+            break
+        pos = nl + 1
+    return (first, last) if last else None
+
+
+def _quoted(text: str, at: int):
+    """(start, end) of a quoted value at ``at``; None when no quote opens there; False when one
+    opens and never closes. A failed search is not repeated for a later key: that key's own
+    opening quote would have closed it, so at most one search per quote kind runs to the end."""
+    if text.startswith('\\"', at):
+        start = at + 2
+        end = _escaped_quote_end(text, start)
+    elif at < len(text) and text[at] in "\"'":
+        start = at + 1
+        end = _plain_quote_end(text, start, text[at])
+    else:
+        return None
+    if end is None:
+        return False
+    return (start, end) if end > start else None
+
+
+def _value_span(text: str, key: re.Match):
+    """Where the secret value after a secret-named key sits, or None to leave it."""
+    at = key.end()
+    q = _quoted(text, at)
+    if q:
+        return None if _placeholder_value(text[q[0] : q[1]]) else q
+    if q is False:
+        at += 2 if text.startswith('\\"', at) else 1  # an unclosed quote: the rest is bare
+    if key.group("sep") == "=" or q is False:
+        lead = _LEADING_REFERENCE.match(text, at)
+        if lead:
+            if not _BARE_TIGHT.match(text, lead.end()):
+                return None  # the value ends with the reference: same terminators as below
+            rest = _BARE_TIGHT.match(text, lead.end())
+            return (at, rest.end() if rest else lead.end())
+        v = _BARE_TIGHT.match(text, at)
+        if v is None or _placeholder_value(v.group(0)):
+            return None
+        return v.span()
+    if ":" in key.group("sep") and _BLOCK.match(text, at):
+        return _block_span(text, key.start(), at)
+    v = _BARE_LOOSE.match(text, at)
+    if v is None:
+        return None
+    value = v.group("v")
+    # "password = getpass()", "token = os.environ[...]", "secret = self.secret": code, not a value.
+    if v.group("after") or _DOTTED_IDENTIFIER.match(value) or _placeholder_value(value):
+        return None
+    return v.span("v") if _mixed(value) else None
+
+
+def _redact_url_passwords(text: str) -> str:
+    """Every scheme://user:password@ password, read to the last "@" of its run. A run is scanned for
+    its last "@" once, however many URLs it holds, so a long run of heads stays linear."""
+    out, pos, run_end, last_at = [], 0, -1, -1
+    for h in _URL_HEAD.finditer(text):
+        start = h.end()
+        if h.start() < pos:
+            continue
+        if start > run_end:
+            run_end = _URL_RUN.match(text, start).end()
+            last_at = text.rfind("@", start, run_end)
+        if last_at <= start:
+            continue
+        pw = text[start:last_at]
+        if _URL_REFERENCE.fullmatch(pw):
+            continue
+        out.append(text[pos:start])
+        out.append(ASSIGNMENT_PLACEHOLDER)
+        pos = last_at
+    if not out:
+        return text
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _redact_assignments(text: str) -> str:
+    if "=" not in text and ":" not in text:
+        return text
+    text = _redact_url_passwords(text)
+    out, pos = [], 0
+    for k in _KEY.finditer(text):
+        if k.start() < pos or not _SECRET_NAME.search(k.group("name")):
+            continue
+        span = _value_span(text, k)
+        if span is None:
+            continue
+        out.append(text[pos : span[0]])
+        out.append(ASSIGNMENT_PLACEHOLDER)
+        pos = span[1]
+    if not out:
+        return text
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def redact_documents(documents):
