@@ -303,3 +303,175 @@ def test_a_numbered_group_reference_fails_closed(_config, pattern):
     (_config / "config.json").write_text(json.dumps({"secret_patterns": [pattern]}))
     with pytest.raises(SecretPatternsUnavailable):
         redact("api_key='bare-secret-value'")
+
+
+# --- Values named as secrets (2026-11-07: a calcom env dump printed in a session) -------------
+
+# A bare random value with no provider prefix, built at run time like FAKE.
+BARE = "Q" + "w3rTy9Zx" * 3 + "Ab1Cd2Ef"
+# Masked-looking secrets, also built at run time so a scanner reads no literal.
+MASKED = "x" * 4 + "Actual" + "Secret" + "123"
+A = "[redacted assignment]"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "NEXTAUTH_SECRET={v}",
+        "export EMAIL_SERVER_PASSWORD='{v}'",
+        "  NEXTAUTH_SECRET: '{v}',",  # a JS object, as `node -e 'console.log(process.env)'` prints
+        '{{"client_secret": "{v}"}}',
+        '{{\\"password\\": \\"{v}\\"}}',  # a raw JSONL line: the quotes are escaped
+        "db:\n  password: {v}\n",
+        'connect(password="{v}")',
+        "mysql --password={v} calcom",
+        '"apiKey": "{v}"',
+        "CALENDSO_ENCRYPTION_KEY = {v}",
+        "GOOGLE_API_CREDENTIALS={v}",
+        "DATABASE_URL: 'postgresql://calcom:{v}@localhost:5432/calcom'",
+        "redis://default:{v}@cache:6379/0",
+    ],
+)
+def test_a_value_named_as_a_secret_is_replaced_and_its_name_kept(template):
+    out = redact(template.format(v=BARE))
+    assert BARE not in out
+    assert out == template.format(v=A)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "max_tokens=128000 bypass=Abcdef12345 SECRET_FILE=/run/secrets/calcom",
+        'password = getpass()  token = os.environ["X"]  secret = self.secret',
+        "NEXTAUTH_SECRET: rotated, password: compromised, PASSWORD=${DB_PASSWORD}",
+        "api_key=<your key> token=*** password: changeme PASSWORD=$(bw get password db)",
+        "password: authenticationrequired  credentials = default_credentials_provider",
+        '{{"password": "{{{{ vault_db_password }}}}"}}'.format(),
+        "postgres://palace:${PW}@db  https://example.org:8443/path",
+        "the passwords: we rotated all of them at 06:15",
+    ],
+)
+def test_references_placeholders_prose_and_other_names_are_left_alone(text):
+    assert redact(text) is text
+
+
+def test_a_key_naming_no_secret_does_not_swallow_one_that_follows():
+    assert redact(f"user: password={BARE}") == f"user: password={A}"
+
+
+def test_a_provider_token_keeps_its_own_placeholder_and_a_second_pass_changes_nothing():
+    value = FAKE["github"]
+    once = redact(f"GITHUB_TOKEN={value} NEXTAUTH_SECRET={BARE}")
+    assert once == f"GITHUB_TOKEN={_placeholder('github', value)} NEXTAUTH_SECRET={A}"
+    assert redact(once) is once
+
+
+def test_a_real_backend_stores_an_assignment_placeholder(tmp_path):
+    from mempalace.palace import get_collection
+
+    col = get_collection(str(tmp_path / "palace"), create=True)
+    col.upsert(
+        documents=[f"env dump:\nNEXTAUTH_SECRET={BARE}\nNODE_ENV=production"],
+        ids=["d1"],
+        metadatas=[{"wing": "w", "room": "r", "note": f"DATABASE_URL=postgres://u:{BARE}@h/db"}],
+    )
+    got = col.get(ids=["d1"], include=["documents", "metadatas"])
+    assert got["documents"] == [f"env dump:\nNEXTAUTH_SECRET={A}\nNODE_ENV=production"]
+    assert BARE not in repr(got["metadatas"])
+
+
+def test_a_key_inside_a_value_already_replaced_is_not_redacted_twice():
+    text = f"PASSWORD={BARE}:token={BARE[::-1]} next"
+    assert redact(text) == f"PASSWORD={A} next"
+
+
+# Strong forms (a quoted value, or KEY=value with nothing around the "=") redact whatever the value
+# looks like; the cases a cross-model review found leaking (2026-11-07).
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("PASSWORD=12345678901234567890", f"PASSWORD={A}"),
+        ("password=hunter2", f"password={A}"),
+        ("NEXTAUTH_SECRET=abcdefghijklmnopqrs", f"NEXTAUTH_SECRET={A}"),
+        (f"PASSWORD={MASKED}", f"PASSWORD={A}"),
+        ("PASSWORD=$ecr3t!x", f"PASSWORD={A}"),
+        ("PASSWORD=Abcd1234;Efgh5678 next", f"PASSWORD={A} next"),
+        ("PASSWORD=Abcd1234,Efgh5678 next", f"PASSWORD={A} next"),
+        ("PASSWORD=Abcd1234(Efgh5678) next", f"PASSWORD={A} next"),
+        ('password="Abcd1234\'xyz" next', f'password="{A}" next'),
+        ('{"password":"Abcd1234\\u0041"}', f'{{"password":"{A}"}}'),
+        ("PASSWORD=" + "Ab1" * 400 + " next", f"PASSWORD={A} next"),
+        ('PASSWORD="' + "Ab1" * 400 + '" next', f'PASSWORD="{A}" next'),
+        ("postgres://u:Abcd1234'xyz@db/app", f"postgres://u:{A}@db/app"),
+        (f"postgres://u:{MASKED}@db/app", f"postgres://u:{A}@db/app"),
+        ("postgres://u:" + "Ab1" * 100 + "@db/app", f"postgres://u:{A}@db/app"),
+        (
+            "db:\n  password: |\n    Abcd1234Efgh5678\n    more\n  user: x\n",
+            f"db:\n  password: |\n{A}\n  user: x\n",
+        ),
+    ],
+)
+def test_strong_forms_redact_whatever_the_value_looks_like(text, expected):
+    assert redact(text) == expected
+
+
+def test_a_long_dotted_run_is_scanned_in_linear_time():
+    import time
+
+    text = "a." * 200_000 + "="
+    start = time.perf_counter()
+    redact(text)
+    assert time.perf_counter() - start < 2.0
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ('password="Abcd1234\nEfgh5678" next', f'password="{A}" next'),
+        ("password='Abcd1234\nEfgh5678' next", f"password='{A}' next"),
+        (f"PASSWORD=${{VAR}}{MASKED} next", f"PASSWORD={A} next"),
+        (f"PASSWORD=[redacted assignment]{MASKED} next", f"PASSWORD={A} next"),
+        (f"PASSWORD=$(printf x){MASKED} next", f"PASSWORD={A} next"),
+        (f"PASSWORD=${{VAR}},{MASKED} next", f"PASSWORD={A} next"),
+        (f"PASSWORD=[redacted assignment];{MASKED} next", f"PASSWORD={A} next"),
+        (f"PASSWORD=$(printf x)){MASKED} next", f"PASSWORD={A} next"),
+        ('{\\"password\\":\\"Abcd1234\\\\\\"Efgh5678\\"}', '{\\"password\\":\\"' + A + '\\"}'),
+        ('{\\"password\\":\\"Abcd\\\\\\\\1234\\"}', '{\\"password\\":\\"' + A + '\\"}'),
+        (f'PASSWORD="[{MASKED}]"', f'PASSWORD="{A}"'),
+        ("postgres://o'connor:Abcd1234Efgh5678@db/app", f"postgres://o'connor:{A}@db/app"),
+        (
+            f'password="{MASKED} and the quote never closes',
+            f'password="{A} and the quote never closes',
+        ),
+    ],
+)
+def test_round_two_review_cases(text, expected):
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "PASSWORD=${ " * 50_000,
+        'password="x ' * 50_000,
+        '\\"password\\":\\"x ' * 50_000,
+        "PASSWORD=$(" * 50_000,
+    ],
+)
+def test_adversarial_runs_of_keys_scan_in_linear_time(text):
+    import time
+
+    start = time.perf_counter()
+    redact(text)
+    assert time.perf_counter() - start < 2.0
+
+
+def test_references_and_masks_that_are_the_whole_value_are_kept():
+    for text in (
+        "PASSWORD=${DB_PASSWORD:-x} next",
+        "PASSWORD=$(bw get password db) next",
+        "PASSWORD=[REDACTED]",
+        'PASSWORD="[redacted github sha256:0123abcd]"',
+        "PASSWORD=<your key>",
+    ):
+        assert redact(text) is text, text
