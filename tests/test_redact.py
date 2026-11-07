@@ -500,6 +500,9 @@ def test_references_and_masks_that_are_the_whole_value_are_kept():
         ("PASSWORD=Abcd1234'\\xSecret next", f"PASSWORD={A} next"),
         ("PASSWORD=Abcd1234''Secret next", f"PASSWORD={A} next"),
         ("PASSWORD=${VAR}'\\xSecret next", f"PASSWORD={A} next"),
+        ("postgres://u:pa\\ss1234@db/app", f"postgres://u:{A}@db/app"),
+        ("postgres://u:pa\\\\ss1234@db/app", f"postgres://u:{A}@db/app"),  # raw JSONL backslash
+        ("smb://CORP\\jp:Secret1234@files/share", f"smb://CORP\\jp:{A}@files/share"),
         ("env X='PASSWORD=Abcd1234' next", f"env X='PASSWORD={A}' next"),
     ],
 )
@@ -508,7 +511,13 @@ def test_security_review_cases(text, expected):
 
 
 @pytest.mark.parametrize(
-    "text", ["a://b:" * 50_000, "a://b:c" * 50_000 + "@", "x://u:" + "p@" * 100_000]
+    "text",
+    [
+        "a://" + "\\" * 100_000 + "x",
+        "a://b:" * 50_000,
+        "a://b:c" * 50_000 + "@",
+        "x://u:" + "p@" * 100_000,
+    ],
 )
 def test_runs_of_url_heads_scan_in_linear_time(text):
     import time

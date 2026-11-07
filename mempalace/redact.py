@@ -220,8 +220,14 @@ _BLOCK = re.compile(r"[|>][-+]?[ \t]*(?=\n|$)")
 # mid-word; the user may hold "@" and "'" (smtp://jp@example.org:…). The password itself runs to the
 # LAST "@" in its whitespace-delimited run, so one holding "@" or "/" is replaced whole. A path or
 # query holding "@" is replaced with it: over-redaction, never a leak (see _redact_url_passwords).
-_URL_HEAD = re.compile(r"(?<![a-z0-9+.\-])[a-z][a-z0-9+.\-]{0,30}://[^\s:/\"\\]+:", re.I)
-_URL_RUN = re.compile(r"[^\s\"\\]*")
+# A backslash is part of the user and the run, as in _BARE_TIGHT ("pa\ss", "DOMAIN\user", "\\" in a
+# raw JSONL line), unless it starts a raw JSONL escape. The two backslash forms are disjoint, so a
+# long run of them cannot backtrack.
+_URL_BACKSLASH = r"\\\\|\\(?![nrt\"\\])"
+_URL_HEAD = re.compile(
+    r"(?<![a-z0-9+.\-])[a-z][a-z0-9+.\-]{0,30}://(?:[^\s:/\"\\]|" + _URL_BACKSLASH + r")+:", re.I
+)
+_URL_RUN = re.compile(r"(?:[^\s\"\\]|" + _URL_BACKSLASH + r")*")
 # A URL password kept as written: a reference or a placeholder, never a word.
 _URL_REFERENCE = re.compile(
     r"\$\{[^{}\n]{1,200}\}|\$[A-Z_][A-Z0-9_]{0,80}|\{\{[^{}\n]{1,200}\}\}|"
