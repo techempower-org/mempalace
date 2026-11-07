@@ -475,3 +475,53 @@ def test_references_and_masks_that_are_the_whole_value_are_kept():
         "PASSWORD=<your key>",
     ):
         assert redact(text) is text, text
+
+
+# The security-guidance review of the round-4 commit (2026-11-07).
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("postgres://u:p@ss/w0rd@db/app", f"postgres://u:{A}@db/app"),
+        (
+            "smtp://jp@example.org:Abcd1234Efgh@mail.example.org:587",
+            f"smtp://jp@example.org:{A}@mail.example.org:587",
+        ),
+        ("postgres://u:changeme@db/app", f"postgres://u:{A}@db/app"),
+        ("PASSWORD=$ecr3tValue next", f"PASSWORD={A} next"),
+        (f'PASSWORD="[redacted {MASKED}]" next', f'PASSWORD="{A}" next'),
+        (f"PASSWORD=[redacted-{MASKED}] next", f"PASSWORD={A} next"),
+        ("PASSWORD=abc'def123 next", f"PASSWORD={A} next"),
+        (
+            "PASSWORD=Abcd\\\\1234\\nnext",
+            f"PASSWORD={A}\\nnext",
+        ),  # raw JSONL: a literal backslash, then \n
+        ("PASSWORD=Abcd\\x1234 next", f"PASSWORD={A} next"),
+        (f"PASSWORD=${{VAR}}'{MASKED} next", f"PASSWORD={A} next"),
+        ("PASSWORD=Abcd1234'\\xSecret next", f"PASSWORD={A} next"),
+        ("PASSWORD=Abcd1234''Secret next", f"PASSWORD={A} next"),
+        ("PASSWORD=${VAR}'\\xSecret next", f"PASSWORD={A} next"),
+        ("env X='PASSWORD=Abcd1234' next", f"env X='PASSWORD={A}' next"),
+    ],
+)
+def test_security_review_cases(text, expected):
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text", ["a://b:" * 50_000, "a://b:c" * 50_000 + "@", "x://u:" + "p@" * 100_000]
+)
+def test_runs_of_url_heads_scan_in_linear_time(text):
+    import time
+
+    start = time.perf_counter()
+    redact(text)
+    assert time.perf_counter() - start < 2.0
+
+
+def test_url_references_and_quoted_urls_keep_their_shape():
+    assert redact("postgres://palace:${PW}@db postgres://u:$DB_PASS@db") == (
+        "postgres://palace:${PW}@db postgres://u:$DB_PASS@db"
+    )
+    assert redact(f"'postgresql://calcom:{BARE}@localhost:5432/calcom',\\n") == (
+        f"'postgresql://calcom:{A}@localhost:5432/calcom',\\n"
+    )

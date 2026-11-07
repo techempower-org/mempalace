@@ -205,40 +205,48 @@ _SECRET_NAME = re.compile(
 _KEY = re.compile(
     r"(?<![A-Za-z0-9_.])(?P<name>[A-Za-z_][A-Za-z0-9_.\-]{0,80})(?:\\?[\"'])?(?P<sep>[ \t]*[=:][ \t]*)"
 )
-# Bare after a tight "=" (KEY=value: env files, CLI flags, kwargs): everything to whitespace, a
-# quote or a backslash (a raw JSONL "\n" escape ends the line).
-_BARE_TIGHT = re.compile(r"[^\s\"'\\]+")
+# Bare after a tight "=" (KEY=value: env files, CLI flags, kwargs): everything to whitespace.
+# A quote mid-value is part of it ("ab''cd", "ab'\\xcd"); one followed by whitespace, , ; ) } ],
+# the end or a raw JSONL escape closes an enclosing string. A backslash is part of it too, except
+# one starting a raw JSONL escape (\n, \r, \t, \"), which ends the line or the string; \\ is a
+# literal backslash.
+_BARE_TIGHT = re.compile(r"(?:[^\s\"'\\]|\\\\|\\(?![nrt\"\\])|[\"'](?![\s,;)}\]]|$|\\[nrt\"]))+")
 # Bare after ": " or " = " (YAML, prose, code): stops at punctuation that ends an expression.
 _BARE_LOOSE = re.compile(r"(?P<v>[^\s\"'\\,;)}\]\[<>(]+)(?P<after>[(\[]?)")
 # YAML block scalar: "password: |" then lines indented deeper than the key.
 _BLOCK = re.compile(r"[|>][-+]?[ \t]*(?=\n|$)")
 
-# scheme://user:password@host: the password, whatever its name. The scheme is bounded and may not
-# start mid-word, so a long dotted run is not rescanned from every dot. A user may hold "'".
-_URL_USERINFO = re.compile(
-    r"(?P<head>(?<![a-z0-9+.\-])[a-z][a-z0-9+.\-]{0,30}://[^\s:/@\"\\]+:)(?P<pw>[^\s@/\"\\]+)(?=@)",
-    re.I,
+# The start of scheme://user: , where the password follows. The scheme is bounded and may not start
+# mid-word; the user may hold "@" and "'" (smtp://jp@example.org:…). The password itself runs to the
+# LAST "@" in its whitespace-delimited run, so one holding "@" or "/" is replaced whole. A path or
+# query holding "@" is replaced with it: over-redaction, never a leak (see _redact_url_passwords).
+_URL_HEAD = re.compile(r"(?<![a-z0-9+.\-])[a-z][a-z0-9+.\-]{0,30}://[^\s:/\"\\]+:", re.I)
+_URL_RUN = re.compile(r"[^\s\"\\]*")
+# A URL password kept as written: a reference or a placeholder, never a word.
+_URL_REFERENCE = re.compile(
+    r"\$\{[^{}\n]{1,200}\}|\$[A-Z_][A-Z0-9_]{0,80}|\{\{[^{}\n]{1,200}\}\}|"
+    + _PLACEHOLDER
+    + r"|\[(?:REDACTED|redacted)\]"
 )
 
-# A whole value that is a reference or a mask, not a secret: $VAR, ${VAR}, $(cmd), %(name)s,
-# {{ x }}, <your key>, a placeholder this module or a person wrote ([redacted …], [REDACTED]), ***,
-# xxxx, ..., and a few words. Every part is bounded, so checking a long value stays linear.
+# A whole value that is a reference or a mask, not a secret: $VAR (upper case: "$ecr3t" is a
+# value), ${VAR}, $(cmd), %(name)s, {{ x }}, <your key>, a placeholder this module wrote or a bare
+# [REDACTED], ***, xxxx, ..., and a few words. Every part is bounded, so checking stays linear.
 _NOT_A_VALUE = re.compile(
-    r"(?:\$[A-Za-z_][A-Za-z0-9_]{0,80}|\$\{[^{}\n]{1,200}\}|\$\([^()\n]{1,200}\)"
+    r"(?:\$[A-Z_][A-Z0-9_]{0,80}|\$\{[^{}\n]{1,200}\}|\$\([^()\n]{1,200}\)"
     r"|%\([A-Za-z_][A-Za-z0-9_]{0,80}\)s|\{\{[^{}\n]{1,200}\}\}|<[^<>\n]{1,100}>"
-    r"|\[(?i:redacted)[^\[\]\n]{0,60}\]|\*{1,64}|[xX]{3,64}|\.{3,8}|\u2026"
+    r"|" + _PLACEHOLDER + r"|\[(?:REDACTED|redacted)\]|\[REDACTED-[A-Z0-9\-]{1,40}\]\**"
+    r"|\*{1,64}|[xX]{3,64}|\.{3,8}|\u2026"
     r"|(?i:changeme|example|redacted|none|null|nil|true|false|undefined|placeholder|dummy"
-    r"|secret|password|your[_\-][A-Za-z0-9_\-]{0,40}))"
+    r"|your[_\-](?:api[_\-]?key|key|token|secret|password)))"
 )
 # The same, at the start of a tight bare value, for a reference that holds spaces
 # ("$(bw get password db)", "<your key>", "{{ vault_db }}", "[redacted github sha256:…]"). It is
 # kept only when the value ends right after it; "${VAR}secret" is redacted, reference and all.
 _LEADING_REFERENCE = re.compile(
     r"\$\{[^{}\n]{1,200}\}|\$\([^()\n]{1,200}\)|\{\{[^{}\n]{1,200}\}\}|<[^<>\n]{1,100}>"
-    r"|\[(?i:redacted)[^\[\]\n]{0,60}\]"
+    r"|" + _PLACEHOLDER + r"|\[(?:REDACTED|redacted)\]"
 )
-# The same terminators as _BARE_TIGHT: "${VAR},secret" is one value, not a reference and a tail.
-_VALUE_ENDS = re.compile(r"[\s\"'\\]|$")
 _DOTTED_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$")
 
 ASSIGNMENT_PLACEHOLDER = "[redacted assignment]"
@@ -351,8 +359,8 @@ def _value_span(text: str, key: re.Match):
     if key.group("sep") == "=" or q is False:
         lead = _LEADING_REFERENCE.match(text, at)
         if lead:
-            if _VALUE_ENDS.match(text, lead.end()):
-                return None
+            if not _BARE_TIGHT.match(text, lead.end()):
+                return None  # the value ends with the reference: same terminators as below
             rest = _BARE_TIGHT.match(text, lead.end())
             return (at, rest.end() if rest else lead.end())
         v = _BARE_TIGHT.match(text, at)
@@ -371,16 +379,35 @@ def _value_span(text: str, key: re.Match):
     return v.span("v") if _mixed(value) else None
 
 
-def _url_password(m: re.Match) -> str:
-    if _placeholder_value(m.group("pw")):
-        return m.group(0)
-    return m.group("head") + ASSIGNMENT_PLACEHOLDER
+def _redact_url_passwords(text: str) -> str:
+    """Every scheme://user:password@ password, read to the last "@" of its run. A run is scanned for
+    its last "@" once, however many URLs it holds, so a long run of heads stays linear."""
+    out, pos, run_end, last_at = [], 0, -1, -1
+    for h in _URL_HEAD.finditer(text):
+        start = h.end()
+        if h.start() < pos:
+            continue
+        if start > run_end:
+            run_end = _URL_RUN.match(text, start).end()
+            last_at = text.rfind("@", start, run_end)
+        if last_at <= start:
+            continue
+        pw = text[start:last_at]
+        if _URL_REFERENCE.fullmatch(pw):
+            continue
+        out.append(text[pos:start])
+        out.append(ASSIGNMENT_PLACEHOLDER)
+        pos = last_at
+    if not out:
+        return text
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def _redact_assignments(text: str) -> str:
     if "=" not in text and ":" not in text:
         return text
-    text = _URL_USERINFO.sub(_url_password, text)
+    text = _redact_url_passwords(text)
     out, pos = [], 0
     for k in _KEY.finditer(text):
         if k.start() < pos or not _SECRET_NAME.search(k.group("name")):
