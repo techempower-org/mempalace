@@ -27,8 +27,15 @@ scan: a config that cannot be read, or a pattern that does not compile,
 raises :class:`SecretPatternsUnavailable` and the write fails rather than
 store text unscanned.
 
-Known limits. Shapes catch tokens with a recognisable prefix; a bare
-password or a provider without one passes through. Embeddings passed in by
+Known limits. Shapes catch tokens with a recognisable prefix. A bare
+password or a provider token without one is caught only beside a secret-ish
+name (``NEXTAUTH_SECRET=…``, ``"password": "…"``) or as a URL's password
+(``postgres://user:…@``), by :func:`_redact_assignments`, which keeps the
+name and writes ``[redacted assignment]``; one printed alone passes through.
+A quoted value, or one after a tight ``=``, is replaced whatever it looks
+like; a bare value after ``: `` or `` = `` (YAML, prose, code) only when it is
+8+ characters of two or more kinds, so ``password: hunter2`` stays readable.
+A quote that never closes leaves only its first word redacted. Embeddings passed in by
 the caller were computed from the text before redaction. Configured patterns
 are trusted like the rest of the config: one with nested quantifiers can
 backtrack badly on long text, so keep them to a prefix and a character class.

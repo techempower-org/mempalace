@@ -18,6 +18,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-11-07]
+
+
+### Fixed
+
+
+- **a value printed beside a secret-ish name (an env dump, a config, a connection URL) is redacted on every write, and Google OAuth client secrets and every Slack token class are built-in shapes** ([`8caeb5d`](https://github.com/techempower-org/mempalace/commit/8caeb5d))
+  Redaction on write (#596) matched provider-prefixed tokens only, so a bare
+  database password or `NEXTAUTH_SECRET` printed in an env dump would have
+  reached a drawer as written; on 2026-11-07 an OAuth client secret
+  (`GOCSPX-…`) and three Slack app tokens (`xapp-…`) already had.
+  `_redact_assignments` keeps the name and writes `[redacted assignment]` for
+  the value in `KEY=value`, `"key": "value"`, JSON-escaped JSON inside a raw
+  JSONL line, JS objects, YAML (block scalars too), `--password=` and a URL's
+  userinfo password (to the last `@`, so one holding `@`, `/` or a backslash
+  goes whole). Quoted and tight `KEY=value` values are replaced whatever they
+  look like unless the whole value is a reference or a mask; loose `key: value`
+  needs 8+ characters of two kinds so prose stays readable. Quoted values are
+  found by linear scanners and every reference quantifier is bounded, so
+  adversarial runs of keys stay linear. `google` now also matches `GOCSPX-`,
+  and `slack` matches `xoxe-`, `xoxe.xoxp-` and `xapp-`.
+
+
 ## [2026-11-04]
 
 
