@@ -222,7 +222,7 @@ _BLOCK = re.compile(r"[|>][-+]?[ \t]*(?=\n|$)")
 # query holding "@" is replaced with it: over-redaction, never a leak (see _redact_url_passwords).
 # A backslash is part of the user and the run, as in _BARE_TIGHT ("pa\ss", "DOMAIN\user", "\\" in a
 # raw JSONL line), unless it starts a raw JSONL escape. The two backslash forms are disjoint, so a
-# long run of them cannot backtrack.
+# long run of them cannot backtrack exponentially.
 _URL_BACKSLASH = r"\\\\|\\(?![nrt\"\\])"
 _URL_HEAD = re.compile(
     r"(?<![a-z0-9+.\-])[a-z][a-z0-9+.\-]{0,30}://(?:[^\s:/\"\\]|" + _URL_BACKSLASH + r")+:", re.I
