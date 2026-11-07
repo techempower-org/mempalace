@@ -56,7 +56,8 @@ DEFAULT_PATTERNS: Dict[str, str] = {
     "github": r"(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,}",
     "slack": r"xox[abposr]-[0-9]+-[A-Za-z0-9-]{20,}",
     "aws": r"(?:AKIA|ASIA)[0-9A-Z]{16}",
-    "google": r"AIza[0-9A-Za-z_-]{35}",
+    # An API key, and an OAuth client secret (2026-11-07: one read off the GCP console was mined).
+    "google": r"AIza[0-9A-Za-z_-]{35}|GOCSPX-[0-9A-Za-z_-]{28}(?![0-9A-Za-z_-])",
     # No word boundary: a raw JSONL line holds a literal "\n" escape right before the token.
     "notion": r"ntn_[A-Za-z0-9]{40,}|secret_[A-Za-z0-9]{43}(?![A-Za-z0-9])",
 }

@@ -534,3 +534,12 @@ def test_url_references_and_quoted_urls_keep_their_shape():
     assert redact(f"'postgresql://calcom:{BARE}@localhost:5432/calcom',\\n") == (
         f"'postgresql://calcom:{A}@localhost:5432/calcom',\\n"
     )
+
+
+def test_a_google_oauth_client_secret_is_redacted_and_a_bare_prefix_is_not():
+    value = "GOC" + "SPX-" + "Ab3_" * 7
+    assert redact(f"client secret {value} copied") == (
+        f"client secret {_placeholder('google', value)} copied"
+    )
+    text = 'search for "GOCSPX-" with grep -F'
+    assert redact(text) is text
