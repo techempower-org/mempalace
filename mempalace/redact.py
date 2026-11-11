@@ -642,16 +642,17 @@ def _redact_fields(text: str, wide: bool = False) -> str:
     return "".join(out)
 
 
-def _bw_notes(text: str, key: re.Match, wide: bool = False) -> bool:
+def _bw_notes(text: str, key: re.Match, items: List[int], wide: bool) -> bool:
+    """Whether a quoted "notes" key sits in a vault item: an "object": "item" marker (``items``,
+    their offsets, found once per pass) near it, or, in the wide pass, anywhere."""
     after = key.end("name")
     quoted = text.startswith('"', after) or text.startswith('\\"', after)
-    if key.group("name") != "notes" or not quoted:
+    if key.group("name") != "notes" or not quoted or not items:
         return False
     if wide:
-        lo, hi = 0, len(text)
-    else:
-        lo, hi = max(0, key.start() - _BW_ITEM_WINDOW), key.end() + _BW_ITEM_WINDOW
-    return _BW_ITEM.search(text, lo, hi) is not None
+        return True
+    near = bisect.bisect_left(items, key.start() - _BW_ITEM_WINDOW)
+    return near < len(items) and items[near] <= key.end() + _BW_ITEM_WINDOW
 
 
 def _redact_assignments(text: str, wide: bool = False) -> str:
@@ -659,12 +660,17 @@ def _redact_assignments(text: str, wide: bool = False) -> str:
         return text
     text = _redact_url_passwords(text)
     text = _redact_fields(text, wide)
+    items = (
+        [m.start() for m in _BW_ITEM.finditer(text)]
+        if '"notes' in text or 'notes\\"' in text
+        else []
+    )
     out, pos = [], 0
     for k in _KEY.finditer(text):
         if k.start() < pos:
             continue
         name = k.group("name")
-        if _SECRET_NAME.search(name) or _bw_notes(text, k, wide):
+        if _SECRET_NAME.search(name) or _bw_notes(text, k, items, wide):
             span = _value_span(text, k)
         elif _PIN_NAME.search(name):
             span = _pin_span(text, k)

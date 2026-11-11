@@ -998,3 +998,22 @@ def test_an_escaped_backslash_before_a_closing_quote_does_not_hide_a_field(escap
 def test_any_secret_name_among_the_siblings_counts():
     text = '{"name": "Color", "label": "x", "name": "Password", "value": "s3cr3tv"}'
     assert "s3cr3tv" not in redact(text)
+
+
+# --- 2026-11-11 cross-model review of #604 (round 4) -------------------------------------------
+def test_the_wide_pass_finds_the_item_marker_once_not_per_notes_key():
+    import time
+
+    cascade = (
+        '{"object":"item",' + ",".join('"notes":"' + "a" * 5000 + '"' for _ in range(10)) + "}"
+    )
+
+    def took(n):
+        text = '{"notes":"x"},' * n + cascade
+        start = time.monotonic()
+        out = redact(text)
+        assert "a" * 5000 not in out
+        return time.monotonic() - start
+
+    small, big = took(2000), took(16000)
+    assert big < 20 * small + 0.25
