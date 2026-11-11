@@ -36,10 +36,13 @@ name and writes ``[redacted assignment]``; one printed alone passes through.
 A quoted value, or one after a tight ``=``, is replaced whatever it looks
 like; a bare value after ``: `` or `` = `` (YAML, prose, code) only when it is
 8+ characters of two or more kinds, so ``password: hunter2`` stays readable.
-A PIN name takes only a value of 4-12 digits. A Bitwarden custom field is
-redacted by its sibling ``name`` or when it is hidden (``"type": 1``), and an
-item's ``notes`` only inside ``bw`` item JSON. A one-time code is caught only
-beside the words that say what it is ("is your Google verification code").
+A PIN name takes only 4-12 digits (grouped or spelled out). A Bitwarden
+custom field is redacted by a secret-ish sibling ``name`` or a hidden
+``"type": 1`` in its own object, in any key order, and an item's ``notes``
+only near ``"object": "item"`` (proximity: an adjacent ``notes`` may be
+over-redacted). A one-time code is caught only beside the words that say what
+it is ("is your Google verification code", "sign-in code is"), and only its
+digits are replaced. A JWT is caught only with a compact ``eyJ`` header.
 A quote that never closes leaves only its first word redacted. Embeddings passed in by
 the caller were computed from the text before redaction. Configured patterns
 are trusted like the rest of the config: one with nested quantifiers can
