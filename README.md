@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| the nightly dream, `python -m mempalace.dream nightly`, runs the inventory and the contradictions pass and publishes one dreams/v1 JSON document with stable proposal ids for a private review page; decided ids are never proposed again | — | `HEAD` — pending resolution |
 | dream day 2, `python -m mempalace.dream contradictions`, asks a local model whether a feedback memory contradicts a CLAUDE.md rule that governs it, on similarity-prefiltered pairs, and proposes only the contradictions | — | `HEAD` — pending resolution |
 | dream day 1, `python -m mempalace.dream inventory`, proposes oversized MEMORY.md indexes, CLAUDE.md rules with no named mechanism, and near-duplicate feedback memories, without editing any input | — | `HEAD` — pending resolution |
 | bare JWTs, base64 vault-item blobs, otpauth URIs, one-time codes, PINs, TOTP seeds and Bitwarden notes and secret custom fields are redacted on every write, and a Google client secret of any tail from 24 characters | — | `HEAD` — pending resolution |

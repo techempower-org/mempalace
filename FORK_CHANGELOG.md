@@ -24,6 +24,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **the nightly dream, `python -m mempalace.dream nightly`, runs the inventory and the contradictions pass and publishes one dreams/v1 JSON document with stable proposal ids for a private review page; decided ids are never proposed again** (`HEAD` — pending resolution)
+  Day 3 of the dreaming decision. One document per night (`YYYY-MM-DD.json` and
+  `latest.json`, atomic, 0640 in a 0700 folder, pruned after 30 days) carries
+  each proposal's stable id (kind, source paths without line numbers, rule lead),
+  its first-seen night, and the lane's applied ledger. A review page records
+  accept or reject in `decisions.json`, which the writer only reads: a decided id
+  is dropped on every later night. The page's limits are enforced by the writer
+  (summary 1200 characters, 10 sources, a flat detail of 12 scalars, 2 MB, lowest
+  priority kinds cut first). A MemAvailable guard refuses to start under the floor
+  and stops the model pass before the next call when the host drops under it.
+
+
 - **dream day 2, `python -m mempalace.dream contradictions`, asks a local model whether a feedback memory contradicts a CLAUDE.md rule that governs it, on similarity-prefiltered pairs, and proposes only the contradictions** (`HEAD` — pending resolution)
   Every normative rule and every feedback memory is embedded once through
   palace-daemon `/embed`; each memory is paired with its nearest rules at cosine
