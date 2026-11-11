@@ -443,21 +443,43 @@ def _redact_url_passwords(text: str) -> str:
 _PIN_NAME = re.compile(
     r"(?:^|(?<=[_.\-])|(?<=[a-z0-9])(?=[A-Z]))(?i:pin(?:[_\-]?(?:code|number))?|passcode)$"
 )
-_PIN_DIGITS = re.compile(r"[0-9]{4,12}(?![0-9A-Za-z])")
+# Grouped digits ("1234 5678", "12-34-56") go whole; a lone group needs 4+ digits.
+_PIN_DIGITS = re.compile(
+    r"[0-9]{2,6}(?:[ \-][0-9]{2,6}){1,5}(?![0-9A-Za-z\-])|[0-9]{4,12}(?![0-9A-Za-z])"
+)
 
 # A Bitwarden custom field, {"name": "…", "value": "…", "type": N}: the value's own key says
 # nothing, its sibling "name" does ("API Key", "Recovery PIN"), and type 1 is a hidden field, a
-# secret by the vault's own account. Also inside a raw JSONL line, where every quote is \".
+# secret by the vault's own account. Also inside a raw JSONL line, where every quote is \", and
+# pretty-printed (`bw get item --pretty`, jq), where a newline, raw or escaped, separates keys.
+# "type" may come before "value" as well as after it. Whitespace runs are two disjoint forms, so
+# they cannot backtrack.
+_WS = r"(?:[ \t\r\n]|\\[nrt])*"
 _FIELD = re.compile(
-    r'(?P<q>\\?)"name(?P=q)"[ \t]*:[ \t]*(?P=q)"(?P<fname>[^"\\\n]{1,100})(?P=q)"'
-    r'[ \t]*,[ \t]*(?P=q)"value(?P=q)"[ \t]*:[ \t]*'
+    r'(?P<q>\\?)"name(?P=q)"' + _WS + ":" + _WS + r'(?P=q)"(?P<fname>[^"\\\n]{1,100})(?P=q)"'
+    r"(?:"
+    + _WS
+    + ","
+    + _WS
+    + r'(?P=q)"type(?P=q)"'
+    + _WS
+    + ":"
+    + _WS
+    + r"(?P<type>[0-9]{1,3}))?"
+    + _WS
+    + ","
+    + _WS
+    + r'(?P=q)"value(?P=q)"'
+    + _WS
+    + ":"
+    + _WS
 )
-_HIDDEN_TYPE = re.compile(r'[ \t]*,[ \t]*\\?"type\\?"[ \t]*:[ \t]*1(?![0-9])')
+_HIDDEN_TYPE = re.compile(_WS + "," + _WS + r'\\?"type\\?"' + _WS + ":" + _WS + r"1(?![0-9])")
 _FIELD_NAME_SEP = re.compile(r"[\s\-]+")
 # A vault item's free-text notes often hold what its other fields do not (recovery codes, a PIN,
 # a second password). "notes" is redacted only inside one: "object": "item" a little before it,
 # as `bw get item` prints the item.
-_BW_ITEM = re.compile(r'\\?"object\\?"[ \t]*:[ \t]*\\?"item\\?"')
+_BW_ITEM = re.compile(r'\\?"object\\?"' + _WS + ":" + _WS + r'\\?"item\\?"')
 _BW_ITEM_WINDOW = 1500
 
 
@@ -486,7 +508,8 @@ def _redact_fields(text: str) -> str:
         if not span:
             continue  # null, a number, or an unclosed string
         close = span[1] + (2 if m.group("q") else 1)
-        if not (_secret_field(m.group("fname")) or _HIDDEN_TYPE.match(text, close)):
+        hidden = m.group("type") == "1" or _HIDDEN_TYPE.match(text, close)
+        if not (_secret_field(m.group("fname")) or hidden):
             continue
         if _placeholder_value(text[span[0] : span[1]]):
             continue

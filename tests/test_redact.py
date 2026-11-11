@@ -728,3 +728,48 @@ def test_a_second_pass_over_the_new_placeholders_changes_nothing():
 
     once = redact(json.dumps(_bw_item()) + " G-482913 is your Google verification code " + _jwt())
     assert redact(once) == once
+
+
+# --- 2026-11-11 security review of #604 --------------------------------------------------------
+def test_a_pretty_printed_vault_item_is_redacted_plain_and_in_a_jsonl_line():
+    import json
+
+    pretty = json.dumps(_bw_item(), indent=2)
+    _assert_bw_item_redacted(redact(pretty))
+    _assert_bw_item_redacted(redact(json.dumps({"type": "tool_result", "content": pretty})))
+
+
+def test_a_hidden_field_with_type_before_value_is_redacted():
+    text = '[{"name": "Recovery", "type": 1, "value": "rc0d3s"}]'
+    assert redact(text) == '[{"name": "Recovery", "type": 1, "value": "[redacted assignment]"}]'
+    shown = '[{"name": "Color", "type": 0, "value": "blue"}]'
+    assert redact(shown) is shown
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("PIN: 1234 5678 thanks", "PIN: [redacted assignment] thanks"),
+        ('{"pin": "12-34-56"}', '{"pin": "[redacted assignment]"}'),
+        ("pin=4821-9930", "pin=[redacted assignment]"),
+    ],
+)
+def test_a_grouped_pin_is_redacted_whole(text, expected):
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        ("eyJaaaa" * 57 + ".eyJ" + "b" * 7990 + " ") * 40,
+        '"name":' + "\\n " * 40000,
+        '"name": "x"' + " ," * 40000,
+        '\\"object\\":' + "\\t" * 40000,
+    ],
+)
+def test_review_adversarial_runs_scan_in_linear_time(text):
+    import time
+
+    start = time.monotonic()
+    redact(text)
+    assert time.monotonic() - start < 2.0
