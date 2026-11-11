@@ -51,6 +51,7 @@ starting ``_mpr``; one that breaks these fails closed.
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import os
 import re
@@ -207,14 +208,18 @@ def redact(text: str) -> str:
         clean = combined.sub(replace, clean)
     clean = _redact_codes(clean)
     # Named values are judged partly by distance (a field's braces, a vault item's marker), and
-    # replacing one value moves its neighbours closer or further. Each pass only adds placeholders
-    # (a placeholder is never replaced), so repeating until nothing changes ends, and leaves text a
-    # second redact() would not change.
+    # replacing one value moves its neighbours closer. Each pass only adds placeholders (one is
+    # never replaced), so passes repeat until nothing changes. A cascade that has not settled by
+    # the cap fails closed: one wide pass judges by presence anywhere in the text, not distance,
+    # which redacts a superset and is itself a fixed point. Either way a second redact() changes
+    # nothing.
     for _ in range(_ASSIGNMENT_PASSES):
         again = _redact_assignments(clean)
         if again == clean:
             break
         clean = again
+    else:
+        clean = _redact_assignments(clean, wide=True)
     return text if clean == text else clean
 
 
@@ -531,36 +536,82 @@ def _secret_field(name: str) -> bool:
     return bool(_SECRET_NAME.search(words) or _PIN_NAME.search(words))
 
 
-def _structural_quotes(segment: str, escaped: bool) -> int:
-    """How many quotes in ``segment`` open or close a string: "..." not after a backslash, or in a
-    raw JSONL line \"...\" not after a second backslash."""
-    if escaped:
-        return len(re.findall(r'(?<!\\)\\"', segment))
-    return len(re.findall(r'(?<!\\)"', segment))
+def _structural_quote(text: str, i: int, escaped: bool) -> bool:
+    """Whether the quote at ``i`` opens or closes a string. In JSON a quote after an even run of
+    backslashes does. In a raw JSONL line the object is itself inside a string, so its quotes are
+    written \" and its escaped backslashes \\\\: one there sits after a run of 1, 5, 9 … backslashes
+    (an escaped quote inside it after 3, 7 …, the outer string's own quotes after none)."""
+    j = i
+    while j > 0 and text[j - 1] == "\\":
+        j -= 1
+    run = i - j
+    return run % 4 == 1 if escaped else run % 2 == 0
+
+
+_STRUCTURE = re.compile(r'["{}]')
+
+
+def _brace_left(text: str, at: int, floor: int, escaped: bool) -> int:
+    """The nearest "{" before ``at`` that is outside every string; -1 if none within ``floor``.
+    The regex jumps to quotes and braces; each quote's backslash run is read once, so the walk is
+    linear in the reach."""
+    quotes = 0
+    for i in reversed([m.start() for m in _STRUCTURE.finditer(text, floor, at)]):
+        c = text[i]
+        if c == '"':
+            quotes += _structural_quote(text, i, escaped)
+        elif c == "{" and quotes % 2 == 0:
+            return i
+    return -1
+
+
+def _brace_right(text: str, at: int, ceiling: int, escaped: bool) -> int:
+    quotes = 0
+    for m in _STRUCTURE.finditer(text, at, ceiling):
+        i, c = m.start(), m.group()
+        if c == '"':
+            quotes += _structural_quote(text, i, escaped)
+        elif c == "}" and quotes % 2 == 0:
+            return i
+    return -1
 
 
 def _field_siblings(text: str, key_start: int, value_end: int, escaped: bool):
-    """The text of the object around a "value", less the value itself. A brace inside a string
-    (an odd number of quotes away) is skipped. When no brace closes it within reach, the text
-    within reach on each side stands in: a neighbour's name may then count, which over-redacts and
-    never leaks."""
-    floor = max(0, key_start - _FIELD_REACH)
-    lo = text.rfind("{", floor, key_start)
-    while lo != -1 and _structural_quotes(text[lo:key_start], escaped) % 2:
-        lo = text.rfind("{", floor, lo)
-    ceiling = value_end + _FIELD_REACH
-    hi = text.find("}", value_end, ceiling)
-    while hi != -1 and _structural_quotes(text[value_end:hi], escaped) % 2:
-        hi = text.find("}", hi + 1, ceiling)
-    before = (
-        text[lo:key_start] if lo != -1 else text[max(0, key_start - _FIELD_FALLBACK) : key_start]
-    )
-    after = text[value_end:hi] if hi != -1 else text[value_end : value_end + _FIELD_FALLBACK]
-    return before + after
+    """The text of the object around a "value", less the value itself. A brace inside a string is
+    skipped. When no brace closes it within reach, the text within reach on each side stands in:
+    a neighbour's name may then count, which over-redacts and never leaks."""
+    lo = _brace_left(text, key_start, max(0, key_start - _FIELD_REACH), escaped)
+    hi = _brace_right(text, value_end, value_end + _FIELD_REACH, escaped)
+    if lo == -1:
+        lo = max(0, key_start - _FIELD_FALLBACK)
+    if hi == -1:
+        hi = value_end + _FIELD_FALLBACK
+    return text[lo:key_start] + text[value_end:hi]
 
 
-def _redact_fields(text: str) -> str:
+def _secret_names(siblings: str):
+    """None when no "name" sits among the siblings (not a field), else whether any is secret-ish."""
+    names = [m.group("fname") for m in _FIELD_NAME.finditer(siblings)]
+    if not names:
+        return None
+    return any(_secret_field(n) for n in names)
+
+
+def _redact_fields(text: str, wide: bool = False) -> str:
     if '"value' not in text and 'value\\"' not in text:
+        return text
+    if wide:
+        # Distance aside: any secret-ish name or hidden field anywhere makes every field secret.
+        anywhere = _secret_names(text) or bool(_FIELD_HIDDEN.search(text))
+        if not anywhere:
+            return text
+    # Where a secret-ish name or a hidden type sits, found once: a value with neither within reach
+    # is skipped before any brace walk, so text full of ordinary {"value": …} stays cheap.
+    marks = sorted(
+        [m.start() for m in _FIELD_NAME.finditer(text) if _secret_field(m.group("fname"))]
+        + [m.start() for m in _FIELD_HIDDEN.finditer(text)]
+    )
+    if not marks:
         return text
     out, pos = [], 0
     for m in _VALUE_KEY.finditer(text):
@@ -569,13 +620,17 @@ def _redact_fields(text: str) -> str:
         span = _quoted(text, m.end())
         if not span:
             continue  # null, a number, or an unclosed string
-        close = span[1] + (2 if m.group("q") else 1)
-        siblings = _field_siblings(text, m.start(), close, bool(m.group("q")))
-        name = _FIELD_NAME.search(siblings)
-        if name is None:
-            continue  # not a field: {"value": …} alone says nothing
-        if not (_secret_field(name.group("fname")) or _FIELD_HIDDEN.search(siblings)):
-            continue
+        if not wide:
+            near = bisect.bisect_left(marks, m.start() - _FIELD_REACH)
+            if near == len(marks) or marks[near] > span[1] + _FIELD_REACH:
+                continue
+            close = span[1] + (2 if m.group("q") else 1)
+            siblings = _field_siblings(text, m.start(), close, bool(m.group("q")))
+            secret = _secret_names(siblings)
+            if secret is None:
+                continue  # not a field: {"value": …} alone says nothing
+            if not (secret or _FIELD_HIDDEN.search(siblings)):
+                continue
         if _placeholder_value(text[span[0] : span[1]]):
             continue
         out.append(text[pos : span[0]])
@@ -587,26 +642,29 @@ def _redact_fields(text: str) -> str:
     return "".join(out)
 
 
-def _bw_notes(text: str, key: re.Match) -> bool:
+def _bw_notes(text: str, key: re.Match, wide: bool = False) -> bool:
     after = key.end("name")
     quoted = text.startswith('"', after) or text.startswith('\\"', after)
     if key.group("name") != "notes" or not quoted:
         return False
-    lo, hi = max(0, key.start() - _BW_ITEM_WINDOW), key.end() + _BW_ITEM_WINDOW
+    if wide:
+        lo, hi = 0, len(text)
+    else:
+        lo, hi = max(0, key.start() - _BW_ITEM_WINDOW), key.end() + _BW_ITEM_WINDOW
     return _BW_ITEM.search(text, lo, hi) is not None
 
 
-def _redact_assignments(text: str) -> str:
+def _redact_assignments(text: str, wide: bool = False) -> str:
     if "=" not in text and ":" not in text:
         return text
     text = _redact_url_passwords(text)
-    text = _redact_fields(text)
+    text = _redact_fields(text, wide)
     out, pos = [], 0
     for k in _KEY.finditer(text):
         if k.start() < pos:
             continue
         name = k.group("name")
-        if _SECRET_NAME.search(name) or _bw_notes(text, k):
+        if _SECRET_NAME.search(name) or _bw_notes(text, k, wide):
             span = _value_span(text, k)
         elif _PIN_NAME.search(name):
             span = _pin_span(text, k)

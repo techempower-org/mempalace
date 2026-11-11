@@ -937,3 +937,64 @@ def test_a_blob_after_a_slash_is_redacted():
 
 def test_a_field_cut_from_its_braces_still_finds_a_name_after_its_value():
     assert "x9y8z7" not in redact('..."value": "x9y8z7", "name": "API Key", "type": 0')
+
+
+@pytest.mark.parametrize(
+    "unit",
+    [
+        '"value": "a", "s": "{{{{{{{{{{{{", ',
+        '"value": "a", "s": "}}}}}}}}}}}}", ',
+        '"s": "{", "value": "b", "t": "}", ',
+    ],
+)
+def test_braces_inside_strings_near_many_values_scale_linearly(unit):
+    import time
+
+    def took(n):
+        start = time.monotonic()
+        redact(unit * n)
+        return time.monotonic() - start
+
+    small, big = took(1000), took(8000)
+    assert big < 20 * small + 0.25
+
+
+# --- 2026-11-11 cross-model review of #604 (round 3) and security review of db2ba399 ----------
+def test_a_notes_cascade_past_the_pass_cap_fails_closed_and_is_a_fixed_point():
+    text = '{"object":"item",' + ",".join('"notes":"' + "a" * 5000 + '"' for _ in range(10)) + "}"
+    once = redact(text)
+    assert "a" * 5000 not in once
+    assert redact(once) == once
+
+
+def test_a_field_brought_within_reach_by_shortened_siblings_is_redacted_in_one_call():
+    tokens = ",".join('"token":"' + "b" * 1500 + '"' for _ in range(12))
+    text = '{"name":"API Key",' + tokens + ',"value":"k3yv4l"}'
+    once = redact(text)
+    assert "k3yv4l" not in once
+    assert redact(once) == once
+
+
+def test_the_wide_pass_redacts_a_field_out_of_reach():
+    cascade = (
+        '{"object":"item",' + ",".join('"notes":"' + "a" * 5000 + '"' for _ in range(10)) + "}"
+    )
+    far = '{"name":"API Key",' + ",".join(f'"x{i}":"' + "c" * 200 + '"' for i in range(8))
+    text = cascade + " " + far + ',"value":"k3yv4l"}'
+    once = redact(text)
+    assert "k3yv4l" not in once
+    assert redact(once) == once
+
+
+@pytest.mark.parametrize("escaped", [False, True])
+def test_an_escaped_backslash_before_a_closing_quote_does_not_hide_a_field(escaped):
+    import json
+
+    obj = json.dumps({"name": "API Key", "note": "a" * 400 + "\\", "value": "k3yv4l", "type": 0})
+    text = json.dumps({"content": obj}) if escaped else obj
+    assert "k3yv4l" not in redact(text)
+
+
+def test_any_secret_name_among_the_siblings_counts():
+    text = '{"name": "Color", "label": "x", "name": "Password", "value": "s3cr3tv"}'
+    assert "s3cr3tv" not in redact(text)
