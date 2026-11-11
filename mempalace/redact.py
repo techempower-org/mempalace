@@ -551,10 +551,37 @@ def _structural_quote(text: str, i: int, escaped: bool) -> bool:
 _STRUCTURE = re.compile(r'["{}]')
 
 
+def _plain_quotes(text: str, lo: int, hi: int, escaped: bool):
+    """The structural quotes in text[lo:hi] counted in C, or None when a backslash run there could
+    hide one. Without a doubled backslash every run is 0 or 1 long, so in plain JSON a structural
+    quote is one with no backslash before it, and in a raw JSONL line one with exactly one."""
+    if escaped:
+        if "\\\\" in text[lo:hi]:
+            return None
+        return text.count('\\"', lo, hi)
+    if "\\" in text[lo:hi]:
+        return None
+    return text.count('"', lo, hi)
+
+
 def _brace_left(text: str, at: int, floor: int, escaped: bool) -> int:
     """The nearest "{" before ``at`` that is outside every string; -1 if none within ``floor``.
-    The regex jumps to quotes and braces; each quote's backslash run is read once, so the walk is
-    linear in the reach."""
+    The usual window is counted in C between brace candidates; one with long backslash runs is
+    walked quote by quote, each run read once. Either way linear in the reach."""
+    # A quote or backslash at the very edge may belong to a run that starts outside the window; it
+    # lies before every brace candidate, so it never counts, and stepping past it keeps C counting
+    # exact.
+    while floor < at and text[floor] in '"\\':
+        floor += 1
+    if _plain_quotes(text, floor, at, escaped) is not None:
+        quotes, end = 0, at
+        lo = text.rfind("{", floor, end)
+        while lo != -1:
+            quotes += _plain_quotes(text, lo, end, escaped)
+            if quotes % 2 == 0:
+                return lo
+            end, lo = lo, text.rfind("{", floor, lo)
+        return -1
     quotes = 0
     for i in reversed([m.start() for m in _STRUCTURE.finditer(text, floor, at)]):
         c = text[i]
@@ -566,6 +593,15 @@ def _brace_left(text: str, at: int, floor: int, escaped: bool) -> int:
 
 
 def _brace_right(text: str, at: int, ceiling: int, escaped: bool) -> int:
+    if _plain_quotes(text, at, ceiling, escaped) is not None:
+        quotes, start = 0, at
+        hi = text.find("}", start, ceiling)
+        while hi != -1:
+            quotes += _plain_quotes(text, start, hi, escaped)
+            if quotes % 2 == 0:
+                return hi
+            start, hi = hi, text.find("}", hi + 1, ceiling)
+        return -1
     quotes = 0
     for m in _STRUCTURE.finditer(text, at, ceiling):
         i, c = m.start(), m.group()

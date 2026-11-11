@@ -1017,3 +1017,15 @@ def test_the_wide_pass_finds_the_item_marker_once_not_per_notes_key():
 
     small, big = took(2000), took(16000)
     assert big < 20 * small + 0.25
+
+
+@pytest.mark.parametrize("escaped", [False, True])
+def test_an_odd_escaped_quote_and_a_brace_in_a_string_do_not_hide_a_field(escaped):
+    import json
+
+    # The name sits beyond the 300-character fallback, so only a correct quote count finds it.
+    obj = json.dumps(
+        {"name": "API Key", "pad": "p" * 400, "note": 'say " then {', "value": "k3yv4l"}
+    )
+    text = json.dumps({"content": obj}) if escaped else obj
+    assert "k3yv4l" not in redact(text)
