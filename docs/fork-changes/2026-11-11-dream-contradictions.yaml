@@ -3,6 +3,7 @@ id: dream-contradictions
 date: '2026-11-11'
 bucket: Added
 commit: HEAD
+fork_pr: 606
 area: Dreaming
 summary: dream day 2, `python -m mempalace.dream contradictions`, asks a local model whether a feedback memory contradicts a CLAUDE.md rule that governs it, on similarity-prefiltered pairs, and proposes only the contradictions
 body: |
