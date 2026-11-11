@@ -3,6 +3,7 @@ id: dream-nightly
 date: '2026-11-11'
 bucket: Added
 commit: HEAD
+fork_pr: 608
 area: Dreaming
 summary: the nightly dream, `python -m mempalace.dream nightly`, runs the inventory and the contradictions pass and publishes one dreams/v1 JSON document with stable proposal ids for a private review page; decided ids are never proposed again
 body: |
