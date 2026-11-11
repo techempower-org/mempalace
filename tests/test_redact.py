@@ -561,3 +561,471 @@ def test_every_slack_token_class_is_redacted(value):
 def test_slack_placeholders_in_docs_are_left_alone():
     text = "paste the xoxb-your-token or the xapp-... from the app page"
     assert redact(text) is text
+
+
+# --- 2026-11-11: the shapes queued after the 11-07..11-09 leaks -------------------------------
+GOCSPX = "GOC" + "SPX-"
+
+
+@pytest.mark.parametrize("tail", [24, 28, 29, 32])
+def test_a_google_client_secret_of_any_tail_from_24_is_redacted(tail):
+    value = GOCSPX + ("Ab3_9" * 8)[:tail]
+    assert redact(f"secret {value} end") == f"secret {_placeholder('google', value)} end"
+
+
+def test_a_google_client_secret_prefix_with_a_short_tail_is_left():
+    text = "see " + GOCSPX + "abc in the docs"
+    assert redact(text) is text
+
+
+def _jwt():
+    return "ey" + "JhbGciOiJIUzI1NiJ9" + ".ey" + "JzdWIiOiI0MmMxIiwiaWF0IjoxfQ" + "." + "s1G" * 14
+
+
+@pytest.mark.parametrize("prefix", ["HA_TOKEN ", "Bearer ", "\\n", "token="])
+def test_a_bare_jwt_is_redacted_wherever_it_is_printed(prefix):
+    value = _jwt()
+    out = redact(f"{prefix}{value} end")
+    assert value not in out
+    assert "[redacted jwt sha256:" in out or "[redacted assignment]" in out
+
+
+def test_a_base64_json_blob_is_redacted_and_a_short_one_is_not():
+    value = "ey" + "JpZCI6" + "IkFiYzEyMyIs" * 9
+    assert redact(f"echo {value} | bw edit item x") == (
+        f"echo {_placeholder('blob', value)} | bw edit item x"
+    )
+    text = "cursor eyJwYWdlIjoyfQ next"
+    assert redact(text) is text
+
+
+def test_an_otpauth_uri_is_redacted_whole():
+    value = "otp" + "auth://totp/Acme:jp?secret=" + "JBSWY3DPEHPK3PXP" + "&issuer=Acme"
+    assert redact(f"uri {value} done") == f"uri {_placeholder('otpauth', value)} done"
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (
+            "G-482913 is your Google verification code.",
+            "G-[redacted code] is your Google verification code.",
+        ),
+        (
+            "\\nG-482913 is your Google verification code.",
+            "\\nG-[redacted code] is your Google verification code.",
+        ),
+        ("482913 is your Acme sign-in code", "[redacted code] is your Acme sign-in code"),
+        ("Your verification code is 482913.", "Your verification code is [redacted code]."),
+        ("Verification code: 4829", "Verification code: [redacted code]"),
+    ],
+)
+def test_a_one_time_code_beside_its_words_is_redacted_without_a_hash(text, expected):
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "build 482913 is your build number",
+        "in 2026 we shipped 123456 items",
+        "a [redacted code] stays as it is",
+    ],
+)
+def test_digits_without_code_words_are_left(text):
+    assert redact(text) is text
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Support PIN: 4821 thanks", "Support PIN: [redacted assignment] thanks"),
+        ('{"pin": "4821"}', '{"pin": "[redacted assignment]"}'),
+        ("PIN_CODE=123456", "PIN_CODE=[redacted assignment]"),
+        ("accountPasscode: 90210", "accountPasscode: [redacted assignment]"),
+    ],
+)
+def test_a_pin_of_digits_is_redacted(text, expected):
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text", ["pin=numpy", "pin: true", '{"pin": "latest"}', "spin: 1234", "pinned: 1234"]
+)
+def test_a_pin_name_without_digits_or_a_word_merely_containing_pin_is_left(text):
+    assert redact(text) is text
+
+
+def _bw_item():
+    return {
+        "object": "item",
+        "id": "0f0f",
+        "name": "Registrar",
+        "notes": "recovery 1234-5678 and the old pw",
+        "fields": [
+            {"name": "API Key", "value": "k3yv4lu3", "type": 0},
+            {"name": "Color", "value": "blue", "type": 0},
+            {"name": "Recovery", "value": "rc0d3s", "type": 1},
+            {"name": "Support PIN", "value": "4821", "type": 0},
+            {"name": "Unset", "value": None, "type": 1},
+        ],
+        "login": {"username": "jp", "password": "pw", "totp": "JBSWY3DPEHPK3PXP"},
+    }
+
+
+def _assert_bw_item_redacted(out):
+    for secret in ("recovery 1234-5678", "k3yv4lu3", "rc0d3s", "4821", "JBSWY3DPEHPK3PXP"):
+        assert secret not in out
+    assert "blue" in out and "Registrar" in out and '"jp"' in out.replace('\\"', '"')
+
+
+def test_a_vault_item_has_its_notes_secret_fields_and_totp_redacted():
+    import json
+
+    out = redact(json.dumps(_bw_item()))
+    _assert_bw_item_redacted(out)
+    assert '"value": null' in out
+
+
+def test_a_vault_item_inside_a_raw_jsonl_line_is_redacted_too():
+    import json
+
+    out = redact(json.dumps({"type": "tool_result", "content": json.dumps(_bw_item())}))
+    _assert_bw_item_redacted(out)
+
+
+def test_notes_outside_a_vault_item_are_left():
+    text = '{"notes": "meeting notes are fine", "object": "page"}'
+    assert redact(text) is text
+
+
+def test_a_field_named_as_nothing_secret_and_not_hidden_is_left():
+    text = '[{"name": "Color", "value": "blue", "type": 0}]'
+    assert redact(text) is text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "eyJ-" * 40000,
+        "eyJaaaaaaaa." * 40000,
+        ("123456 is your " + "a" * 50 + " ") * 2000,
+        '"name":"API Key","value":' * 5000,
+        "otpauth://" * 40000,
+        '\\"object\\":\\"item\\",\\"notes\\":' * 5000,
+    ],
+)
+def test_the_new_shapes_scan_long_adversarial_runs_in_linear_time(text):
+    import time
+
+    start = time.monotonic()
+    redact(text)
+    assert time.monotonic() - start < 2.0
+
+
+def test_a_second_pass_over_the_new_placeholders_changes_nothing():
+    import json
+
+    once = redact(json.dumps(_bw_item()) + " G-482913 is your Google verification code " + _jwt())
+    assert redact(once) == once
+
+
+# --- 2026-11-11 security review of #604 --------------------------------------------------------
+def test_a_pretty_printed_vault_item_is_redacted_plain_and_in_a_jsonl_line():
+    import json
+
+    pretty = json.dumps(_bw_item(), indent=2)
+    _assert_bw_item_redacted(redact(pretty))
+    _assert_bw_item_redacted(redact(json.dumps({"type": "tool_result", "content": pretty})))
+
+
+def test_a_hidden_field_with_type_before_value_is_redacted():
+    text = '[{"name": "Recovery", "type": 1, "value": "rc0d3s"}]'
+    assert redact(text) == '[{"name": "Recovery", "type": 1, "value": "[redacted assignment]"}]'
+    shown = '[{"name": "Color", "type": 0, "value": "blue"}]'
+    assert redact(shown) is shown
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("PIN: 1234 5678 thanks", "PIN: [redacted assignment] thanks"),
+        ('{"pin": "12-34-56"}', '{"pin": "[redacted assignment]"}'),
+        ("pin=4821-9930", "pin=[redacted assignment]"),
+    ],
+)
+def test_a_grouped_pin_is_redacted_whole(text, expected):
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        ("eyJaaaa" * 57 + ".eyJ" + "b" * 7990 + " ") * 40,
+        '"name":' + "\\n " * 40000,
+        '"name": "x"' + " ," * 40000,
+        '\\"object\\":' + "\\t" * 40000,
+    ],
+)
+def test_review_adversarial_runs_scan_in_linear_time(text):
+    import time
+
+    start = time.monotonic()
+    redact(text)
+    assert time.monotonic() - start < 2.0
+
+
+# --- 2026-11-11 cross-model review of #604 (gpt-6.1-sol, round 1) -----------------------------
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Your sign-in code is 482913.", "Your sign-in code is [redacted code]."),
+        ("Your security code is 482913.", "Your security code is [redacted code]."),
+        ("Your verification code:482913", "Your verification code:[redacted code]"),
+        ("482913 IS YOUR VERIFICATION CODE", "[redacted code] IS YOUR VERIFICATION CODE"),
+        ("Login code = 4829", "Login code = [redacted code]"),
+    ],
+)
+def test_one_time_codes_in_either_order_and_any_case(text, expected):
+    assert redact(text) == expected
+
+
+def test_a_jwt_whose_payload_is_not_compact_json_is_redacted():
+    value = "ey" + "JhbGciOiJIUzI1NiJ9" + ".e30." + "s1G" * 14
+    assert redact(f"token {value} end") == f"token {_placeholder('jwt', value)} end"
+
+
+def test_a_pretty_json_blob_is_redacted_and_a_long_path_is_not():
+    import base64
+    import json
+
+    blob = base64.b64encode(json.dumps(_bw_item(), indent=2).encode()).decode()
+    assert blob.startswith("ew")
+    assert redact(f"echo {blob} | bw edit item x") == (
+        f"echo {_placeholder('blob', blob)} | bw edit item x"
+    )
+    path = "see /var/n" + "ews/" + "abcd/" * 30 + " end"
+    assert redact(path) is path
+
+
+@pytest.mark.parametrize(
+    "obj",
+    [
+        '{"type": 1, "name": "Recovery", "value": "rc0d3s"}',
+        '{"value": "rc0d3s", "name": "Recovery", "type": 1}',
+        '{"value": "rc0d3s", "type": 0, "name": "Backup Password"}',
+        '{\\"type\\": 1, \\"name\\": \\"Recovery\\", \\"value\\": \\"rc0d3s\\"}',
+    ],
+)
+def test_a_field_is_judged_by_its_siblings_in_any_order(obj):
+    assert "rc0d3s" not in redact(f"[{obj}]")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '[{"type": 0, "value": "blue", "name": "Color"}]',
+        '{"type": 1, "value": "x1"}',
+        '{"value": "abc", "type": 1} and later {"name": "Password"}',
+    ],
+)
+def test_a_value_without_a_secret_sibling_in_its_own_object_is_left(text):
+    assert redact(text) is text
+
+
+def test_notes_after_a_sorted_item_object_key_are_redacted():
+    import json
+
+    out = redact(json.dumps(_bw_item(), sort_keys=True))
+    _assert_bw_item_redacted(out)
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("PIN: 4 8 2 1", "PIN: [redacted assignment]"),
+        ("PIN: 4-8-2-1.", "PIN: [redacted assignment]."),
+    ],
+)
+def test_a_pin_spelled_digit_by_digit_is_redacted(text, expected):
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("pin: 1234 5678 9012 3456 end", "pin: [redacted assignment] end"),
+        ("pin=12345678901234", "pin=[redacted assignment]"),
+    ],
+)
+def test_a_digit_run_longer_than_a_pin_is_replaced_whole(text, expected):
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "eyJ-",
+        "eyJaaaaaaaa.e",
+        '{"value": "x", ',
+        '"name": "a", "value": "b"} ',
+        "is your " * 3 + "code ",
+        "security code 1",
+        "pin: 1 ",
+    ],
+)
+def test_review_runs_scale_linearly(unit):
+    import time
+
+    def took(n):
+        start = time.monotonic()
+        redact(unit * n)
+        return time.monotonic() - start
+
+    small, big = took(5000), took(40000)
+    # Eight times the input; a quadratic scan would take ~64x. Allow noise on tiny timings.
+    assert big < 20 * small + 0.25
+
+
+# --- 2026-11-11 cross-model review of #604 (round 2) -------------------------------------------
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda n: "security code" + " " * n + "x",
+        lambda n: "security code is" + " " * n + ":" + " " * n + "x",
+        lambda n: "482913" + " is your" + " " * n + "x",
+        lambda n: '{"value": "v"' + " " * n + "}",
+    ],
+)
+def test_long_whitespace_runs_with_a_failing_suffix_scale_linearly(build):
+    import time
+
+    def took(n):
+        start = time.monotonic()
+        redact(build(n))
+        return time.monotonic() - start
+
+    small, big = took(5000), took(40000)
+    assert big < 20 * small + 0.25
+
+
+def test_notes_brought_near_their_item_by_a_shortened_password_are_redacted_in_one_pass():
+    text = '{"object":"item","password":"' + "a" * 5000 + '","notes":"recovery material"}'
+    once = redact(text)
+    assert "recovery material" not in once
+    assert redact(once) == once
+
+
+# --- 2026-11-11 automated security review of e90f8f26 ------------------------------------------
+@pytest.mark.parametrize(
+    "text, secret",
+    [
+        ('[{"name": "API {Key}", "value": "k3yv4l", "type": 0}]', "k3yv4l"),
+        ('[{"name": "Recovery", "value": "rc0d3s", "note": "a}b", "type": 1}]', "rc0d3s"),
+        ('{"name": "API Key", "value": "trunc4ted"', "trunc4ted"),
+        ('{\\"name\\": \\"API {Key}\\", \\"value\\": \\"k3yv4l\\"}', "k3yv4l"),
+    ],
+)
+def test_a_brace_in_a_string_or_a_missing_brace_does_not_hide_a_field(text, secret):
+    assert secret not in redact(text)
+
+
+def test_a_blob_after_a_slash_is_redacted():
+    value = "ey" + "JpZCI6" + "IkFiYzEyMyIs" * 9
+    assert value not in redact(f"GET /api/{value} 200")
+
+
+def test_a_field_cut_from_its_braces_still_finds_a_name_after_its_value():
+    assert "x9y8z7" not in redact('..."value": "x9y8z7", "name": "API Key", "type": 0')
+
+
+@pytest.mark.parametrize(
+    "unit",
+    [
+        '"value": "a", "s": "{{{{{{{{{{{{", ',
+        '"value": "a", "s": "}}}}}}}}}}}}", ',
+        '"s": "{", "value": "b", "t": "}", ',
+    ],
+)
+def test_braces_inside_strings_near_many_values_scale_linearly(unit):
+    import time
+
+    def took(n):
+        start = time.monotonic()
+        redact(unit * n)
+        return time.monotonic() - start
+
+    small, big = took(1000), took(8000)
+    assert big < 20 * small + 0.25
+
+
+# --- 2026-11-11 cross-model review of #604 (round 3) and security review of db2ba399 ----------
+def test_a_notes_cascade_past_the_pass_cap_fails_closed_and_is_a_fixed_point():
+    text = '{"object":"item",' + ",".join('"notes":"' + "a" * 5000 + '"' for _ in range(10)) + "}"
+    once = redact(text)
+    assert "a" * 5000 not in once
+    assert redact(once) == once
+
+
+def test_a_field_brought_within_reach_by_shortened_siblings_is_redacted_in_one_call():
+    tokens = ",".join('"token":"' + "b" * 1500 + '"' for _ in range(12))
+    text = '{"name":"API Key",' + tokens + ',"value":"k3yv4l"}'
+    once = redact(text)
+    assert "k3yv4l" not in once
+    assert redact(once) == once
+
+
+def test_the_wide_pass_redacts_a_field_out_of_reach():
+    cascade = (
+        '{"object":"item",' + ",".join('"notes":"' + "a" * 5000 + '"' for _ in range(10)) + "}"
+    )
+    far = '{"name":"API Key",' + ",".join(f'"x{i}":"' + "c" * 200 + '"' for i in range(8))
+    text = cascade + " " + far + ',"value":"k3yv4l"}'
+    once = redact(text)
+    assert "k3yv4l" not in once
+    assert redact(once) == once
+
+
+@pytest.mark.parametrize("escaped", [False, True])
+def test_an_escaped_backslash_before_a_closing_quote_does_not_hide_a_field(escaped):
+    import json
+
+    obj = json.dumps({"name": "API Key", "note": "a" * 400 + "\\", "value": "k3yv4l", "type": 0})
+    text = json.dumps({"content": obj}) if escaped else obj
+    assert "k3yv4l" not in redact(text)
+
+
+def test_any_secret_name_among_the_siblings_counts():
+    text = '{"name": "Color", "label": "x", "name": "Password", "value": "s3cr3tv"}'
+    assert "s3cr3tv" not in redact(text)
+
+
+# --- 2026-11-11 cross-model review of #604 (round 4) -------------------------------------------
+def test_the_wide_pass_finds_the_item_marker_once_not_per_notes_key():
+    import time
+
+    cascade = (
+        '{"object":"item",' + ",".join('"notes":"' + "a" * 5000 + '"' for _ in range(10)) + "}"
+    )
+
+    def took(n):
+        text = '{"notes":"x"},' * n + cascade
+        start = time.monotonic()
+        out = redact(text)
+        assert "a" * 5000 not in out
+        return time.monotonic() - start
+
+    small, big = took(2000), took(16000)
+    assert big < 20 * small + 0.25
+
+
+@pytest.mark.parametrize("escaped", [False, True])
+def test_an_odd_escaped_quote_and_a_brace_in_a_string_do_not_hide_a_field(escaped):
+    import json
+
+    # The name sits beyond the 300-character fallback, so only a correct quote count finds it.
+    obj = json.dumps(
+        {"name": "API Key", "pad": "p" * 400, "note": 'say " then {', "value": "k3yv4l"}
+    )
+    text = json.dumps({"content": obj}) if escaped else obj
+    assert "k3yv4l" not in redact(text)

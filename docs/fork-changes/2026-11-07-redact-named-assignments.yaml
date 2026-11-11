@@ -2,7 +2,7 @@ seq: 195
 id: redact-named-assignments
 date: '2026-11-07'
 bucket: Fixed
-commit: 8caeb5d
+commit: 6039e1d
 area: Privacy
 summary: a value printed beside a secret-ish name (an env dump, a config, a connection URL) is redacted on every write, and Google OAuth client secrets and every Slack token class are built-in shapes
 body: |

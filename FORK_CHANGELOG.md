@@ -18,13 +18,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-11-11]
+
+
+### Fixed
+
+
+- **bare JWTs, base64 vault-item blobs, otpauth URIs, one-time codes, PINs, TOTP seeds and Bitwarden notes and secret custom fields are redacted on every write, and a Google client secret of any tail from 24 characters** (`HEAD` — pending resolution)
+  The 2026-11-07..09 leak sweeps found secrets that #603's shapes and
+  named-assignment pass still let through: Home Assistant long-lived tokens
+  printed as bare JWTs, a `bw encode` blob (a whole vault item in base64), a
+  Google sign-in code, a registrar support PIN, a vault item's TOTP seed,
+  notes and custom fields, and an OAuth client secret with a 29-character tail.
+  New shapes: `jwt` (an `eyJ` header, any base64url JSON payload, bounded
+  parts), `blob` (base64 JSON from 99 characters, compact or pretty, at the
+  start of a run) and `otpauth` (the whole URI). `google` takes any `GOCSPX-`
+  tail of 24 or more. One-time codes beside their words ("G-482913 is your
+  Google verification code", "Your sign-in code is 482913"), either order,
+  any case, have only their digits replaced, with no hash. `totp`/`otp` are
+  secret names; a PIN name (`pin`, `pin_code`, `passcode`) takes 4 or more digits,
+  grouped or spelled out, the whole run. A Bitwarden custom field's
+  value is redacted when a sibling in its own object, in any key order, is a
+  secret-ish `name` or a hidden `"type": 1`; `notes` near `"object": "item"`
+  (before or after it, so `jq -S` output too). Passes repeat until nothing
+  changes; a cascade past 8 fails closed to one distance-free pass. Compact,
+  pretty-printed and
+  JSONL-escaped JSON are all read.
+
+
 ## [2026-11-07]
 
 
 ### Fixed
 
 
-- **a value printed beside a secret-ish name (an env dump, a config, a connection URL) is redacted on every write, and Google OAuth client secrets and every Slack token class are built-in shapes** ([`8caeb5d`](https://github.com/techempower-org/mempalace/commit/8caeb5d))
+- **a value printed beside a secret-ish name (an env dump, a config, a connection URL) is redacted on every write, and Google OAuth client secrets and every Slack token class are built-in shapes** ([`6039e1d`](https://github.com/techempower-org/mempalace/commit/6039e1d))
   Redaction on write (#596) matched provider-prefixed tokens only, so a bare
   database password or `NEXTAUTH_SECRET` printed in an env dump would have
   reached a drawer as written; on 2026-11-07 an OAuth client secret
