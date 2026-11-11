@@ -289,3 +289,42 @@ def test_every_proposal_in_the_document_is_inside_the_limits(tmp_path, monkeypat
     doc, _ = nightly.run(root, [md], _embed, None, {}, day="2026-11-12")
     assert doc["proposals"]
     assert all(len(p["summary"]) <= 40 for p in doc["proposals"])
+
+
+@pytest.mark.parametrize("day", ["../x", "", "2026-02-30"])
+def test_the_cli_refuses_a_bad_day_before_creating_anything(tmp_path, day):
+    root, md = _tree(tmp_path)
+    out = tmp_path / "o"
+    with pytest.raises(ValueError):
+        main(
+            [
+                "nightly",
+                "--memory-root",
+                str(root),
+                "--claude-md",
+                str(md),
+                "--out",
+                str(out),
+                "--day",
+                day,
+                "--min-available-mb",
+                "0",
+            ]
+        )
+    assert not out.exists()
+
+
+def test_a_first_run_store_lands_in_a_private_folder(tmp_path):
+    store = tmp_path / "fresh" / "decisions.json"
+    old = os.umask(0o022)
+    try:
+        nightly.load_decisions(store, first_run=True)
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE(os.stat(store.parent).st_mode) == 0o700
+
+
+def test_run_treats_an_empty_day_as_an_error_not_today(tmp_path):
+    root, md = _tree(tmp_path)
+    with pytest.raises(ValueError):
+        nightly.run(root, [md], _embed, None, {}, day="")

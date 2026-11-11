@@ -57,11 +57,15 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     if args.step == "nightly":
+        # Every check before anything is created: a bad --day writes nothing at all.
+        if args.day is not None:
+            nightly.check_day(args.day)
         guard = nightly.memory_guard(args.min_available_mb)
         reason = guard()
         if reason:
             print(f"not starting: {reason}")
             return 4
+        nightly.private_dir(args.out)
         doc, seen = nightly.run(
             args.memory_root,
             _claude_md(args),

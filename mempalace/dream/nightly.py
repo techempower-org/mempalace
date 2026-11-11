@@ -64,7 +64,7 @@ def load_decisions(path: Path, first_run: bool) -> Dict[str, dict]:
     empty, once, exclusively; after that a missing, unreadable or malformed one is an error, so
     a deleted or half-written file can never bring a rejection back."""
     if first_run and not os.path.lexists(path):
-        path.parent.mkdir(parents=True, exist_ok=True)
+        private_dir(path.parent)
         try:
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
         except FileExistsError:
@@ -149,7 +149,7 @@ def run(
         steps["contradictions"] = stats
     else:
         steps["contradictions"] = {"skipped": True}
-    day = check_day(day or _dt.date.today().isoformat())
+    day = check_day(day) if day is not None else _dt.date.today().isoformat()
     seen = dict(seen or {})
     out, dropped = [], 0
     for p in proposals:
@@ -221,6 +221,13 @@ def within_size(doc: dict) -> dict:
     return out
 
 
+def private_dir(path: Path) -> Path:
+    """``path`` as a 0700 folder (created if needed) before anything private goes into it."""
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path, 0o700)
+    return path
+
+
 def check_day(day: str) -> str:
     """A canonical YYYY-MM-DD, so a day can only ever name a file directly in the folder."""
     if not isinstance(day, str) or not _DAY.fullmatch(day):
@@ -256,8 +263,7 @@ def publish(doc: dict, publish_dir: Path, seen: Optional[Dict[str, str]] = None)
     text = json.dumps(doc, indent=2) + "\n"
     if len(text.encode()) > MAX_BYTES:
         raise TooLarge(f"{len(text.encode())} bytes; limit {MAX_BYTES}")
-    publish_dir.mkdir(parents=True, exist_ok=True)
-    os.chmod(publish_dir, 0o700)
+    private_dir(publish_dir)
     day = publish_dir / f"{name}.json"
     # The ledger first and latest.json last: a run that stops part way never shows a document
     # whose first-seen nights were not saved.
