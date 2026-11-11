@@ -561,3 +561,170 @@ def test_every_slack_token_class_is_redacted(value):
 def test_slack_placeholders_in_docs_are_left_alone():
     text = "paste the xoxb-your-token or the xapp-... from the app page"
     assert redact(text) is text
+
+
+# --- 2026-11-11: the shapes queued after the 11-07..11-09 leaks -------------------------------
+GOCSPX = "GOC" + "SPX-"
+
+
+@pytest.mark.parametrize("tail", [24, 28, 29, 32])
+def test_a_google_client_secret_of_any_tail_from_24_is_redacted(tail):
+    value = GOCSPX + ("Ab3_9" * 8)[:tail]
+    assert redact(f"secret {value} end") == f"secret {_placeholder('google', value)} end"
+
+
+def test_a_google_client_secret_prefix_with_a_short_tail_is_left():
+    text = "see " + GOCSPX + "abc in the docs"
+    assert redact(text) is text
+
+
+def _jwt():
+    return "ey" + "JhbGciOiJIUzI1NiJ9" + ".ey" + "JzdWIiOiI0MmMxIiwiaWF0IjoxfQ" + "." + "s1G" * 14
+
+
+@pytest.mark.parametrize("prefix", ["HA_TOKEN ", "Bearer ", "\\n", "token="])
+def test_a_bare_jwt_is_redacted_wherever_it_is_printed(prefix):
+    value = _jwt()
+    out = redact(f"{prefix}{value} end")
+    assert value not in out
+    assert "[redacted jwt sha256:" in out or "[redacted assignment]" in out
+
+
+def test_a_base64_json_blob_is_redacted_and_a_short_one_is_not():
+    value = "ey" + "JpZCI6" + "IkFiYzEyMyIs" * 9
+    assert redact(f"echo {value} | bw edit item x") == (
+        f"echo {_placeholder('blob', value)} | bw edit item x"
+    )
+    text = "cursor eyJwYWdlIjoyfQ next"
+    assert redact(text) is text
+
+
+def test_an_otpauth_uri_is_redacted_whole():
+    value = "otp" + "auth://totp/Acme:jp?secret=" + "JBSWY3DPEHPK3PXP" + "&issuer=Acme"
+    assert redact(f"uri {value} done") == f"uri {_placeholder('otpauth', value)} done"
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (
+            "G-482913 is your Google verification code.",
+            "[redacted code] is your Google verification code.",
+        ),
+        (
+            "\\nG-482913 is your Google verification code.",
+            "\\n[redacted code] is your Google verification code.",
+        ),
+        ("482913 is your Acme sign-in code", "[redacted code] is your Acme sign-in code"),
+        ("Your verification code is 482913.", "Your verification code is [redacted code]."),
+        ("Verification code: 4829", "Verification code: [redacted code]"),
+    ],
+)
+def test_a_one_time_code_beside_its_words_is_redacted_without_a_hash(text, expected):
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "build 482913 is your build number",
+        "in 2026 we shipped 123456 items",
+        "a [redacted code] stays as it is",
+    ],
+)
+def test_digits_without_code_words_are_left(text):
+    assert redact(text) is text
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Support PIN: 4821 thanks", "Support PIN: [redacted assignment] thanks"),
+        ('{"pin": "4821"}', '{"pin": "[redacted assignment]"}'),
+        ("PIN_CODE=123456", "PIN_CODE=[redacted assignment]"),
+        ("accountPasscode: 90210", "accountPasscode: [redacted assignment]"),
+    ],
+)
+def test_a_pin_of_digits_is_redacted(text, expected):
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text", ["pin=numpy", "pin: true", '{"pin": "latest"}', "spin: 1234", "pinned: 1234"]
+)
+def test_a_pin_name_without_digits_or_a_word_merely_containing_pin_is_left(text):
+    assert redact(text) is text
+
+
+def _bw_item():
+    return {
+        "object": "item",
+        "id": "0f0f",
+        "name": "Registrar",
+        "notes": "recovery 1234-5678 and the old pw",
+        "fields": [
+            {"name": "API Key", "value": "k3yv4lu3", "type": 0},
+            {"name": "Color", "value": "blue", "type": 0},
+            {"name": "Recovery", "value": "rc0d3s", "type": 1},
+            {"name": "Support PIN", "value": "4821", "type": 0},
+            {"name": "Unset", "value": None, "type": 1},
+        ],
+        "login": {"username": "jp", "password": "pw", "totp": "JBSWY3DPEHPK3PXP"},
+    }
+
+
+def _assert_bw_item_redacted(out):
+    for secret in ("recovery 1234-5678", "k3yv4lu3", "rc0d3s", "4821", "JBSWY3DPEHPK3PXP"):
+        assert secret not in out
+    assert "blue" in out and "Registrar" in out and '"jp"' in out.replace('\\"', '"')
+
+
+def test_a_vault_item_has_its_notes_secret_fields_and_totp_redacted():
+    import json
+
+    out = redact(json.dumps(_bw_item()))
+    _assert_bw_item_redacted(out)
+    assert '"value": null' in out
+
+
+def test_a_vault_item_inside_a_raw_jsonl_line_is_redacted_too():
+    import json
+
+    out = redact(json.dumps({"type": "tool_result", "content": json.dumps(_bw_item())}))
+    _assert_bw_item_redacted(out)
+
+
+def test_notes_outside_a_vault_item_are_left():
+    text = '{"notes": "meeting notes are fine", "object": "page"}'
+    assert redact(text) is text
+
+
+def test_a_field_named_as_nothing_secret_and_not_hidden_is_left():
+    text = '[{"name": "Color", "value": "blue", "type": 0}]'
+    assert redact(text) is text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "eyJ-" * 40000,
+        "eyJaaaaaaaa." * 40000,
+        ("123456 is your " + "a" * 50 + " ") * 2000,
+        '"name":"API Key","value":' * 5000,
+        "otpauth://" * 40000,
+        '\\"object\\":\\"item\\",\\"notes\\":' * 5000,
+    ],
+)
+def test_the_new_shapes_scan_long_adversarial_runs_in_linear_time(text):
+    import time
+
+    start = time.monotonic()
+    redact(text)
+    assert time.monotonic() - start < 2.0
+
+
+def test_a_second_pass_over_the_new_placeholders_changes_nothing():
+    import json
+
+    once = redact(json.dumps(_bw_item()) + " G-482913 is your Google verification code " + _jwt())
+    assert redact(once) == once

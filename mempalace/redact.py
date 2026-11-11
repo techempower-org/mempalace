@@ -11,7 +11,8 @@ metadata through :func:`redact` before the backend sees them; see
 already holds a candidate check it against the drawer (a vault item, a leak
 report); for a provider token, a long random string, it recovers nothing. A
 match of a configured pattern, which may be a guessable value, is
-``[redacted custom]`` with no hash. Existing placeholders are
+``[redacted custom]`` with no hash, and so is a one-time code
+(``[redacted code]``), six digits being easy to guess. Existing placeholders are
 never matched again, so a write is redacted the same way however many layers
 pass it through.
 
@@ -31,6 +32,10 @@ name and writes ``[redacted assignment]``; one printed alone passes through.
 A quoted value, or one after a tight ``=``, is replaced whatever it looks
 like; a bare value after ``: `` or `` = `` (YAML, prose, code) only when it is
 8+ characters of two or more kinds, so ``password: hunter2`` stays readable.
+A PIN name takes only a value of 4-12 digits. A Bitwarden custom field is
+redacted by its sibling ``name`` or when it is hidden (``"type": 1``), and an
+item's ``notes`` only inside ``bw`` item JSON. A one-time code is caught only
+beside the words that say what it is ("is your Google verification code").
 A quote that never closes leaves only its first word redacted. Embeddings passed in by
 the caller were computed from the text before redaction. Configured patterns
 are trusted like the rest of the config: one with nested quantifiers can
@@ -58,10 +63,30 @@ DEFAULT_PATTERNS: Dict[str, str] = {
     "slack": r"(?:xox[abposre](?:\.xox[abposre])?|xapp)-[0-9]+-[A-Za-z0-9-]{20,}",
     "aws": r"(?:AKIA|ASIA)[0-9A-Z]{16}",
     # An API key, and an OAuth client secret (2026-11-07: one read off the GCP console was mined).
-    "google": r"AIza[0-9A-Za-z_-]{35}|GOCSPX-[0-9A-Za-z_-]{28}(?![0-9A-Za-z_-])",
+    # The secret's tail is 28 characters today; a 29-character one was leaked too, so any 24+.
+    "google": r"AIza[0-9A-Za-z_-]{35}|GOCSPX-[0-9A-Za-z_-]{24,}",
     # No word boundary: a raw JSONL line holds a literal "\n" escape right before the token.
     "notion": r"ntn_[A-Za-z0-9]{40,}|secret_[A-Za-z0-9]{43}(?![A-Za-z0-9])",
+    # A signed JWT: header and payload are base64url JSON objects, so both start "eyJ"
+    # (2026-11-09: Home Assistant long-lived tokens, printed bare, were mined).
+    # Each part is bounded, so a long run of "eyJ-eyJ-…" with no dot is scanned in linear time.
+    "jwt": r"eyJ[A-Za-z0-9_-]{8,400}\.eyJ[A-Za-z0-9_-]{8,8000}\.[A-Za-z0-9_-]{16,1000}",
+    # A long base64 JSON object: ``bw encode`` output passed to ``bw edit`` carries the whole vault
+    # item, password and all (2026-11-07). A short one ("eyJ" + a cursor) is left alone.
+    "blob": r"eyJ[A-Za-z0-9+/]{97,}={0,2}",
+    # A TOTP or HOTP provisioning URI: its secret= is the second factor's seed.
+    "otpauth": r"otpauth://[A-Za-z]{4}/[^\s\"'\\<>]+",
+    # A one-time code beside the words that say what it is (2026-11-08: a Google sign-in code was
+    # mined). Short and guessable, so it gets no hash. A code in other prose passes through.
+    "code": r"(?:G-|(?<![0-9-]))[0-9]{6}(?=[ \t]+is[ \t]+your[ \t]+(?:[A-Za-z]+[ \t]+){0,3}"
+    r"(?i:verification|sign-in|security|login)[ \t]+code)"
+    r"|(?:(?<=(?i:verification code: ))|(?<=(?i:verification code is ))|(?<=(?i:verification code ))"
+    r")[0-9]{4,8}(?![0-9])",
 }
+
+# Kinds whose value may be short or guessable: an unkeyed hash of one would let any reader test
+# guesses, so the placeholder carries none.
+_UNHASHED = {"custom": "[redacted custom]", "code": "[redacted code]"}
 
 
 class SecretPatternsUnavailable(RuntimeError):
@@ -72,7 +97,7 @@ class SecretPatternsUnavailable(RuntimeError):
 # A placeholder this module wrote. Every pass matches it first and keeps it as it is, so a later
 # pass never rewrites an earlier one's work, and redaction is idempotent even when a configured
 # pattern would match its hex.
-_PLACEHOLDER = r"\[redacted (?:[a-z]+ sha256:[0-9a-f]{8}|custom|assignment)\]"
+_PLACEHOLDER = r"\[redacted (?:[a-z]+ sha256:[0-9a-f]{8}|custom|code|assignment)\]"
 
 Pass = Tuple[re.Pattern, List[str]]
 
@@ -158,10 +183,10 @@ def patterns() -> List[Pass]:
 
 
 def _placeholder(kind: str, value: str) -> str:
-    if kind == "custom":
-        # A configured pattern may catch a guessable value (a password); an unkeyed hash of it
-        # would let any reader test guesses, so it gets none.
-        return "[redacted custom]"
+    if kind in _UNHASHED:
+        # A configured pattern may catch a guessable value (a password), and a one-time code is
+        # six digits; an unkeyed hash of either would let any reader test guesses.
+        return _UNHASHED[kind]
     return f"[redacted {kind} sha256:{hashlib.sha256(value.encode()).hexdigest()[:8]}]"
 
 
@@ -197,7 +222,7 @@ def redact(text: str) -> str:
 # "SECRET_FILE" are not secret names.
 _SECRET_NAME = re.compile(
     r"(?:^|(?<=[_.\-])|(?<=[a-z0-9])(?=[A-Z]))"
-    r"(?i:pass(?:word|wd|phrase)?|pwd|secret|token|credentials?|"
+    r"(?i:pass(?:word|wd|phrase)?|pwd|secret|token|credentials?|t?otp|"
     r"(?:api|access|private|secret|encryption|signing|auth|master|client)[_\-]?key)$"
 )
 
@@ -412,15 +437,92 @@ def _redact_url_passwords(text: str) -> str:
     return "".join(out)
 
 
+# A PIN is short and all digits, which the prose rule above would leave ("PIN: 4821", 2026-11-08: a
+# registrar's support PIN was mined). So a PIN name takes a value of 4-12 digits, in any form, and
+# nothing else: "pin: true" and "pin=numpy" are left.
+_PIN_NAME = re.compile(
+    r"(?:^|(?<=[_.\-])|(?<=[a-z0-9])(?=[A-Z]))(?i:pin(?:[_\-]?(?:code|number))?|passcode)$"
+)
+_PIN_DIGITS = re.compile(r"[0-9]{4,12}(?![0-9A-Za-z])")
+
+# A Bitwarden custom field, {"name": "…", "value": "…", "type": N}: the value's own key says
+# nothing, its sibling "name" does ("API Key", "Recovery PIN"), and type 1 is a hidden field, a
+# secret by the vault's own account. Also inside a raw JSONL line, where every quote is \".
+_FIELD = re.compile(
+    r'(?P<q>\\?)"name(?P=q)"[ \t]*:[ \t]*(?P=q)"(?P<fname>[^"\\\n]{1,100})(?P=q)"'
+    r'[ \t]*,[ \t]*(?P=q)"value(?P=q)"[ \t]*:[ \t]*'
+)
+_HIDDEN_TYPE = re.compile(r'[ \t]*,[ \t]*\\?"type\\?"[ \t]*:[ \t]*1(?![0-9])')
+_FIELD_NAME_SEP = re.compile(r"[\s\-]+")
+# A vault item's free-text notes often hold what its other fields do not (recovery codes, a PIN,
+# a second password). "notes" is redacted only inside one: "object": "item" a little before it,
+# as `bw get item` prints the item.
+_BW_ITEM = re.compile(r'\\?"object\\?"[ \t]*:[ \t]*\\?"item\\?"')
+_BW_ITEM_WINDOW = 1500
+
+
+def _pin_span(text: str, key: re.Match):
+    at = key.end()
+    q = _quoted(text, at)
+    if q:
+        return q if _PIN_DIGITS.fullmatch(text, q[0], q[1]) else None
+    v = _PIN_DIGITS.match(text, at)
+    return v.span() if v else None
+
+
+def _secret_field(name: str) -> bool:
+    words = _FIELD_NAME_SEP.sub("_", name.strip())
+    return bool(_SECRET_NAME.search(words) or _PIN_NAME.search(words))
+
+
+def _redact_fields(text: str) -> str:
+    if '"value' not in text:
+        return text
+    out, pos = [], 0
+    for m in _FIELD.finditer(text):
+        if m.start() < pos:
+            continue
+        span = _quoted(text, m.end())
+        if not span:
+            continue  # null, a number, or an unclosed string
+        close = span[1] + (2 if m.group("q") else 1)
+        if not (_secret_field(m.group("fname")) or _HIDDEN_TYPE.match(text, close)):
+            continue
+        if _placeholder_value(text[span[0] : span[1]]):
+            continue
+        out.append(text[pos : span[0]])
+        out.append(ASSIGNMENT_PLACEHOLDER)
+        pos = span[1]
+    if not out:
+        return text
+    out.append(text[pos:])
+    return "".join(out)
+
+
+def _bw_notes(text: str, key: re.Match) -> bool:
+    after = key.end("name")
+    quoted = text.startswith('"', after) or text.startswith('\\"', after)
+    if key.group("name") != "notes" or not quoted:
+        return False
+    return _BW_ITEM.search(text, max(0, key.start() - _BW_ITEM_WINDOW), key.start()) is not None
+
+
 def _redact_assignments(text: str) -> str:
     if "=" not in text and ":" not in text:
         return text
     text = _redact_url_passwords(text)
+    text = _redact_fields(text)
     out, pos = [], 0
     for k in _KEY.finditer(text):
-        if k.start() < pos or not _SECRET_NAME.search(k.group("name")):
+        if k.start() < pos:
             continue
-        span = _value_span(text, k)
+        name = k.group("name")
+        if _SECRET_NAME.search(name) or _bw_notes(text, k):
+            span = _value_span(text, k)
+        elif _PIN_NAME.search(name):
+            span = _pin_span(text, k)
+        else:
+            continue
         if span is None:
             continue
         out.append(text[pos : span[0]])
