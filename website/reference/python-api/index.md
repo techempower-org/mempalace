@@ -167,6 +167,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 
 ### dream
 
+- [`mempalace.dream.contradictions`](./dream/contradictions) — Dream day 2: feedback memories that contradict a CLAUDE.md rule, judged by a local model.
 - [`mempalace.dream.inventory`](./dream/inventory) — Dream day 1: an inventory that needs no model.
 
 ### integrations

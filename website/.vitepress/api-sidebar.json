@@ -612,6 +612,10 @@
     "collapsed": true,
     "items": [
       {
+        "text": "mempalace.dream.contradictions",
+        "link": "/reference/python-api/dream/contradictions"
+      },
+      {
         "text": "mempalace.dream.inventory",
         "link": "/reference/python-api/dream/inventory"
       }
