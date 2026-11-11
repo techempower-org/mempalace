@@ -24,6 +24,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **dream day 2, `python -m mempalace.dream contradictions`, asks a local model whether a feedback memory contradicts a CLAUDE.md rule that governs it, on similarity-prefiltered pairs, and proposes only the contradictions** (`HEAD` — pending resolution)
+  Every normative rule and every feedback memory is embedded once through
+  palace-daemon `/embed`; each memory is paired with its nearest rules at cosine
+  0.55 or more (two per memory, 60 pairs at most, closest first). A rule in the
+  global CLAUDE.md governs every project; one in a project's CLAUDE.md only that
+  project's memories, matched by Claude Code's project-folder encoding, so a lesson
+  saved in one repo is never weighed against another's rules. A local
+  OpenAI-compatible model (qwen36-coder by default; URL, model and key from the
+  environment) answers contradict / consistent / unrelated with thinking turned off
+  (a reasoning model otherwise spent its whole budget and answered nothing). Only
+  contradictions become proposals, labelled unreviewed. The first failed judgement
+  stops the pass with the error in the stats file; nothing is retried. First real
+  run: 60 pairs judged in 134 s, 4 contradictions, all against global rules.
+
+
 - **dream day 1, `python -m mempalace.dream inventory`, proposes oversized MEMORY.md indexes, CLAUDE.md rules with no named mechanism, and near-duplicate feedback memories, without editing any input** (`HEAD` — pending resolution)
   First step of the dreaming decision (docs/superpowers/specs/2026-11-05-dreaming-decision.md):
   read-only checks that need no model. `oversized-index` flags a memory folder's
