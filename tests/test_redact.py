@@ -851,9 +851,15 @@ def test_a_pin_spelled_digit_by_digit_is_redacted(text, expected):
     assert redact(text) == expected
 
 
-@pytest.mark.parametrize("text", ["pin: 1234 5678 9012 3456", "pin=12345678901234"])
-def test_a_digit_run_longer_than_a_pin_is_left_whole(text):
-    assert redact(text) is text
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("pin: 1234 5678 9012 3456 end", "pin: [redacted assignment] end"),
+        ("pin=12345678901234", "pin=[redacted assignment]"),
+    ],
+)
+def test_a_digit_run_longer_than_a_pin_is_replaced_whole(text, expected):
+    assert redact(text) == expected
 
 
 @pytest.mark.parametrize(
@@ -879,3 +885,55 @@ def test_review_runs_scale_linearly(unit):
     small, big = took(5000), took(40000)
     # Eight times the input; a quadratic scan would take ~64x. Allow noise on tiny timings.
     assert big < 20 * small + 0.25
+
+
+# --- 2026-11-11 cross-model review of #604 (round 2) -------------------------------------------
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda n: "security code" + " " * n + "x",
+        lambda n: "security code is" + " " * n + ":" + " " * n + "x",
+        lambda n: "482913" + " is your" + " " * n + "x",
+        lambda n: '{"value": "v"' + " " * n + "}",
+    ],
+)
+def test_long_whitespace_runs_with_a_failing_suffix_scale_linearly(build):
+    import time
+
+    def took(n):
+        start = time.monotonic()
+        redact(build(n))
+        return time.monotonic() - start
+
+    small, big = took(5000), took(40000)
+    assert big < 20 * small + 0.25
+
+
+def test_notes_brought_near_their_item_by_a_shortened_password_are_redacted_in_one_pass():
+    text = '{"object":"item","password":"' + "a" * 5000 + '","notes":"recovery material"}'
+    once = redact(text)
+    assert "recovery material" not in once
+    assert redact(once) == once
+
+
+# --- 2026-11-11 automated security review of e90f8f26 ------------------------------------------
+@pytest.mark.parametrize(
+    "text, secret",
+    [
+        ('[{"name": "API {Key}", "value": "k3yv4l", "type": 0}]', "k3yv4l"),
+        ('[{"name": "Recovery", "value": "rc0d3s", "note": "a}b", "type": 1}]', "rc0d3s"),
+        ('{"name": "API Key", "value": "trunc4ted"', "trunc4ted"),
+        ('{\\"name\\": \\"API {Key}\\", \\"value\\": \\"k3yv4l\\"}', "k3yv4l"),
+    ],
+)
+def test_a_brace_in_a_string_or_a_missing_brace_does_not_hide_a_field(text, secret):
+    assert secret not in redact(text)
+
+
+def test_a_blob_after_a_slash_is_redacted():
+    value = "ey" + "JpZCI6" + "IkFiYzEyMyIs" * 9
+    assert value not in redact(f"GET /api/{value} 200")
+
+
+def test_a_field_cut_from_its_braces_still_finds_a_name_after_its_value():
+    assert "x9y8z7" not in redact('..."value": "x9y8z7", "name": "API Key", "type": 0')

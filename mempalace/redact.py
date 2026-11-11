@@ -32,7 +32,7 @@ name and writes ``[redacted assignment]``; one printed alone passes through.
 A quoted value, or one after a tight ``=``, is replaced whatever it looks
 like; a bare value after ``: `` or `` = `` (YAML, prose, code) only when it is
 8+ characters of two or more kinds, so ``password: hunter2`` stays readable.
-A PIN name takes only 4-12 digits (grouped or spelled out). A Bitwarden
+A PIN name takes only a run of 4+ digits (grouped or spelled out). A Bitwarden
 custom field is redacted by a secret-ish sibling ``name`` or a hidden
 ``"type": 1`` in its own object, in any key order, and an item's ``notes``
 only near ``"object": "item"`` (proximity: an adjacent ``notes`` may be
@@ -79,7 +79,7 @@ DEFAULT_PATTERNS: Dict[str, str] = {
     # item, password and all (2026-11-07). Compact JSON encodes to "eyJ", pretty JSON to "ewo",
     # "ew0" or "eyA". It must start a run (or follow a raw JSONL escape), so a long path holding
     # "…news/…" is not taken from its middle. A short one ("eyJ" + a cursor) is left alone.
-    "blob": r"(?:(?<![A-Za-z0-9+/])|(?<=\\[nrt]))e[wy][A-Za-z0-9+/]{98,}={0,2}",
+    "blob": r"(?:(?<![A-Za-z0-9+])|(?<=\\[nrt]))e[wy][A-Za-z0-9+/]{98,}={0,2}",
     # A TOTP or HOTP provisioning URI: its secret= is the second factor's seed.
     "otpauth": r"otpauth://[A-Za-z]{4}/[^\s\"'\\<>]+",
 }
@@ -206,8 +206,19 @@ def redact(text: str) -> str:
 
         clean = combined.sub(replace, clean)
     clean = _redact_codes(clean)
-    clean = _redact_assignments(clean)
+    # Named values are judged partly by distance (a field's braces, a vault item's marker), and
+    # replacing one value moves its neighbours closer or further. Each pass only adds placeholders
+    # (a placeholder is never replaced), so repeating until nothing changes ends, and leaves text a
+    # second redact() would not change.
+    for _ in range(_ASSIGNMENT_PASSES):
+        again = _redact_assignments(clean)
+        if again == clean:
+            break
+        clean = again
     return text if clean == text else clean
+
+
+_ASSIGNMENT_PASSES = 8
 
 
 # A one-time code beside the words that say what it is, either way round: "G-482913 is your Google
@@ -221,7 +232,7 @@ _CODE = re.compile(
     + r"[ \t]+code"
     + r"|"
     + _CODE_WORD
-    + r"[ \t]+code(?:[ \t]+is)?[ \t]*[:=]?[ \t]*(?:G-)?(?P<b>[0-9]{4,8})(?![0-9]))"
+    + r"[ \t]+code(?:[ \t]+is)?[ \t]*(?:[:=][ \t]*)?(?:G-)?(?P<b>[0-9]{4,8})(?![0-9]))"
 )
 CODE_PLACEHOLDER = "[redacted code]"
 
@@ -475,9 +486,9 @@ def _redact_url_passwords(text: str) -> str:
 _PIN_NAME = re.compile(
     r"(?:^|(?<=[_.\-])|(?<=[a-z0-9])(?=[A-Z]))(?i:pin(?:[_\-]?(?:code|number))?|passcode)$"
 )
-# 4-12 digits, each optionally after one space or "-" ("4821", "1234 5678", "4 8 2 1"), taken
-# whole or not at all: a longer run of digits is not a PIN, and none of it is replaced.
-_PIN_DIGITS = re.compile(r"[0-9](?:[ \-]?[0-9]){3,11}(?![0-9A-Za-z\-]|[ \-][0-9])")
+# 4 or more digits, each optionally after one space or "-" ("4821", "1234 5678", "4 8 2 1"),
+# taken whole: a longer run after a PIN name (a card number?) is replaced too, never cut short.
+_PIN_DIGITS = re.compile(r"[0-9](?:[ \-]?[0-9]){3,}(?![0-9A-Za-z])")
 
 # A Bitwarden custom field, {"name": "…", "value": "…", "type": N}: the value's own key says
 # nothing, its sibling "name" does ("API Key", "Recovery PIN"), and type 1 is a hidden field, a
@@ -496,7 +507,8 @@ _FIELD_NAME = re.compile(
 _FIELD_HIDDEN = re.compile(r'\\?"type\\?"' + _WS + ":" + _WS + r"1(?![0-9])")
 # How far from a "value" its object's braces are looked for: a field object is small.
 _FIELD_REACH = 1000
-_FIELD_NAME_SEP = re.compile(r"[\s\-]+")
+_FIELD_FALLBACK = 300
+_FIELD_NAME_SEP = re.compile(r"[^A-Za-z0-9]+")
 # A vault item's free-text notes often hold what its other fields do not (recovery codes, a PIN,
 # a second password). "notes" is redacted only near "object": "item", before it as `bw get item`
 # prints it or after it as `jq -S` sorts it. Proximity, not containment: a "notes" just after a
@@ -515,18 +527,36 @@ def _pin_span(text: str, key: re.Match):
 
 
 def _secret_field(name: str) -> bool:
-    words = _FIELD_NAME_SEP.sub("_", name.strip())
+    words = _FIELD_NAME_SEP.sub("_", name).strip("_")
     return bool(_SECRET_NAME.search(words) or _PIN_NAME.search(words))
 
 
-def _field_siblings(text: str, key_start: int, value_end: int):
-    """The text of the object around a "value", less the value itself; None when no braces close
-    it within reach."""
-    lo = text.rfind("{", max(0, key_start - _FIELD_REACH), key_start)
-    hi = text.find("}", value_end, value_end + _FIELD_REACH)
-    if lo == -1 or hi == -1:
-        return None
-    return text[lo:key_start] + text[value_end:hi]
+def _structural_quotes(segment: str, escaped: bool) -> int:
+    """How many quotes in ``segment`` open or close a string: "..." not after a backslash, or in a
+    raw JSONL line \"...\" not after a second backslash."""
+    if escaped:
+        return len(re.findall(r'(?<!\\)\\"', segment))
+    return len(re.findall(r'(?<!\\)"', segment))
+
+
+def _field_siblings(text: str, key_start: int, value_end: int, escaped: bool):
+    """The text of the object around a "value", less the value itself. A brace inside a string
+    (an odd number of quotes away) is skipped. When no brace closes it within reach, the text
+    within reach on each side stands in: a neighbour's name may then count, which over-redacts and
+    never leaks."""
+    floor = max(0, key_start - _FIELD_REACH)
+    lo = text.rfind("{", floor, key_start)
+    while lo != -1 and _structural_quotes(text[lo:key_start], escaped) % 2:
+        lo = text.rfind("{", floor, lo)
+    ceiling = value_end + _FIELD_REACH
+    hi = text.find("}", value_end, ceiling)
+    while hi != -1 and _structural_quotes(text[value_end:hi], escaped) % 2:
+        hi = text.find("}", hi + 1, ceiling)
+    before = (
+        text[lo:key_start] if lo != -1 else text[max(0, key_start - _FIELD_FALLBACK) : key_start]
+    )
+    after = text[value_end:hi] if hi != -1 else text[value_end : value_end + _FIELD_FALLBACK]
+    return before + after
 
 
 def _redact_fields(text: str) -> str:
@@ -540,9 +570,7 @@ def _redact_fields(text: str) -> str:
         if not span:
             continue  # null, a number, or an unclosed string
         close = span[1] + (2 if m.group("q") else 1)
-        siblings = _field_siblings(text, m.start(), close)
-        if siblings is None:
-            continue
+        siblings = _field_siblings(text, m.start(), close, bool(m.group("q")))
         name = _FIELD_NAME.search(siblings)
         if name is None:
             continue  # not a field: {"value": …} alone says nothing
