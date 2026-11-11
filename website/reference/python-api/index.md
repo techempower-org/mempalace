@@ -30,6 +30,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.dedup`](./dedup) — dedup.py — Detect and remove near-duplicate drawers
 - [`mempalace.dialect`](./dialect) — AAAK Dialect -- Structured Symbolic Summary Format
 - [`mempalace.diary_ingest`](./diary_ingest) — diary_ingest.py — Ingest daily summary files into the palace.
+- [`mempalace.dream`](./dream) — Dreaming: a nightly job that reads what agents and people wrote and proposes changes to it.
 - [`mempalace.dynamics`](./dynamics) — dynamics.py — Living-connection math for halls + tunnels.
 - [`mempalace.embedding`](./embedding) — Embedding function factory with hardware acceleration.
 - [`mempalace.embeddinggemma2`](./embeddinggemma2) — Local Sentence Transformers provider for Google's EmbeddingGemma 2.
@@ -163,6 +164,10 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.cli.cmd_update`](./cli/cmd_update)
 - [`mempalace.cli.cmd_wings`](./cli/cmd_wings)
 - [`mempalace.cli.parser`](./cli/parser)
+
+### dream
+
+- [`mempalace.dream.inventory`](./dream/inventory) — Dream day 1: an inventory that needs no model.
 
 ### integrations
 
