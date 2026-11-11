@@ -40,6 +40,7 @@ KIND_PRIORITY = ["contradiction", "near-duplicate", "oversized-index", "no-mecha
 SEEN = ".seen.json"
 APPLIED = "applied.json"
 _DAY_FILE = re.compile(r"^\d{4}-\d{2}-\d{2}\.json$")
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 _LINE = re.compile(r":\d+$")
 
 
@@ -54,11 +55,25 @@ def proposal_id(p: inventory.Proposal) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-def load_decisions(path: Optional[Path]) -> Dict[str, dict]:
-    """The review page's decisions; empty when there are none yet. A file that cannot be read
-    is an error: publishing without it could re-propose what was rejected."""
-    if path is None or not path.exists():
-        return {}
+class DecisionsMissing(RuntimeError):
+    """The decisions store is gone after a first run: publishing would re-propose rejections."""
+
+
+def load_decisions(path: Path, first_run: bool) -> Dict[str, dict]:
+    """The review page's decisions. On a first run (no ledger yet) a missing store is created
+    empty, once, exclusively; after that a missing, unreadable or malformed one is an error, so
+    a deleted or half-written file can never bring a rejection back."""
+    if first_run and not os.path.lexists(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+        except FileExistsError:
+            pass
+        else:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write("{}\n")
+    if not path.is_file():
+        raise DecisionsMissing(f"{path}: decisions store missing after a first run")
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"{path}: decisions must be a JSON object")
@@ -134,7 +149,7 @@ def run(
         steps["contradictions"] = stats
     else:
         steps["contradictions"] = {"skipped": True}
-    day = day or _dt.date.today().isoformat()
+    day = check_day(day or _dt.date.today().isoformat())
     seen = dict(seen or {})
     out, dropped = [], 0
     for p in proposals:
@@ -183,17 +198,35 @@ def _size(doc: dict) -> int:
     return len((json.dumps(doc, indent=2) + "\n").encode())
 
 
+class TooLarge(ValueError):
+    """The document is over the page's limit even with no proposals left."""
+
+
 def within_size(doc: dict) -> dict:
-    """Drop the lowest-priority proposals (they are sorted) until the document fits, and say
-    how many went in ``run.truncated``."""
+    """Drop the lowest-priority proposals (they are sorted) until the final document, its
+    ``run.truncated`` count included, fits; refuse when the rest alone is over the limit."""
     if _size(doc) <= MAX_BYTES:
         return doc
-    props = list(doc["proposals"])
-    cut = 0
-    while props and _size({**doc, "proposals": props}) > MAX_BYTES:
+    props, cut = list(doc["proposals"]), 0
+
+    def final():
+        return {**doc, "run": {**doc["run"], "truncated": cut}, "proposals": props}
+
+    while props and _size(final()) > MAX_BYTES:
         drop = max(1, len(props) // 20)
         props, cut = props[:-drop], cut + drop
-    return {**doc, "run": {**doc["run"], "truncated": cut}, "proposals": props}
+    out = final()
+    if _size(out) > MAX_BYTES:
+        raise TooLarge(f"{_size(out)} bytes without proposals; limit {MAX_BYTES}")
+    return out
+
+
+def check_day(day: str) -> str:
+    """A canonical YYYY-MM-DD, so a day can only ever name a file directly in the folder."""
+    if not isinstance(day, str) or not _DAY.fullmatch(day):
+        raise ValueError(f"day must be YYYY-MM-DD, got {day!r}")
+    _dt.date.fromisoformat(day)
+    return day
 
 
 def _atomic_write(path: Path, text: str, mode: int = 0o640) -> None:
@@ -219,15 +252,20 @@ def read_json(path: Path, default):
 def publish(doc: dict, publish_dir: Path, seen: Optional[Dict[str, str]] = None) -> Path:
     """Write ``<day>.json`` and ``latest.json`` (0640) atomically into ``publish_dir`` (0700),
     save the first-seen ledger, and prune day files older than :data:`KEEP_DAYS`."""
+    name = check_day(doc["day"])
+    text = json.dumps(doc, indent=2) + "\n"
+    if len(text.encode()) > MAX_BYTES:
+        raise TooLarge(f"{len(text.encode())} bytes; limit {MAX_BYTES}")
     publish_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(publish_dir, 0o700)
-    text = json.dumps(doc, indent=2) + "\n"
-    day = publish_dir / f"{doc['day']}.json"
-    _atomic_write(day, text)
-    _atomic_write(publish_dir / "latest.json", text)
+    day = publish_dir / f"{name}.json"
+    # The ledger first and latest.json last: a run that stops part way never shows a document
+    # whose first-seen nights were not saved.
     if seen is not None:
         _atomic_write(publish_dir / SEEN, json.dumps(seen, indent=0, sort_keys=True) + "\n")
-    prune(publish_dir, doc["day"])
+    _atomic_write(day, text)
+    _atomic_write(publish_dir / "latest.json", text)
+    prune(publish_dir, name)
     return day
 
 

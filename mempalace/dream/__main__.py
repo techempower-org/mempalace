@@ -67,7 +67,10 @@ def main(argv=None) -> int:
             _claude_md(args),
             inventory.daemon_embedder(),
             None if args.no_model else contradictions.local_judge(),
-            nightly.load_decisions(args.decisions or args.out / "decisions.json"),
+            nightly.load_decisions(
+                args.decisions or args.out / "decisions.json",
+                first_run=not (args.out / nightly.SEEN).exists(),
+            ),
             guard=guard,
             day=args.day,
             seen=nightly.read_json(args.out / nightly.SEEN, {}),

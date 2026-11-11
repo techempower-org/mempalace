@@ -161,8 +161,74 @@ def test_unreadable_decisions_fail_rather_than_re_propose(tmp_path):
     bad = tmp_path / "decisions.json"
     bad.write_text("[]")
     with pytest.raises(ValueError):
-        nightly.load_decisions(bad)
-    assert nightly.load_decisions(tmp_path / "missing.json") == {}
+        nightly.load_decisions(bad, first_run=False)
+
+
+def test_a_first_run_creates_the_decisions_store_once_and_a_later_loss_fails(tmp_path):
+    store = tmp_path / "d" / "decisions.json"
+    assert nightly.load_decisions(store, first_run=True) == {}
+    assert store.read_text() == "{}\n"
+    assert stat.S_IMODE(os.stat(store).st_mode) == 0o640
+    store.write_text('{"x": {"decision": "reject"}}')
+    assert nightly.load_decisions(store, first_run=True) == {"x": {"decision": "reject"}}
+    store.unlink()
+    with pytest.raises(nightly.DecisionsMissing):
+        nightly.load_decisions(store, first_run=False)
+    store.symlink_to(tmp_path / "nowhere.json")
+    with pytest.raises(nightly.DecisionsMissing):
+        nightly.load_decisions(store, first_run=True)
+
+
+@pytest.mark.parametrize("day", ["../decisions", "/etc/passwd", "2026-13-01", "2026-1-1", "x"])
+def test_a_day_that_is_not_a_canonical_date_writes_nothing(tmp_path, day):
+    out = tmp_path / "dreams"
+    with pytest.raises(ValueError):
+        nightly.publish({"schema": "dreams/v1", "day": day, "proposals": []}, out)
+    assert not out.exists() and not (tmp_path / "decisions.json").exists()
+
+
+def test_the_final_document_with_its_truncation_note_fits(monkeypatch):
+    props = [
+        {
+            "id": str(i),
+            "kind": "no-mechanism",
+            "summary": "x" * 50,
+            "sources": [],
+            "authority": "",
+            "detail": {},
+        }
+        for i in range(60)
+    ]
+    base = {"run": {}, "proposals": props}
+    for limit in range(1500, 4000, 37):
+        monkeypatch.setattr(nightly, "MAX_BYTES", limit)
+        doc = nightly.within_size(base)
+        assert len((json.dumps(doc, indent=2) + "\n").encode()) <= limit
+
+
+def test_a_document_too_large_without_proposals_is_refused(monkeypatch):
+    monkeypatch.setattr(nightly, "MAX_BYTES", 500)
+    doc = {
+        "run": {},
+        "applied": [{"id": str(i), "pr": "u" * 40} for i in range(20)],
+        "proposals": [],
+    }
+    with pytest.raises(nightly.TooLarge):
+        nightly.within_size({**doc, "proposals": [{"id": "1"}]})
+
+
+def test_publish_writes_the_ledger_before_latest(tmp_path, monkeypatch):
+    order = []
+    real = nightly._atomic_write
+    monkeypatch.setattr(
+        nightly,
+        "_atomic_write",
+        lambda path, text, mode=0o640: (order.append(path.name), real(path, text, mode)),
+    )
+    nightly.publish(
+        {"schema": "dreams/v1", "day": "2026-11-12", "proposals": []}, tmp_path / "o", {}
+    )
+    assert order == [nightly.SEEN, "2026-11-12.json", "latest.json"]
 
 
 def test_the_cli_does_not_start_under_the_memory_floor(tmp_path, monkeypatch, capsys):
