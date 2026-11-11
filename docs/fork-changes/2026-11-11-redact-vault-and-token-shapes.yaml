@@ -17,8 +17,8 @@ body: |
   tail of 24 or more. One-time codes beside their words ("G-482913 is your
   Google verification code", "Your sign-in code is 482913"), either order,
   any case, have only their digits replaced, with no hash. `totp`/`otp` are
-  secret names; a PIN name (`pin`, `pin_code`, `passcode`) takes 4-12 digits,
-  grouped or spelled out, whole or not at all. A Bitwarden custom field's
+  secret names; a PIN name (`pin`, `pin_code`, `passcode`) takes 4 or more digits,
+  grouped or spelled out, the whole run. A Bitwarden custom field's
   value is redacted when a sibling in its own object, in any key order, is a
   secret-ish `name` or a hidden `"type": 1`; `notes` near `"object": "item"`
   (before or after it, so `jq -S` output too). Compact, pretty-printed and

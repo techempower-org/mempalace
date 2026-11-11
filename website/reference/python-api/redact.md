@@ -36,7 +36,7 @@ name and writes ``[redacted assignment]``; one printed alone passes through.
 A quoted value, or one after a tight ``=``, is replaced whatever it looks
 like; a bare value after ``: `` or `` = `` (YAML, prose, code) only when it is
 8+ characters of two or more kinds, so ``password: hunter2`` stays readable.
-A PIN name takes only 4-12 digits (grouped or spelled out). A Bitwarden
+A PIN name takes only a run of 4+ digits (grouped or spelled out). A Bitwarden
 custom field is redacted by a secret-ish sibling ``name`` or a hidden
 ``"type": 1`` in its own object, in any key order, and an item's ``notes``
 only near ``"object": "item"`` (proximity: an adjacent ``notes`` may be
