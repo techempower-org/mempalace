@@ -609,11 +609,11 @@ def test_an_otpauth_uri_is_redacted_whole():
     [
         (
             "G-482913 is your Google verification code.",
-            "[redacted code] is your Google verification code.",
+            "G-[redacted code] is your Google verification code.",
         ),
         (
             "\\nG-482913 is your Google verification code.",
-            "\\n[redacted code] is your Google verification code.",
+            "\\nG-[redacted code] is your Google verification code.",
         ),
         ("482913 is your Acme sign-in code", "[redacted code] is your Acme sign-in code"),
         ("Your verification code is 482913.", "Your verification code is [redacted code]."),
@@ -773,3 +773,109 @@ def test_review_adversarial_runs_scan_in_linear_time(text):
     start = time.monotonic()
     redact(text)
     assert time.monotonic() - start < 2.0
+
+
+# --- 2026-11-11 cross-model review of #604 (gpt-6.1-sol, round 1) -----------------------------
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("Your sign-in code is 482913.", "Your sign-in code is [redacted code]."),
+        ("Your security code is 482913.", "Your security code is [redacted code]."),
+        ("Your verification code:482913", "Your verification code:[redacted code]"),
+        ("482913 IS YOUR VERIFICATION CODE", "[redacted code] IS YOUR VERIFICATION CODE"),
+        ("Login code = 4829", "Login code = [redacted code]"),
+    ],
+)
+def test_one_time_codes_in_either_order_and_any_case(text, expected):
+    assert redact(text) == expected
+
+
+def test_a_jwt_whose_payload_is_not_compact_json_is_redacted():
+    value = "ey" + "JhbGciOiJIUzI1NiJ9" + ".e30." + "s1G" * 14
+    assert redact(f"token {value} end") == f"token {_placeholder('jwt', value)} end"
+
+
+def test_a_pretty_json_blob_is_redacted_and_a_long_path_is_not():
+    import base64
+    import json
+
+    blob = base64.b64encode(json.dumps(_bw_item(), indent=2).encode()).decode()
+    assert blob.startswith("ew")
+    assert redact(f"echo {blob} | bw edit item x") == (
+        f"echo {_placeholder('blob', blob)} | bw edit item x"
+    )
+    path = "see /var/n" + "ews/" + "abcd/" * 30 + " end"
+    assert redact(path) is path
+
+
+@pytest.mark.parametrize(
+    "obj",
+    [
+        '{"type": 1, "name": "Recovery", "value": "rc0d3s"}',
+        '{"value": "rc0d3s", "name": "Recovery", "type": 1}',
+        '{"value": "rc0d3s", "type": 0, "name": "Backup Password"}',
+        '{\\"type\\": 1, \\"name\\": \\"Recovery\\", \\"value\\": \\"rc0d3s\\"}',
+    ],
+)
+def test_a_field_is_judged_by_its_siblings_in_any_order(obj):
+    assert "rc0d3s" not in redact(f"[{obj}]")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '[{"type": 0, "value": "blue", "name": "Color"}]',
+        '{"type": 1, "value": "x1"}',
+        '{"value": "abc", "type": 1} and later {"name": "Password"}',
+    ],
+)
+def test_a_value_without_a_secret_sibling_in_its_own_object_is_left(text):
+    assert redact(text) is text
+
+
+def test_notes_after_a_sorted_item_object_key_are_redacted():
+    import json
+
+    out = redact(json.dumps(_bw_item(), sort_keys=True))
+    _assert_bw_item_redacted(out)
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("PIN: 4 8 2 1", "PIN: [redacted assignment]"),
+        ("PIN: 4-8-2-1.", "PIN: [redacted assignment]."),
+    ],
+)
+def test_a_pin_spelled_digit_by_digit_is_redacted(text, expected):
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize("text", ["pin: 1234 5678 9012 3456", "pin=12345678901234"])
+def test_a_digit_run_longer_than_a_pin_is_left_whole(text):
+    assert redact(text) is text
+
+
+@pytest.mark.parametrize(
+    "unit",
+    [
+        "eyJ-",
+        "eyJaaaaaaaa.e",
+        '{"value": "x", ',
+        '"name": "a", "value": "b"} ',
+        "is your " * 3 + "code ",
+        "security code 1",
+        "pin: 1 ",
+    ],
+)
+def test_review_runs_scale_linearly(unit):
+    import time
+
+    def took(n):
+        start = time.monotonic()
+        redact(unit * n)
+        return time.monotonic() - start
+
+    small, big = took(5000), took(40000)
+    # Eight times the input; a quadratic scan would take ~64x. Allow noise on tiny timings.
+    assert big < 20 * small + 0.25

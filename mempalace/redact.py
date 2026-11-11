@@ -32,10 +32,13 @@ name and writes ``[redacted assignment]``; one printed alone passes through.
 A quoted value, or one after a tight ``=``, is replaced whatever it looks
 like; a bare value after ``: `` or `` = `` (YAML, prose, code) only when it is
 8+ characters of two or more kinds, so ``password: hunter2`` stays readable.
-A PIN name takes only a value of 4-12 digits. A Bitwarden custom field is
-redacted by its sibling ``name`` or when it is hidden (``"type": 1``), and an
-item's ``notes`` only inside ``bw`` item JSON. A one-time code is caught only
-beside the words that say what it is ("is your Google verification code").
+A PIN name takes only 4-12 digits (grouped or spelled out). A Bitwarden
+custom field is redacted by a secret-ish sibling ``name`` or a hidden
+``"type": 1`` in its own object, in any key order, and an item's ``notes``
+only near ``"object": "item"`` (proximity: an adjacent ``notes`` may be
+over-redacted). A one-time code is caught only beside the words that say what
+it is ("is your Google verification code", "sign-in code is"), and only its
+digits are replaced. A JWT is caught only with a compact ``eyJ`` header.
 A quote that never closes leaves only its first word redacted. Embeddings passed in by
 the caller were computed from the text before redaction. Configured patterns
 are trusted like the rest of the config: one with nested quantifiers can
@@ -67,21 +70,18 @@ DEFAULT_PATTERNS: Dict[str, str] = {
     "google": r"AIza[0-9A-Za-z_-]{35}|GOCSPX-[0-9A-Za-z_-]{24,}",
     # No word boundary: a raw JSONL line holds a literal "\n" escape right before the token.
     "notion": r"ntn_[A-Za-z0-9]{40,}|secret_[A-Za-z0-9]{43}(?![A-Za-z0-9])",
-    # A signed JWT: header and payload are base64url JSON objects, so both start "eyJ"
-    # (2026-11-09: Home Assistant long-lived tokens, printed bare, were mined).
-    # Each part is bounded, so a long run of "eyJ-eyJ-…" with no dot is scanned in linear time.
-    "jwt": r"eyJ[A-Za-z0-9_-]{8,400}\.eyJ[A-Za-z0-9_-]{8,8000}\.[A-Za-z0-9_-]{16,1000}",
+    # A signed JWT (2026-11-09: Home Assistant long-lived tokens, printed bare, were mined). The
+    # header is compact JSON from a library, so it starts "eyJ"; the payload is any base64url JSON
+    # object, so it starts "e" ("eyJ", "e30" for {}, "ewo" for pretty JSON). Each part is bounded,
+    # so a long run of "eyJ-eyJ-…" with no dot is scanned in linear time.
+    "jwt": r"eyJ[A-Za-z0-9_-]{8,400}\.e[A-Za-z0-9_-]{2,16000}\.[A-Za-z0-9_-]{16,1000}",
     # A long base64 JSON object: ``bw encode`` output passed to ``bw edit`` carries the whole vault
-    # item, password and all (2026-11-07). A short one ("eyJ" + a cursor) is left alone.
-    "blob": r"eyJ[A-Za-z0-9+/]{97,}={0,2}",
+    # item, password and all (2026-11-07). Compact JSON encodes to "eyJ", pretty JSON to "ewo",
+    # "ew0" or "eyA". It must start a run (or follow a raw JSONL escape), so a long path holding
+    # "…news/…" is not taken from its middle. A short one ("eyJ" + a cursor) is left alone.
+    "blob": r"(?:(?<![A-Za-z0-9+/])|(?<=\\[nrt]))e[wy][A-Za-z0-9+/]{98,}={0,2}",
     # A TOTP or HOTP provisioning URI: its secret= is the second factor's seed.
     "otpauth": r"otpauth://[A-Za-z]{4}/[^\s\"'\\<>]+",
-    # A one-time code beside the words that say what it is (2026-11-08: a Google sign-in code was
-    # mined). Short and guessable, so it gets no hash. A code in other prose passes through.
-    "code": r"(?:G-|(?<![0-9-]))[0-9]{6}(?=[ \t]+is[ \t]+your[ \t]+(?:[A-Za-z]+[ \t]+){0,3}"
-    r"(?i:verification|sign-in|security|login)[ \t]+code)"
-    r"|(?:(?<=(?i:verification code: ))|(?<=(?i:verification code is ))|(?<=(?i:verification code ))"
-    r")[0-9]{4,8}(?![0-9])",
 }
 
 # Kinds whose value may be short or guessable: an unkeyed hash of one would let any reader test
@@ -205,8 +205,40 @@ def redact(text: str) -> str:
             return _placeholder(kind, m.group(0))
 
         clean = combined.sub(replace, clean)
+    clean = _redact_codes(clean)
     clean = _redact_assignments(clean)
     return text if clean == text else clean
+
+
+# A one-time code beside the words that say what it is, either way round: "G-482913 is your Google
+# verification code", "Your sign-in code is 482913", "Security code: 4829" (2026-11-08: a Google
+# sign-in code was mined). Only the digits are replaced, with no hash: six digits are easy to
+# guess. A code in other prose passes through.
+_CODE_WORD = r"(?:verification|sign-?in|log-?in|security|confirmation|one-time|access|auth|2fa|otp)"
+_CODE = re.compile(
+    r"(?i:(?:(?<=G-)|(?<![0-9\-]))(?P<a>[0-9]{4,8})[ \t]+is[ \t]+your[ \t]+(?:[a-z0-9]+[ \t]+){0,3}"
+    + _CODE_WORD
+    + r"[ \t]+code"
+    + r"|"
+    + _CODE_WORD
+    + r"[ \t]+code(?:[ \t]+is)?[ \t]*[:=]?[ \t]*(?:G-)?(?P<b>[0-9]{4,8})(?![0-9]))"
+)
+CODE_PLACEHOLDER = "[redacted code]"
+
+
+def _redact_codes(text: str) -> str:
+    if "code" not in text.lower():
+        return text
+    out, pos = [], 0
+    for m in _CODE.finditer(text):
+        start, end = m.span("a") if m.group("a") is not None else m.span("b")
+        out.append(text[pos:start])
+        out.append(CODE_PLACEHOLDER)
+        pos = end
+    if not out:
+        return text
+    out.append(text[pos:])
+    return "".join(out)
 
 
 # --- Values named as secrets -------------------------------------------------------------------
@@ -443,44 +475,34 @@ def _redact_url_passwords(text: str) -> str:
 _PIN_NAME = re.compile(
     r"(?:^|(?<=[_.\-])|(?<=[a-z0-9])(?=[A-Z]))(?i:pin(?:[_\-]?(?:code|number))?|passcode)$"
 )
-# Grouped digits ("1234 5678", "12-34-56") go whole; a lone group needs 4+ digits.
-_PIN_DIGITS = re.compile(
-    r"[0-9]{2,6}(?:[ \-][0-9]{2,6}){1,5}(?![0-9A-Za-z\-])|[0-9]{4,12}(?![0-9A-Za-z])"
-)
+# 4-12 digits, each optionally after one space or "-" ("4821", "1234 5678", "4 8 2 1"), taken
+# whole or not at all: a longer run of digits is not a PIN, and none of it is replaced.
+_PIN_DIGITS = re.compile(r"[0-9](?:[ \-]?[0-9]){3,11}(?![0-9A-Za-z\-]|[ \-][0-9])")
 
 # A Bitwarden custom field, {"name": "…", "value": "…", "type": N}: the value's own key says
 # nothing, its sibling "name" does ("API Key", "Recovery PIN"), and type 1 is a hidden field, a
-# secret by the vault's own account. Also inside a raw JSONL line, where every quote is \", and
-# pretty-printed (`bw get item --pretty`, jq), where a newline, raw or escaped, separates keys.
-# "type" may come before "value" as well as after it. Whitespace runs are two disjoint forms, so
-# they cannot backtrack.
+# secret by the vault's own account. The siblings are looked for in the object around each "value",
+# in any order, compact or pretty-printed (`bw get item --pretty`, jq), and inside a raw JSONL line,
+# where every quote is \". Whitespace runs are two disjoint forms, so they cannot backtrack.
 _WS = r"(?:[ \t\r\n]|\\[nrt])*"
-_FIELD = re.compile(
-    r'(?P<q>\\?)"name(?P=q)"' + _WS + ":" + _WS + r'(?P=q)"(?P<fname>[^"\\\n]{1,100})(?P=q)"'
-    r"(?:"
-    + _WS
-    + ","
-    + _WS
-    + r'(?P=q)"type(?P=q)"'
+_VALUE_KEY = re.compile(r'(?P<q>\\?)"value(?P=q)"' + _WS + ":" + _WS)
+_FIELD_NAME = re.compile(
+    r'(?P<q>\\?)"name(?P=q)"'
     + _WS
     + ":"
     + _WS
-    + r"(?P<type>[0-9]{1,3}))?"
-    + _WS
-    + ","
-    + _WS
-    + r'(?P=q)"value(?P=q)"'
-    + _WS
-    + ":"
-    + _WS
+    + r'(?P=q)"(?P<fname>(?:[^"\\\n]|\\[^\n]){1,200}?)(?P=q)"'
 )
-_HIDDEN_TYPE = re.compile(_WS + "," + _WS + r'\\?"type\\?"' + _WS + ":" + _WS + r"1(?![0-9])")
+_FIELD_HIDDEN = re.compile(r'\\?"type\\?"' + _WS + ":" + _WS + r"1(?![0-9])")
+# How far from a "value" its object's braces are looked for: a field object is small.
+_FIELD_REACH = 1000
 _FIELD_NAME_SEP = re.compile(r"[\s\-]+")
 # A vault item's free-text notes often hold what its other fields do not (recovery codes, a PIN,
-# a second password). "notes" is redacted only inside one: "object": "item" a little before it,
-# as `bw get item` prints the item.
+# a second password). "notes" is redacted only near "object": "item", before it as `bw get item`
+# prints it or after it as `jq -S` sorts it. Proximity, not containment: a "notes" just after a
+# closed item is redacted too, which over-redacts and never leaks.
 _BW_ITEM = re.compile(r'\\?"object\\?"' + _WS + ":" + _WS + r'\\?"item\\?"')
-_BW_ITEM_WINDOW = 1500
+_BW_ITEM_WINDOW = 4000
 
 
 def _pin_span(text: str, key: re.Match):
@@ -497,19 +519,34 @@ def _secret_field(name: str) -> bool:
     return bool(_SECRET_NAME.search(words) or _PIN_NAME.search(words))
 
 
+def _field_siblings(text: str, key_start: int, value_end: int):
+    """The text of the object around a "value", less the value itself; None when no braces close
+    it within reach."""
+    lo = text.rfind("{", max(0, key_start - _FIELD_REACH), key_start)
+    hi = text.find("}", value_end, value_end + _FIELD_REACH)
+    if lo == -1 or hi == -1:
+        return None
+    return text[lo:key_start] + text[value_end:hi]
+
+
 def _redact_fields(text: str) -> str:
-    if '"value' not in text:
+    if '"value' not in text and 'value\\"' not in text:
         return text
     out, pos = [], 0
-    for m in _FIELD.finditer(text):
+    for m in _VALUE_KEY.finditer(text):
         if m.start() < pos:
             continue
         span = _quoted(text, m.end())
         if not span:
             continue  # null, a number, or an unclosed string
         close = span[1] + (2 if m.group("q") else 1)
-        hidden = m.group("type") == "1" or _HIDDEN_TYPE.match(text, close)
-        if not (_secret_field(m.group("fname")) or hidden):
+        siblings = _field_siblings(text, m.start(), close)
+        if siblings is None:
+            continue
+        name = _FIELD_NAME.search(siblings)
+        if name is None:
+            continue  # not a field: {"value": …} alone says nothing
+        if not (_secret_field(name.group("fname")) or _FIELD_HIDDEN.search(siblings)):
             continue
         if _placeholder_value(text[span[0] : span[1]]):
             continue
@@ -527,7 +564,8 @@ def _bw_notes(text: str, key: re.Match) -> bool:
     quoted = text.startswith('"', after) or text.startswith('\\"', after)
     if key.group("name") != "notes" or not quoted:
         return False
-    return _BW_ITEM.search(text, max(0, key.start() - _BW_ITEM_WINDOW), key.start()) is not None
+    lo, hi = max(0, key.start() - _BW_ITEM_WINDOW), key.end() + _BW_ITEM_WINDOW
+    return _BW_ITEM.search(text, lo, hi) is not None
 
 
 def _redact_assignments(text: str) -> str:
