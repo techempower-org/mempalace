@@ -3,6 +3,7 @@ id: dream-inventory
 date: '2026-11-11'
 bucket: Added
 commit: HEAD
+fork_pr: 605
 area: Dreaming
 summary: dream day 1, `python -m mempalace.dream inventory`, proposes oversized MEMORY.md indexes, CLAUDE.md rules with no named mechanism, and near-duplicate feedback memories, without editing any input
 body: |
