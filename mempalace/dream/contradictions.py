@@ -189,13 +189,20 @@ def contradictions(
     embed: Embedder,
     judge: Judge,
     authority: str = "qwen36-coder (local), unreviewed",
+    guard: Optional[Callable[[], Optional[str]]] = None,
     **pair_args,
 ):
-    """(proposals, stats). Stops at the first failed judgement and records it in ``stats``."""
+    """(proposals, stats). Stops at the first failed judgement and records it in ``stats``.
+    ``guard``, called before each judgement, stops the pass the same way when it returns a
+    reason (a host under memory pressure, say)."""
     pairs = candidate_pairs(memories, rules, embed, **pair_args)
     stats: Dict[str, object] = {"pairs": len(pairs), "judged": 0, "verdicts": {}, "error": None}
     out = []
     for sim, mem, rule in pairs:
+        reason = guard() if guard else None
+        if reason:
+            stats["error"] = f"stopped: {reason}"
+            break
         try:
             v = judge(rule.text[:RULE_CHARS], f"{mem.description}\n{mem.body}"[:MEMORY_CHARS])
         except Exception as exc:  # one hiccup ends the pass; no retry
@@ -215,7 +222,12 @@ def contradictions(
                 ),
                 sources=[str(mem.path), rule.source],
                 authority=authority,
-                detail={"similarity": round(sim, 4), "why": v["why"]},
+                detail={
+                    "similarity": round(sim, 4),
+                    "why": v["why"],
+                    "rule": rule.lead,
+                    "memory": mem.name,
+                },
             )
         )
     return out, stats
