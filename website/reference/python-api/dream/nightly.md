@@ -15,6 +15,16 @@ The inputs are private, and so is the document: point ``--publish-dir`` at a fol
 never in a repository. The host's memory is checked before every model call; under the floor
 the contradictions pass stops and says so.
 
+## Classes
+
+### `class DecisionsMissing(RuntimeError)`
+
+The decisions store is gone after a first run: publishing would re-propose rejections.
+
+### `class TooLarge(ValueError)`
+
+The document is over the page's limit even with no proposals left.
+
 ## Functions
 
 ### `proposal_id`
@@ -29,11 +39,12 @@ memory names that say what the finding is about.
 ### `load_decisions`
 
 ```python
-def load_decisions(path: Optional[Path]) -> Dict[str, dict]
+def load_decisions(path: Path, first_run: bool) -> Dict[str, dict]
 ```
 
-The review page's decisions; empty when there are none yet. A file that cannot be read
-is an error: publishing without it could re-propose what was rejected.
+The review page's decisions. On a first run (no ledger yet) a missing store is created
+empty, once, exclusively; after that a missing, unreadable or malformed one is an error, so
+a deleted or half-written file can never bring a rejection back.
 
 ### `memory_guard`
 
@@ -67,8 +78,16 @@ a flat detail of at most twelve string, number or boolean values.
 def within_size(doc: dict) -> dict
 ```
 
-Drop the lowest-priority proposals (they are sorted) until the document fits, and say
-how many went in ``run.truncated``.
+Drop the lowest-priority proposals (they are sorted) until the final document, its
+``run.truncated`` count included, fits; refuse when the rest alone is over the limit.
+
+### `check_day`
+
+```python
+def check_day(day: str) -> str
+```
+
+A canonical YYYY-MM-DD, so a day can only ever name a file directly in the folder.
 
 ### `read_json`
 
