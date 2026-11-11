@@ -1,0 +1,18 @@
+seq: 199
+id: dream-nightly
+date: '2026-11-11'
+bucket: Added
+commit: HEAD
+fork_pr: 608
+area: Dreaming
+summary: the nightly dream, `python -m mempalace.dream nightly`, runs the inventory and the contradictions pass and publishes one dreams/v1 JSON document with stable proposal ids for a private review page; decided ids are never proposed again
+body: |
+  Day 3 of the dreaming decision. One document per night (`YYYY-MM-DD.json` and
+  `latest.json`, atomic, 0640 in a 0700 folder, pruned after 30 days) carries
+  each proposal's stable id (kind, source paths without line numbers, rule lead),
+  its first-seen night, and the lane's applied ledger. A review page records
+  accept or reject in `decisions.json`, which the writer only reads: a decided id
+  is dropped on every later night. The page's limits are enforced by the writer
+  (summary 1200 characters, 10 sources, a flat detail of 12 scalars, 2 MB, lowest
+  priority kinds cut first). A MemAvailable guard refuses to start under the floor
+  and stops the model pass before the next call when the host drops under it.

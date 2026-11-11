@@ -1,4 +1,4 @@
-"""``python -m mempalace.dream inventory|contradictions …``: run a dream step, write its report."""
+"""``python -m mempalace.dream inventory|contradictions|nightly …``: run a dream step."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from . import contradictions, inventory
+from . import contradictions, inventory, nightly
 
 
 def _inputs(p) -> None:
@@ -47,7 +47,44 @@ def main(argv=None) -> int:
     _inputs(c)
     c.add_argument("--floor", type=float, default=contradictions.PAIR_FLOOR)
     c.add_argument("--max-pairs", type=int, default=contradictions.MAX_PAIRS)
+    n = sub.add_parser(
+        "nightly", help="Inventory and contradictions, published for review (dreams/v1 JSON)"
+    )
+    _inputs(n)
+    n.add_argument("--decisions", type=Path, help="decisions.json (default: <out>/decisions.json)")
+    n.add_argument("--min-available-mb", type=int, default=nightly.MIN_AVAILABLE_MB)
+    n.add_argument("--no-model", action="store_true", help="Skip the contradictions pass")
     args = ap.parse_args(argv)
+
+    if args.step == "nightly":
+        # Every check before anything is created: a bad --day writes nothing at all.
+        if args.day is not None:
+            nightly.check_day(args.day)
+        guard = nightly.memory_guard(args.min_available_mb)
+        reason = guard()
+        if reason:
+            print(f"not starting: {reason}")
+            return 4
+        nightly.private_dir(args.out)
+        doc, seen = nightly.run(
+            args.memory_root,
+            _claude_md(args),
+            inventory.daemon_embedder(),
+            None if args.no_model else contradictions.local_judge(),
+            nightly.load_decisions(
+                args.decisions or args.out / "decisions.json",
+                first_run=not (args.out / nightly.SEEN).exists(),
+            ),
+            guard=guard,
+            day=args.day,
+            seen=nightly.read_json(args.out / nightly.SEEN, {}),
+            applied=nightly.read_json(args.out / nightly.APPLIED, []),
+        )
+        path = nightly.publish(doc, args.out, seen)
+        steps = doc["run"]["steps"]
+        print(f"{len(doc['proposals'])} proposals {json.dumps(steps)} -> {path}")
+        error = steps.get("contradictions", {}).get("error")
+        return 3 if error else 0
 
     if args.step == "contradictions":
         props, stats = contradictions.contradictions(

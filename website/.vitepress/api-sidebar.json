@@ -618,6 +618,10 @@
       {
         "text": "mempalace.dream.inventory",
         "link": "/reference/python-api/dream/inventory"
+      },
+      {
+        "text": "mempalace.dream.nightly",
+        "link": "/reference/python-api/dream/nightly"
       }
     ]
   },

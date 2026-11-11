@@ -64,7 +64,9 @@ An OpenAI-compatible chat endpoint; ``DREAM_LLM_URL``, ``DREAM_LLM_MODEL`` and
 ### `contradictions`
 
 ```python
-def contradictions(memories: Sequence[Memory], rules: Sequence[Rule], embed: Embedder, judge: Judge, authority: str = 'qwen36-coder (local), unreviewed', **pair_args)
+def contradictions(memories: Sequence[Memory], rules: Sequence[Rule], embed: Embedder, judge: Judge, authority: str = 'qwen36-coder (local), unreviewed', guard: Optional[Callable[[], Optional[str]]] = None, **pair_args)
 ```
 
 (proposals, stats). Stops at the first failed judgement and records it in ``stats``.
+``guard``, called before each judgement, stops the pass the same way when it returns a
+reason (a host under memory pressure, say).
