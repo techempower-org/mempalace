@@ -81,6 +81,14 @@ def within_size(doc: dict) -> dict
 Drop the lowest-priority proposals (they are sorted) until the final document, its
 ``run.truncated`` count included, fits; refuse when the rest alone is over the limit.
 
+### `private_dir`
+
+```python
+def private_dir(path: Path) -> Path
+```
+
+``path`` as a 0700 folder (created if needed) before anything private goes into it.
+
 ### `check_day`
 
 ```python
