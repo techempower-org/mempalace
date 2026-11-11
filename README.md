@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| bare JWTs, base64 vault-item blobs, otpauth URIs, one-time codes, PINs, TOTP seeds and Bitwarden notes and secret custom fields are redacted on every write, and a Google client secret of any tail from 24 characters | — | `HEAD` — pending resolution |
 | a value printed beside a secret-ish name (an env dump, a config, a connection URL) is redacted on every write, and Google OAuth client secrets and every Slack token class are built-in shapes | — | [`8caeb5d`](https://github.com/techempower-org/mempalace/commit/8caeb5d) |
 | a Claude Code transcript is normalized streamed, line by line, and a .jsonl is no longer skipped for being over the 500 MB whole-file cap, so long-running sessions keep reaching the palace | — | [`8108ade`](https://github.com/techempower-org/mempalace/commit/8108ade) |
 | the session-manifest mine streams a transcript line by line instead of reading it whole, and no longer loses user messages that carry a raw U+2028, U+2029 or U+0085 | — | [`625faad`](https://github.com/techempower-org/mempalace/commit/625faad) |

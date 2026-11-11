@@ -18,6 +18,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-11-11]
+
+
+### Fixed
+
+
+- **bare JWTs, base64 vault-item blobs, otpauth URIs, one-time codes, PINs, TOTP seeds and Bitwarden notes and secret custom fields are redacted on every write, and a Google client secret of any tail from 24 characters** (`HEAD` — pending resolution)
+  The 2026-11-07..09 leak sweeps found secrets that #603's shapes and
+  named-assignment pass still let through: Home Assistant long-lived tokens
+  printed as bare JWTs, a `bw encode` blob (a whole vault item in base64), a
+  Google sign-in code, a registrar support PIN, a vault item's TOTP seed,
+  notes and custom fields, and an OAuth client secret with a 29-character tail.
+  New shapes: `jwt` (three bounded base64url parts, header and payload starting
+  `eyJ`), `blob` (`eyJ` + 97 or more base64 characters), `otpauth` (the whole
+  URI) and `code` (a 6-digit code before "is your … verification code", or 4-8
+  digits after "verification code"), which carries no hash. `google` takes any
+  `GOCSPX-` tail of 24 or more. `totp`/`otp` are secret names; a PIN name
+  (`pin`, `pin_code`, `passcode`) takes 4-12 digits or digit groups only. A
+  Bitwarden custom field's value is redacted when its sibling `name` is
+  secret-ish or it is hidden (`"type": 1`, before or after the value), and
+  `notes` inside `bw` item JSON, compact or pretty-printed,
+  in plain JSON and in a raw JSONL line.
+
+
 ## [2026-11-07]
 
 

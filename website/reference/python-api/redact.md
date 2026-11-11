@@ -15,7 +15,8 @@ metadata through :func:`redact` before the backend sees them; see
 already holds a candidate check it against the drawer (a vault item, a leak
 report); for a provider token, a long random string, it recovers nothing. A
 match of a configured pattern, which may be a guessable value, is
-``[redacted custom]`` with no hash. Existing placeholders are
+``[redacted custom]`` with no hash, and so is a one-time code
+(``[redacted code]``), six digits being easy to guess. Existing placeholders are
 never matched again, so a write is redacted the same way however many layers
 pass it through.
 
@@ -35,6 +36,10 @@ name and writes ``[redacted assignment]``; one printed alone passes through.
 A quoted value, or one after a tight ``=``, is replaced whatever it looks
 like; a bare value after ``: `` or `` = `` (YAML, prose, code) only when it is
 8+ characters of two or more kinds, so ``password: hunter2`` stays readable.
+A PIN name takes only a value of 4-12 digits. A Bitwarden custom field is
+redacted by its sibling ``name`` or when it is hidden (``"type": 1``), and an
+item's ``notes`` only inside ``bw`` item JSON. A one-time code is caught only
+beside the words that say what it is ("is your Google verification code").
 A quote that never closes leaves only its first word redacted. Embeddings passed in by
 the caller were computed from the text before redaction. Configured patterns
 are trusted like the rest of the config: one with nested quantifiers can

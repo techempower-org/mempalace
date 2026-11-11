@@ -16,7 +16,9 @@ body: |
   URI) and `code` (a 6-digit code before "is your … verification code", or 4-8
   digits after "verification code"), which carries no hash. `google` takes any
   `GOCSPX-` tail of 24 or more. `totp`/`otp` are secret names; a PIN name
-  (`pin`, `pin_code`, `passcode`) takes a value of 4-12 digits only. A
+  (`pin`, `pin_code`, `passcode`) takes 4-12 digits or digit groups only. A
   Bitwarden custom field's value is redacted when its sibling `name` is
-  secret-ish or it is hidden (`"type": 1`), and `notes` inside `bw` item JSON,
+  secret-ish or it is hidden (`"type": 1`, before or after the value), and
+  `notes` inside `bw` item JSON, compact or pretty-printed,
   in plain JSON and in a raw JSONL line.
+fork_pr: 604
