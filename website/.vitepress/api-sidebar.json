@@ -88,6 +88,10 @@
         "link": "/reference/python-api/diary_ingest"
       },
       {
+        "text": "mempalace.dream",
+        "link": "/reference/python-api/dream"
+      },
+      {
         "text": "mempalace.dynamics",
         "link": "/reference/python-api/dynamics"
       },
@@ -600,6 +604,16 @@
       {
         "text": "mempalace.cli.parser",
         "link": "/reference/python-api/cli/parser"
+      }
+    ]
+  },
+  {
+    "text": "dream",
+    "collapsed": true,
+    "items": [
+      {
+        "text": "mempalace.dream.inventory",
+        "link": "/reference/python-api/dream/inventory"
       }
     ]
   },

@@ -1,0 +1,21 @@
+seq: 197
+id: dream-inventory
+date: '2026-11-11'
+bucket: Added
+commit: HEAD
+fork_pr: 605
+area: Dreaming
+summary: dream day 1, `python -m mempalace.dream inventory`, proposes oversized MEMORY.md indexes, CLAUDE.md rules with no named mechanism, and near-duplicate feedback memories, without editing any input
+body: |
+  First step of the dreaming decision (docs/superpowers/specs/2026-11-05-dreaming-decision.md):
+  read-only checks that need no model. `oversized-index` flags a memory folder's
+  MEMORY.md over 200 lines or 25 KB. `no-mechanism` flags a top-level bold-lead rule
+  in a CLAUDE.md whose block names no mechanism (a hook, gate, test, timer, script
+  or the word itself) and no dated "none yet" line; a bullet that only states a
+  fact is not a rule, and `--projects-root` discovery skips git worktrees.
+  `near-duplicate` embeds feedback memories through palace-daemon `/embed` (the
+  palace's own embedder, nothing loaded locally) and proposes pairs at cosine 0.90
+  or more. Every proposal carries its sources and an authority label; the report
+  is `YYYY-MM-DD.json` and `.md` in `--out`, which should be private because the
+  inputs are. First real run on the fleet: 1 oversized index, 318 rules, 35 pairs,
+  17 s, 66 MB RSS.

@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| dream day 1, `python -m mempalace.dream inventory`, proposes oversized MEMORY.md indexes, CLAUDE.md rules with no named mechanism, and near-duplicate feedback memories, without editing any input | — | `HEAD` — pending resolution |
 | bare JWTs, base64 vault-item blobs, otpauth URIs, one-time codes, PINs, TOTP seeds and Bitwarden notes and secret custom fields are redacted on every write, and a Google client secret of any tail from 24 characters | — | `HEAD` — pending resolution |
 | a value printed beside a secret-ish name (an env dump, a config, a connection URL) is redacted on every write, and Google OAuth client secrets and every Slack token class are built-in shapes | — | [`6039e1d`](https://github.com/techempower-org/mempalace/commit/6039e1d) |
 | a Claude Code transcript is normalized streamed, line by line, and a .jsonl is no longer skipped for being over the 500 MB whole-file cap, so long-running sessions keep reaching the palace | — | [`8108ade`](https://github.com/techempower-org/mempalace/commit/8108ade) |
