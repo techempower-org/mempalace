@@ -40,7 +40,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   grouped or spelled out, the whole run. A Bitwarden custom field's
   value is redacted when a sibling in its own object, in any key order, is a
   secret-ish `name` or a hidden `"type": 1`; `notes` near `"object": "item"`
-  (before or after it, so `jq -S` output too). Compact, pretty-printed and
+  (before or after it, so `jq -S` output too). Passes repeat until nothing
+  changes; a cascade past 8 fails closed to one distance-free pass. Compact,
+  pretty-printed and
   JSONL-escaped JSON are all read.
 
 
