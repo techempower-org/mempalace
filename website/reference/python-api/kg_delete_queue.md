@@ -28,6 +28,12 @@ Correctness rules the sweep keeps:
   (id, version) pairs it selected, so a delete of the same id that lands while
   a batch is in flight stays queued.
 * One sweeper at a time (a session advisory lock); a second one skips.
+* Only ids that still have a vertex reach the DETACH DELETE. Drawer vertices
+  are created only for drawers whose row exists (write-through on add,
+  backfill_age from rows), so a vertex that appears for a queued id after the
+  probe belongs to a re-added, live drawer and is right to keep. Residual (same
+  class as the re-add race above): a backfill that read the row before its
+  delete and writes the vertex after the probe leaves an orphan.
 * A batch leaves the queue only after its graph delete returned. Residual: a
   drawer re-added between the liveness check and the DETACH DELETE loses its
   vertex; with write-through off a re-added drawer has none anyway.
@@ -47,13 +53,16 @@ leaves an orphan vertex behind (logged), exactly what an absent hook would.
 ### `sweep`
 
 ```python
-def sweep(dsn: str, kg: Any = None, *, batch: int = BATCH, max_batches: int = MAX_BATCHES, connect: Optional[Callable[[str], Any]] = None, settle_hours: int = SETTLE_HOURS) -> dict
+def sweep(dsn: str, kg: Any = None, *, batch: int = BATCH, max_batches: int = MAX_BATCHES, budget_s: float = BUDGET_S, connect: Optional[Callable[[str], Any]] = None, settle_hours: int = SETTLE_HOURS) -> dict
 ```
 
-Remove queued Drawer vertices, ``batch`` ids per DETACH DELETE statement,
-oldest first, at most ``max_batches`` statements. Each batch's wall time is
-logged and returned. An error stops the sweep; the failing batch and
-everything after it stay queued.
+Remove queued Drawer vertices, oldest first, ``batch`` queue entries at a
+time; only ids that still have a vertex reach the (one per batch) DETACH
+DELETE. Stops when the queue is empty, after ``max_batches``, or once
+``budget_s`` has passed. Each batch's wall time is logged and returned. An
+error stops the sweep; the failing batch and everything after it stay queued.
+``kg`` is built lazily (only when a vertex needs deleting) with its own
+statement limit.
 
 ### `sweep_from_env`
 

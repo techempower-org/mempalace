@@ -336,6 +336,7 @@ class _QueueDB:
     def __init__(self):
         self.queue = {}  # drawer_id -> [order, source_table, version, settled]
         self.drawers = set()  # ids that have a live drawer row
+        self.vertices = None  # ids that have a Drawer vertex (None: every id does)
         self.sql = []
         self.fail = set()  # statement kinds to fail: "insert", "dequeue"
         self.on_select = None  # callback run right after a batch SELECT
@@ -393,6 +394,11 @@ class _QueueDB:
                     ]
                     if db.on_select:
                         db.on_select()
+                elif q1.startswith("SELECT ((properties"):
+                    if "vertex" in db.fail:
+                        raise RuntimeError("vertex lookup failed")
+                    have = params[0] if db.vertices is None else db.vertices
+                    self._rows = [(i,) for i in params[0] if i in have]
                 elif q1.startswith("SELECT id FROM"):
                     self._rows = [(i,) for i in params[0] if i in db.drawers]
                 elif q1.startswith("DELETE FROM mempalace_kg_delete_queue"):
@@ -710,3 +716,102 @@ def test_the_postgres_collection_connection_is_autocommit(monkeypatch):
     col._conn, col.dsn = None, "postgresql://fake/ac"
     monkeypatch.setattr(col, "_apply_session_settings", lambda conn: None, raising=False)
     assert col._get_conn().autocommit is True
+
+
+# --- the vertex filter, the lazy AGE connection and the time budget (2026-11-13 live) ---
+def test_ids_without_a_vertex_never_reach_the_graph_and_build_no_connection(monkeypatch):
+    from mempalace.kg_delete_queue import sweep
+
+    db = _QueueDB()
+    db.enqueue("v1", "n1", "n2")
+    db.vertices = {"v1"}
+    built = []
+
+    class _KG(_SweepKG):
+        def __init__(self, dsn):
+            super().__init__()
+            built.append(dsn)
+
+    monkeypatch.setattr("mempalace.knowledge_graph_age.KnowledgeGraphAGE", _KG)
+    out = sweep("postgresql://fake/nv", connect=db.connect)
+    assert out["no_vertex"] == 2 and out["removed"] == 1 and db.queue == {}
+    assert len(built) == 1 and "statement_timeout=900000" in built[0]
+
+    db.enqueue("n3", "n4")  # none of these has a vertex: no AGE connection at all
+    built.clear()
+    out = sweep("postgresql://fake/nv", connect=db.connect)
+    assert built == [] and out["removed"] == 0 and out["no_vertex"] == 2 and db.queue == {}
+
+
+def test_the_time_budget_lets_a_started_batch_finish_and_starts_no_more(monkeypatch):
+    from mempalace import kg_delete_queue as q
+
+    clock = [0.0]
+    monkeypatch.setattr(q.time, "monotonic", lambda: clock[0])
+    db = _QueueDB()
+    db.enqueue("d1", "d2", "d3")
+
+    class _SlowKG(_SweepKG):
+        def delete_drawers(self, ids):
+            clock[0] += 100.0  # each batch takes 100 s
+            return super().delete_drawers(ids)
+
+    kg = _SlowKG()
+    out = q.sweep("postgresql://fake/b", kg=kg, batch=1, budget_s=150, connect=db.connect)
+    assert kg.calls == [["d1"], ["d2"]] and out["stopped"] == "budget"
+    assert sorted(db.queue) == ["d3"], "finished batches are acknowledged; the rest stay queued"
+
+
+class _ErrCur:
+    def __init__(self, err):
+        self.err = err
+
+    def execute(self, q, params=None):
+        raise self.err
+
+    def fetchall(self):
+        return []
+
+
+@_pt.mark.parametrize("code", ["42P01", "3F000"])
+def test_vertex_lookup_reads_a_missing_label_table_as_no_vertices(code):
+    from mempalace.kg_delete_queue import _ids_with_vertex
+
+    assert _ids_with_vertex(_ErrCur(_PgError(code)), ["a"]) == []
+
+
+def test_vertex_lookup_failure_keeps_the_batch_queued():
+    from mempalace import kg_delete_queue as q
+
+    with _pt.raises(_PgError):
+        q._ids_with_vertex(_ErrCur(_PgError("57014")), ["a"])
+    db = _QueueDB()
+    db.enqueue("d1")
+    db.fail.add("vertex")
+    with _pt.raises(RuntimeError):
+        q.sweep("postgresql://fake/vf", kg=_SweepKG(), connect=db.connect)
+    assert list(db.queue) == ["d1"]
+
+
+@_pt.mark.parametrize(
+    "dsn,want",
+    [
+        ("postgresql://u@h/db", "postgresql://u@h/db?options=-c%20statement_timeout=900000"),
+        ("postgresql://u@h/db?sslmode=disable", "&options=-c%20statement_timeout=900000"),
+        ("host=h dbname=db", "host=h dbname=db options='-c statement_timeout=900000'"),
+    ],
+)
+def test_long_statements_without_the_driver(monkeypatch, dsn, want):
+    import builtins
+
+    from mempalace import kg_delete_queue as q
+
+    real = builtins.__import__
+
+    def no_psycopg(name, *a, **k):
+        if name.startswith("psycopg"):
+            raise ImportError(name)
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", no_psycopg)
+    assert want in q._long_statements(dsn)
