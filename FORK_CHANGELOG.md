@@ -18,6 +18,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-11-13]
+
+
+### Fixed
+
+
+- **drawer deletes reach the AGE graph even while KG write-through is paused; delete-through has its own switch, MEMPALACE_KG_DELETETHROUGH, default on** (`HEAD` — pending resolution)
+  The delete hook was attached only alongside write-through, and its
+  factory was gated on `MEMPALACE_KG_WRITETHROUGH`. Production paused
+  write-through on 2026-10-24 for a re-mine drain, so from then on no
+  daemon delete reached AGE: each deleted drawer left its Drawer vertex
+  and edges behind (#558, measured live 2026-11-13).
+
+  Delete-through now attaches whenever `MEMPALACE_KG_DELETETHROUGH` is on
+  (the default) and the graph already exists. A read-only probe decides
+  that, so a palace that never used AGE is never bootstrapped; a DSN with
+  no graph is not re-probed per collection. `MEMPALACE_KG_DELETETHROUGH=0`
+  opts out. Write-through stays its own decision.
+
+
 ## [2026-11-11]
 
 
