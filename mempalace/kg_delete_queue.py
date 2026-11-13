@@ -43,7 +43,13 @@ logger = logging.getLogger(__name__)
 QUEUE_TABLE = "mempalace_kg_delete_queue"
 DEFAULT_DRAWER_TABLE = "mempalace_drawers"
 BATCH = 500
-MAX_BATCHES = 20
+MAX_BATCHES = 2000
+BUDGET_S = 1800.0  # the sweep stops starting new batches after this many seconds
+GRAPH = "mempalace_kg"
+# The sweep's AGE connection gets its own statement limit: a role-level default
+# (30 s in production) cancelled a DETACH DELETE that took 70-91 s under load
+# (2026-11-13). A libpq startup option overrides the role setting.
+SWEEP_STATEMENT_TIMEOUT_MS = 900_000
 SETTLE_HOURS = 12
 _SEQ = f"{QUEUE_TABLE}_version_seq"
 _LOCK_KEY = 558_0610  # pg advisory lock: one sweeper at a time
@@ -144,23 +150,60 @@ def _live_ids(cur, table: str, ids: List[str]) -> set:
     return {r[0] for r in cur.fetchall()}
 
 
+def _ids_with_vertex(cur, ids: List[str]) -> List[str]:
+    """The ids that have a Drawer vertex, via the ``drawer_id_unique`` btree
+    (8 ms for 500 ids in production) -- most queued ids have none (drawers
+    filed while write-through was off), and skipping them skips the ~16 s fixed
+    cost of a DETACH DELETE. No Drawer label table means no vertices."""
+    if not ids:
+        return []
+    try:
+        cur.execute(
+            f"SELECT ((properties::text)::jsonb->>'id') FROM {GRAPH}.\"Drawer\""
+            " WHERE ((properties::text)::jsonb->>'id') = ANY(%s)",
+            (ids,),
+        )
+    except Exception as e:  # noqa: BLE001
+        if (getattr(e, "sqlstate", None) or getattr(e, "pgcode", None)) in ("42P01", "3F000"):
+            return []
+        raise
+    have = {r[0] for r in cur.fetchall()}
+    return [i for i in ids if i in have]
+
+
+def _long_statements(dsn: str) -> str:
+    from psycopg.conninfo import make_conninfo
+
+    return make_conninfo(dsn, options=f"-c statement_timeout={SWEEP_STATEMENT_TIMEOUT_MS}")
+
+
 def sweep(
     dsn: str,
     kg: Any = None,
     *,
     batch: int = BATCH,
     max_batches: int = MAX_BATCHES,
+    budget_s: float = BUDGET_S,
     connect: Optional[Callable[[str], Any]] = None,
     settle_hours: int = SETTLE_HOURS,
 ) -> dict:
-    """Remove queued Drawer vertices, ``batch`` ids per DETACH DELETE statement,
-    oldest first, at most ``max_batches`` statements. Each batch's wall time is
-    logged and returned. An error stops the sweep; the failing batch and
-    everything after it stay queued."""
-    if kg is None:
-        from .knowledge_graph_age import KnowledgeGraphAGE
+    """Remove queued Drawer vertices, oldest first, ``batch`` queue entries at a
+    time; only ids that still have a vertex reach the (one per batch) DETACH
+    DELETE. Stops when the queue is empty, after ``max_batches``, or once
+    ``budget_s`` has passed. Each batch's wall time is logged and returned. An
+    error stops the sweep; the failing batch and everything after it stay queued.
+    ``kg`` is built lazily (only when a vertex needs deleting) with its own
+    statement limit."""
+    started = time.monotonic()
 
-        kg = KnowledgeGraphAGE(dsn=dsn)
+    def _kg():
+        nonlocal kg
+        if kg is None:
+            from .knowledge_graph_age import KnowledgeGraphAGE
+
+            kg = KnowledgeGraphAGE(dsn=_long_statements(dsn))
+        return kg
+
     conn = (connect or _connect)(dsn)
     out: Dict[str, Any] = {
         "batches": 0,
@@ -168,6 +211,7 @@ def sweep(
         "removed": 0,
         "live_skipped": 0,
         "waiting": 0,
+        "no_vertex": 0,
         "seconds": [],
         "left": None,
     }
@@ -179,6 +223,9 @@ def sweep(
             cur.execute(_DDL)
         held: List[str] = []  # live rows on fresh entries, kept queued: not re-read this sweep
         for _ in range(max_batches):
+            if time.monotonic() - started > budget_s:
+                out["stopped"] = "budget"
+                break
             with conn.cursor() as cur:
                 cur.execute(
                     f"SELECT drawer_id, source_table, version,"
@@ -203,8 +250,10 @@ def sweep(
             ack = [r for r in rows if r[0] not in live or r[3]]
             waiting = len(rows) - len(ack)
             held += [r[0] for r in rows if r[0] in live and not r[3]]
+            with conn.cursor() as cur:
+                doomed = _ids_with_vertex(cur, dead)
             t0 = time.monotonic()
-            removed = kg.delete_drawers(dead) if dead else 0
+            removed = _kg().delete_drawers(doomed) if doomed else 0
             secs = round(time.monotonic() - t0, 1)
             with conn.cursor() as cur:
                 cur.execute(
@@ -218,6 +267,7 @@ def sweep(
             out["removed"] += int(removed or 0)
             out["live_skipped"] += len(live) - waiting
             out["waiting"] += waiting
+            out["no_vertex"] += len(dead) - len(doomed)
             out["seconds"].append(secs)
             logger.info(
                 "KG delete sweep: batch of %d id(s) (%d live again, skipped), "

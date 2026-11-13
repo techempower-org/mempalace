@@ -336,6 +336,7 @@ class _QueueDB:
     def __init__(self):
         self.queue = {}  # drawer_id -> [order, source_table, version, settled]
         self.drawers = set()  # ids that have a live drawer row
+        self.vertices = None  # ids that have a Drawer vertex (None: every id does)
         self.sql = []
         self.fail = set()  # statement kinds to fail: "insert", "dequeue"
         self.on_select = None  # callback run right after a batch SELECT
@@ -393,6 +394,9 @@ class _QueueDB:
                     ]
                     if db.on_select:
                         db.on_select()
+                elif q1.startswith("SELECT ((properties"):
+                    have = params[0] if db.vertices is None else db.vertices
+                    self._rows = [(i,) for i in params[0] if i in have]
                 elif q1.startswith("SELECT id FROM"):
                     self._rows = [(i,) for i in params[0] if i in db.drawers]
                 elif q1.startswith("DELETE FROM mempalace_kg_delete_queue"):
@@ -710,3 +714,38 @@ def test_the_postgres_collection_connection_is_autocommit(monkeypatch):
     col._conn, col.dsn = None, "postgresql://fake/ac"
     monkeypatch.setattr(col, "_apply_session_settings", lambda conn: None, raising=False)
     assert col._get_conn().autocommit is True
+
+
+# --- the vertex filter, the lazy AGE connection and the time budget (2026-11-13 live) ---
+def test_ids_without_a_vertex_never_reach_the_graph_and_build_no_connection(monkeypatch):
+    from mempalace.kg_delete_queue import sweep
+
+    db = _QueueDB()
+    db.enqueue("v1", "n1", "n2")
+    db.vertices = {"v1"}
+    built = []
+
+    class _KG(_SweepKG):
+        def __init__(self, dsn):
+            super().__init__()
+            built.append(dsn)
+
+    monkeypatch.setattr("mempalace.knowledge_graph_age.KnowledgeGraphAGE", _KG)
+    out = sweep("postgresql://fake/nv", connect=db.connect)
+    assert out["no_vertex"] == 2 and out["removed"] == 1 and db.queue == {}
+    assert len(built) == 1 and "statement_timeout=900000" in built[0]
+
+    db.enqueue("n3", "n4")  # none of these has a vertex: no AGE connection at all
+    built.clear()
+    out = sweep("postgresql://fake/nv", connect=db.connect)
+    assert built == [] and out["removed"] == 0 and out["no_vertex"] == 2 and db.queue == {}
+
+
+def test_the_time_budget_stops_new_batches(monkeypatch):
+    from mempalace.kg_delete_queue import sweep
+
+    db = _QueueDB()
+    db.enqueue("d1", "d2", "d3", "d4")
+    kg = _SweepKG()
+    out = sweep("postgresql://fake/b", kg=kg, batch=1, budget_s=-1, connect=db.connect)
+    assert out["batches"] == 0 and out["stopped"] == "budget" and len(db.queue) == 4
