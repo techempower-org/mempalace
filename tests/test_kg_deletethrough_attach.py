@@ -89,9 +89,11 @@ import pytest  # noqa: E402
 
 
 class _PgError(Exception):
-    def __init__(self, sqlstate):
-        super().__init__(sqlstate)
-        self.sqlstate = sqlstate
+    """psycopg 3's interface (.sqlstate) by default; psycopg2's (.pgcode) on request."""
+
+    def __init__(self, code, attr="sqlstate"):
+        super().__init__(code)
+        setattr(self, attr, code)
 
 
 class _FakeDriver:
@@ -139,6 +141,7 @@ class _FakeDriver:
         (None, None, False),                 # catalog answered: no such graph/label
         (None, _PgError("3F000"), False),    # no ag_catalog schema: AGE not installed
         (None, _PgError("42P01"), False),    # undefined table: AGE not installed
+        (None, _PgError("3F000", "pgcode"), False),  # the same, psycopg2-style
         (None, _PgError("57014"), None),     # statement timeout: cannot tell
         (None, _PgError("42501"), None),     # permission denied: cannot tell
         (None, RuntimeError("boom"), None),  # anything else: cannot tell
@@ -225,3 +228,61 @@ def test_a_graph_created_after_a_negative_probe_is_seen_once_the_ttl_expires(mon
     later = _Col()
     col_mod._maybe_attach_writethrough(later, "postgresql://fake/f")
     assert later.delete_hook is not None
+
+
+# --- live: the real driver, the real constructor, a real vertex (CI runs AGE) -----------
+import os  # noqa: E402
+
+POSTGRES_DSN = os.environ.get("TEST_POSTGRES_DSN")
+pgmark = pytest.mark.skipif(POSTGRES_DSN is None, reason="set TEST_POSTGRES_DSN (Postgres with AGE)")
+
+
+def _drawer_vertices(did):
+    import psycopg
+
+    with psycopg.connect(POSTGRES_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            'SELECT count(*) FROM mempalace_kg."Drawer" WHERE properties::text LIKE %s',
+            ("%" + did + "%",),
+        )
+        return cur.fetchone()[0]
+
+
+@pgmark
+def test_live_probe_then_real_constructor_then_the_vertex_is_deleted(monkeypatch):
+    from mempalace.kg_writethrough import age_graph_exists
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    did = "drawer_558_live_%d" % os.getpid()
+    kg._run_cypher("CREATE (:Drawer {id: $id})", {"id": did}, commit=True)
+    assert _drawer_vertices(did) == 1
+    assert age_graph_exists(POSTGRES_DSN) is True
+    assert age_graph_exists(POSTGRES_DSN, graph="no_such_graph_558") is False
+
+    _env(monkeypatch)  # write-through OFF, delete-through default
+    col = _Col()
+    _attach(col, POSTGRES_DSN)  # no mocks: the real probe and the real constructor
+    assert col.delete_hook is not None
+    col.delete_hook(drawer_ids=[did])
+    assert _drawer_vertices(did) == 0
+
+
+@pgmark
+def test_live_a_database_without_age_is_a_confirmed_absence():
+    import psycopg
+    from psycopg.conninfo import make_conninfo
+
+    from mempalace.kg_writethrough import age_graph_exists
+
+    name = "mp558_noage_%d" % os.getpid()
+    try:
+        with psycopg.connect(POSTGRES_DSN, autocommit=True) as admin:
+            admin.execute("CREATE DATABASE %s" % name)
+    except Exception as e:  # noqa: BLE001
+        pytest.skip("cannot create a scratch database: %s" % e)
+    try:
+        assert age_graph_exists(make_conninfo(POSTGRES_DSN, dbname=name)) is False
+    finally:
+        with psycopg.connect(POSTGRES_DSN, autocommit=True) as admin:
+            admin.execute("DROP DATABASE IF EXISTS %s" % name)

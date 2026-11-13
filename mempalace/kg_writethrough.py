@@ -678,7 +678,10 @@ def age_graph_exists(dsn: str, graph: str = "mempalace_kg") -> Optional[bool]:
             )
             return cur.fetchone() is not None
     except Exception as e:  # noqa: BLE001
-        return False if getattr(e, "sqlstate", None) in _NO_AGE_SQLSTATES else None
+        # psycopg 3 (the driver _load_psycopg2 returns) names it .sqlstate;
+        # psycopg2 named it .pgcode. Accept either.
+        code = getattr(e, "sqlstate", None) or getattr(e, "pgcode", None)
+        return False if code in _NO_AGE_SQLSTATES else None
     finally:
         try:
             conn.close()
