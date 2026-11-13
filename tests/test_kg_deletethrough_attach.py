@@ -380,8 +380,9 @@ class _QueueDB:
                 elif q1.startswith("DELETE FROM mempalace_kg_delete_queue"):
                     if "dequeue" in db.fail:
                         raise RuntimeError("dequeue failed")
+                    by_version = "q.version = a.version" in q1  # honour the SQL as sent
                     for i, v in zip(params[0], params[1]):
-                        if i in db.queue and db.queue[i][2] == v:
+                        if i in db.queue and (db.queue[i][2] == v or not by_version):
                             del db.queue[i]
                 elif q1.startswith("SELECT count"):
                     self._rows = [(len(db.queue),)]
