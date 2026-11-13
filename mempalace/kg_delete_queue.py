@@ -178,9 +178,17 @@ def _ids_with_vertex(cur, ids: List[str]) -> List[str]:
 
 
 def _long_statements(dsn: str) -> str:
-    from psycopg.conninfo import make_conninfo
+    """``dsn`` with a startup ``options`` that sets this connection's statement limit."""
+    opt = f"-c statement_timeout={SWEEP_STATEMENT_TIMEOUT_MS}"
+    try:
+        from psycopg.conninfo import make_conninfo
+    except ImportError:  # the driver is optional; build it by hand
+        if "://" in dsn:
+            from urllib.parse import quote
 
-    return make_conninfo(dsn, options=f"-c statement_timeout={SWEEP_STATEMENT_TIMEOUT_MS}")
+            return dsn + ("&" if "?" in dsn else "?") + "options=" + quote(opt, safe="=")
+        return f"{dsn} options='{opt}'"
+    return make_conninfo(dsn, options=opt)
 
 
 def sweep(

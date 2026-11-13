@@ -791,3 +791,27 @@ def test_vertex_lookup_failure_keeps_the_batch_queued():
     with _pt.raises(RuntimeError):
         q.sweep("postgresql://fake/vf", kg=_SweepKG(), connect=db.connect)
     assert list(db.queue) == ["d1"]
+
+
+@_pt.mark.parametrize(
+    "dsn,want",
+    [
+        ("postgresql://u@h/db", "postgresql://u@h/db?options=-c%20statement_timeout=900000"),
+        ("postgresql://u@h/db?sslmode=disable", "&options=-c%20statement_timeout=900000"),
+        ("host=h dbname=db", "host=h dbname=db options='-c statement_timeout=900000'"),
+    ],
+)
+def test_long_statements_without_the_driver(monkeypatch, dsn, want):
+    import builtins
+
+    from mempalace import kg_delete_queue as q
+
+    real = builtins.__import__
+
+    def no_psycopg(name, *a, **k):
+        if name.startswith("psycopg"):
+            raise ImportError(name)
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", no_psycopg)
+    assert want in q._long_statements(dsn)
