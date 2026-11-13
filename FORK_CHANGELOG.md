@@ -24,6 +24,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **the KG delete sweep only runs DETACH DELETE for ids that still have a vertex, gets its own statement limit, and is bounded by a 30-minute budget** (`HEAD` — pending resolution)
+  Right after the queued delete-through shipped, the first production
+  sweep was cancelled by the database role's 30 s statement timeout: one
+  DETACH DELETE took 70-91 s under daytime load. Miners also queued about
+  130,000 ids a day, far past the nightly cap of 20 batches.
+
+  Most queued ids never had a vertex (they were filed while write-through
+  was paused), so the sweep now asks the `drawer_id_unique` index which ids
+  have one (8-29 ms per 500) and runs the batch's DETACH DELETE only for
+  those; a batch with none builds no graph connection at all. The graph
+  connection carries its own 15-minute statement limit, and the sweep stops
+  starting batches after 30 minutes instead of after 20.
+
+
 - **drawer deletes reach the AGE graph again, even while KG write-through is paused; deleted ids are queued and the nightly dream run removes their vertices in batches (MEMPALACE_KG_DELETETHROUGH, default on)** (`HEAD` — pending resolution)
   The delete hook was attached only alongside write-through, and its
   factory was gated on `MEMPALACE_KG_WRITETHROUGH`. Production paused

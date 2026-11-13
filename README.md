@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| the KG delete sweep only runs DETACH DELETE for ids that still have a vertex, gets its own statement limit, and is bounded by a 30-minute budget | — | `HEAD` — pending resolution |
 | drawer deletes reach the AGE graph again, even while KG write-through is paused; deleted ids are queued and the nightly dream run removes their vertices in batches (MEMPALACE_KG_DELETETHROUGH, default on) | — | `HEAD` — pending resolution |
 | the nightly dream, `python -m mempalace.dream nightly`, runs the inventory and the contradictions pass and publishes one dreams/v1 JSON document with stable proposal ids for a private review page; decided ids are never proposed again | — | `HEAD` — pending resolution |
 | dream day 2, `python -m mempalace.dream contradictions`, asks a local model whether a feedback memory contradicts a CLAUDE.md rule that governs it, on similarity-prefiltered pairs, and proposes only the contradictions | — | `HEAD` — pending resolution |

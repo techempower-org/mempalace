@@ -47,13 +47,16 @@ leaves an orphan vertex behind (logged), exactly what an absent hook would.
 ### `sweep`
 
 ```python
-def sweep(dsn: str, kg: Any = None, *, batch: int = BATCH, max_batches: int = MAX_BATCHES, connect: Optional[Callable[[str], Any]] = None, settle_hours: int = SETTLE_HOURS) -> dict
+def sweep(dsn: str, kg: Any = None, *, batch: int = BATCH, max_batches: int = MAX_BATCHES, budget_s: float = BUDGET_S, connect: Optional[Callable[[str], Any]] = None, settle_hours: int = SETTLE_HOURS) -> dict
 ```
 
-Remove queued Drawer vertices, ``batch`` ids per DETACH DELETE statement,
-oldest first, at most ``max_batches`` statements. Each batch's wall time is
-logged and returned. An error stops the sweep; the failing batch and
-everything after it stay queued.
+Remove queued Drawer vertices, oldest first, ``batch`` queue entries at a
+time; only ids that still have a vertex reach the (one per batch) DETACH
+DELETE. Stops when the queue is empty, after ``max_batches``, or once
+``budget_s`` has passed. Each batch's wall time is logged and returned. An
+error stops the sweep; the failing batch and everything after it stay queued.
+``kg`` is built lazily (only when a vertex needs deleting) with its own
+statement limit.
 
 ### `sweep_from_env`
 
