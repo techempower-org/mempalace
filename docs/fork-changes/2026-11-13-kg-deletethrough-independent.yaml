@@ -2,7 +2,7 @@ seq: 200
 id: kg-deletethrough-independent
 date: '2026-11-13'
 bucket: Fixed
-commit: HEAD
+commit: 9a72630
 area: Knowledge graph
 summary: drawer deletes reach the AGE graph again, even while KG write-through is paused; deleted ids are queued and the nightly dream run removes their vertices in batches (MEMPALACE_KG_DELETETHROUGH, default on)
 body: |
