@@ -613,7 +613,6 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
         from ..kg_writethrough import (
             age_graph_exists,
             deletethrough_enabled,
-            make_deletethrough_from_env,
             make_writethrough_from_env,
         )
 
@@ -649,29 +648,28 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
             logger.info(
                 "KG write-through attached to collection (AGE entities will be extracted inline)"
             )
-        # Delete-through is independent of write-through (#558): it runs
-        # whenever MEMPALACE_KG_DELETETHROUGH is on (default) and the graph
-        # already exists, so pausing write-through never orphans vertices.
+        # Delete-through is independent of write-through (#558): whenever
+        # MEMPALACE_KG_DELETETHROUGH is on (default) and the graph already
+        # exists, deleted drawer ids are QUEUED (one INSERT); the nightly sweep
+        # removes their vertices in batches. Never inline: AGE 1.6's DETACH
+        # DELETE costs ~16 s per statement on a large graph (#610), and miners
+        # delete while holding the mine lock.
         if hasattr(collection, "set_kg_deletethrough") and deletethrough_enabled():
             import time as _time
 
-            dkg = kg
-            if dkg is None and _no_age_graph.get(dsn, 0.0) <= _time.monotonic():
+            if _no_age_graph.get(dsn, 0.0) <= _time.monotonic():
                 _no_age_graph.pop(dsn, None)
                 found = age_graph_exists(dsn)
                 if found is True:
-                    from ..knowledge_graph_age import KnowledgeGraphAGE
+                    from ..kg_delete_queue import make_queued_deletethrough
 
-                    dkg = KnowledgeGraphAGE(dsn=dsn)
-                elif found is False:
-                    _no_age_graph[dsn] = _time.monotonic() + _NO_AGE_GRAPH_TTL
-            if dkg is not None:
-                delete_hook = make_deletethrough_from_env(kg=dkg)
-                if delete_hook is not None:
-                    collection.set_kg_deletethrough(delete_hook)
+                    collection.set_kg_deletethrough(make_queued_deletethrough(dsn))
                     _mark_kg_hooks_attached(collection, cid)
                     logger.info(
-                        "KG delete-through attached to collection (drawer deletes propagate to AGE)"
+                        "KG delete-through attached to collection "
+                        "(deleted drawer ids are queued for the graph sweep)"
                     )
+                elif found is False:
+                    _no_age_graph[dsn] = _time.monotonic() + _NO_AGE_GRAPH_TTL
     except Exception as e:
         logger.debug("KG write-through not attached: %s", e)

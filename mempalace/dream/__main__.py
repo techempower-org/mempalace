@@ -80,6 +80,11 @@ def main(argv=None) -> int:
             seen=nightly.read_json(args.out / nightly.SEEN, {}),
             applied=nightly.read_json(args.out / nightly.APPLIED, []),
         )
+        # Deferred AGE delete-through (#558): remove the queued Drawer vertices in
+        # batches, at the night's quiet hour. Skips or reports; never fails the night.
+        from ..kg_delete_queue import sweep_from_env
+
+        doc["run"]["steps"]["kg_delete_sweep"] = sweep_from_env()
         path = nightly.publish(doc, args.out, seen)
         steps = doc["run"]["steps"]
         print(f"{len(doc['proposals'])} proposals {json.dumps(steps)} -> {path}")
