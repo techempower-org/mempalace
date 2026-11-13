@@ -561,11 +561,13 @@ def get_closets_collection(
 
 
 _writethrough_attached: set = set()
+_no_age_graph: set = set()  # DSNs probed with no AGE graph: never re-probed per call
 
 
 def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
-    """Auto-attach the AGE KG write- and delete-through hooks when
-    MEMPALACE_KG_WRITETHROUGH=1.
+    """Auto-attach the AGE KG write-through hooks (MEMPALACE_KG_WRITETHROUGH=1)
+    and, independently, the delete-through (MEMPALACE_KG_DELETETHROUGH, default
+    on, only when the graph already exists; #558).
 
     Called once per collection instance. Idempotent — tracks by collection id
     so repeated get_collection() calls don't stack hooks. Attaches both
@@ -580,6 +582,8 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
         return
     try:
         from ..kg_writethrough import (
+            age_graph_exists,
+            deletethrough_enabled,
             make_deletethrough_from_env,
             make_writethrough_from_env,
         )
@@ -616,10 +620,22 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
             logger.info(
                 "KG write-through attached to collection (AGE entities will be extracted inline)"
             )
-            if hasattr(collection, "set_kg_deletethrough"):
-                delete_hook = make_deletethrough_from_env(kg=kg)
+        # Delete-through is independent of write-through (#558): it runs
+        # whenever MEMPALACE_KG_DELETETHROUGH is on (default) and the graph
+        # already exists, so pausing write-through never orphans vertices.
+        if hasattr(collection, "set_kg_deletethrough") and deletethrough_enabled():
+            dkg = kg
+            if dkg is None and dsn not in _no_age_graph and age_graph_exists(dsn):
+                from ..knowledge_graph_age import KnowledgeGraphAGE
+
+                dkg = KnowledgeGraphAGE(dsn=dsn)
+            if dkg is None:
+                _no_age_graph.add(dsn)
+            else:
+                delete_hook = make_deletethrough_from_env(kg=dkg)
                 if delete_hook is not None:
                     collection.set_kg_deletethrough(delete_hook)
+                    _writethrough_attached.add(cid)
                     logger.info(
                         "KG delete-through attached to collection (drawer deletes propagate to AGE)"
                     )

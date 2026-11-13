@@ -628,20 +628,64 @@ def make_batch_writethrough_from_env(kg: Optional[Any] = None, dsn: Optional[str
     return _chain_batch_writethroughs(stages)
 
 
-def make_deletethrough_from_env(kg: Optional[Any] = None):
-    """Build a delete hook gated on the same env switch as writethrough.
+def deletethrough_enabled() -> bool:
+    """``MEMPALACE_KG_DELETETHROUGH``, default ON (#558).
 
-    ``MEMPALACE_KG_WRITETHROUGH=1`` enables both write and delete hooks
-    — they're a matched pair; running one without the other leaves the
-    graph drifting out of sync with the relational table. Returns
-    ``None`` when the master switch is off.
+    Independent of ``MEMPALACE_KG_WRITETHROUGH``: write-through is a cost
+    knob (it can be paused for a re-mine drain), but a graph that already
+    holds Drawer vertices must lose them when their rows are deleted, or it
+    fills with orphans. Set ``0`` to opt out explicitly.
     """
     import os
 
-    if os.environ.get("MEMPALACE_KG_WRITETHROUGH") not in ("1", "true", "yes"):
+    return os.environ.get("MEMPALACE_KG_DELETETHROUGH", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+def age_graph_exists(dsn: str, graph: str = "mempalace_kg") -> bool:
+    """True when the AGE graph already exists. Never creates anything: the
+    delete-through must not bootstrap AGE on a palace that never used it.
+    Any failure (no AGE extension, no permission, no server) reads as False.
+    """
+    try:
+        from .knowledge_graph_age import _load_psycopg2
+
+        conn = _load_psycopg2().connect(dsn)
+    except Exception:  # noqa: BLE001
+        return False
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM pg_namespace n JOIN pg_class c ON c.relnamespace = n.oid"
+                " WHERE n.nspname = %s AND c.relname = 'Drawer'",
+                (graph,),
+            )
+            return cur.fetchone() is not None
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def make_deletethrough_from_env(kg: Optional[Any] = None):
+    """Build the delete hook when ``MEMPALACE_KG_DELETETHROUGH`` is on
+    (the default). Returns ``None`` when it is off.
+
+    Until #558 this was gated on ``MEMPALACE_KG_WRITETHROUGH``, so pausing
+    write-through also silently stopped deletes reaching AGE and every
+    backfilled Drawer vertex was orphaned by its row's delete.
+    """
+    if not deletethrough_enabled():
         return None
     if kg is None:
-        raise ValueError("kg must be provided when MEMPALACE_KG_WRITETHROUGH is enabled")
+        raise ValueError("kg must be provided when MEMPALACE_KG_DELETETHROUGH is enabled")
     return make_age_deletethrough(kg)
 
 
