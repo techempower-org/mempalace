@@ -13,12 +13,16 @@ than once per delete. The nightly dream run calls :func:`sweep_from_env`.
 
 Correctness rules the sweep keeps:
 
-* An id whose drawer row exists again (re-mined under the same deterministic
-  id, or a relational delete that rolled back after the hook ran) is
-  acknowledged WITHOUT touching its vertex: it is live.
-* Each enqueue bumps the row's ``version``; the sweep acknowledges only the
+* The hook runs before the deleting transaction commits, so a row the sweep
+  still sees may be a delete in flight. A visible row is therefore left queued
+  until its entry is older than ``SETTLE_HOURS``; only then is it taken as live
+  (re-mined under the same deterministic id, or a delete that rolled back) and
+  acknowledged WITHOUT touching its vertex.
+* Every enqueue takes a fresh ``version`` from a sequence (never repeats, even
+  after the row was dequeued and re-created); the sweep acknowledges only the
   (id, version) pairs it selected, so a delete of the same id that lands while
-  a batch is in flight stays queued for the next sweep.
+  a batch is in flight stays queued.
+* One sweeper at a time (a session advisory lock); a second one skips.
 * A batch leaves the queue only after its graph delete returned. Residual: a
   drawer re-added between the liveness check and the DETACH DELETE loses its
   vertex; with write-through off a re-added drawer has none anyway.
@@ -39,13 +43,17 @@ QUEUE_TABLE = "mempalace_kg_delete_queue"
 DEFAULT_DRAWER_TABLE = "mempalace_drawers"
 BATCH = 500
 MAX_BATCHES = 20
+SETTLE_HOURS = 12
+_SEQ = f"{QUEUE_TABLE}_version_seq"
+_LOCK_KEY = 558_0610  # pg advisory lock: one sweeper at a time
 _TABLE_RE = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 _DDL = f"""
+CREATE SEQUENCE IF NOT EXISTS {_SEQ};
 CREATE TABLE IF NOT EXISTS {QUEUE_TABLE} (
     drawer_id     TEXT PRIMARY KEY,
     source_table  TEXT NOT NULL DEFAULT '{DEFAULT_DRAWER_TABLE}',
-    version       INTEGER NOT NULL DEFAULT 1,
+    version       BIGINT NOT NULL DEFAULT nextval('{_SEQ}'),
     queued_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )
 """
@@ -54,7 +62,8 @@ _UPSERT = (
     f"INSERT INTO {QUEUE_TABLE} AS q (drawer_id, source_table)"
     " SELECT unnest(%s::text[]), %s"
     " ON CONFLICT (drawer_id) DO UPDATE"
-    " SET version = q.version + 1, queued_at = NOW(), source_table = EXCLUDED.source_table"
+    f" SET version = nextval('{_SEQ}'), queued_at = NOW(),"
+    " source_table = EXCLUDED.source_table"
 )
 
 
@@ -141,6 +150,7 @@ def sweep(
     batch: int = BATCH,
     max_batches: int = MAX_BATCHES,
     connect: Optional[Callable[[str], Any]] = None,
+    settle_hours: int = SETTLE_HOURS,
 ) -> dict:
     """Remove queued Drawer vertices, ``batch`` ids per DETACH DELETE statement,
     oldest first, at most ``max_batches`` statements. Each batch's wall time is
@@ -156,18 +166,25 @@ def sweep(
         "ids": 0,
         "removed": 0,
         "live_skipped": 0,
+        "waiting": 0,
         "seconds": [],
         "left": None,
     }
     try:
         with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (_LOCK_KEY,))
+            if not cur.fetchone()[0]:
+                return {"skipped": "another sweep is running"}
             cur.execute(_DDL)
+        held: List[str] = []  # live rows on fresh entries, kept queued: not re-read this sweep
         for _ in range(max_batches):
             with conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT drawer_id, source_table, version FROM {QUEUE_TABLE}"
-                    " ORDER BY queued_at, drawer_id LIMIT %s",
-                    (batch,),
+                    f"SELECT drawer_id, source_table, version,"
+                    f" queued_at < NOW() - make_interval(hours => %s) AS settled"
+                    f" FROM {QUEUE_TABLE} WHERE NOT (drawer_id = ANY(%s))"
+                    f" ORDER BY queued_at, drawer_id LIMIT %s",
+                    (settle_hours, held, batch),
                 )
                 rows = cur.fetchall()
             if not rows:
@@ -176,25 +193,30 @@ def sweep(
             live: set = set()
             with conn.cursor() as cur:
                 by_table: Dict[str, List[str]] = {}
-                for did, table, _v in rows:
+                for did, table, _v, _settled in rows:
                     by_table.setdefault(table, []).append(did)
                 for table, tids in by_table.items():
                     live |= _live_ids(cur, table, tids)
             dead = [i for i in ids if i not in live]
+            # a visible row on a fresh entry may be a delete still in flight: keep it queued
+            ack = [r for r in rows if r[0] not in live or r[3]]
+            waiting = len(rows) - len(ack)
+            held += [r[0] for r in rows if r[0] in live and not r[3]]
             t0 = time.monotonic()
             removed = kg.delete_drawers(dead) if dead else 0
             secs = round(time.monotonic() - t0, 1)
             with conn.cursor() as cur:
                 cur.execute(
                     f"DELETE FROM {QUEUE_TABLE} q USING"
-                    " (SELECT unnest(%s::text[]) AS drawer_id, unnest(%s::int[]) AS version) a"
+                    " (SELECT unnest(%s::text[]) AS drawer_id, unnest(%s::bigint[]) AS version) a"
                     " WHERE q.drawer_id = a.drawer_id AND q.version = a.version",
-                    ([r[0] for r in rows], [int(r[2]) for r in rows]),
+                    ([r[0] for r in ack], [int(r[2]) for r in ack]),
                 )
             out["batches"] += 1
             out["ids"] += len(ids)
             out["removed"] += int(removed or 0)
-            out["live_skipped"] += len(live)
+            out["live_skipped"] += len(live) - waiting
+            out["waiting"] += waiting
             out["seconds"].append(secs)
             logger.info(
                 "KG delete sweep: batch of %d id(s) (%d live again, skipped), "

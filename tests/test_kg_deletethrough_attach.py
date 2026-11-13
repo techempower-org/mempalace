@@ -334,7 +334,7 @@ class _QueueDB:
     statements kg_delete_queue issues, records them, and can fail on request."""
 
     def __init__(self):
-        self.queue = {}  # drawer_id -> [order, source_table, version]
+        self.queue = {}  # drawer_id -> [order, source_table, version, settled]
         self.drawers = set()  # ids that have a live drawer row
         self.sql = []
         self.fail = set()  # statement kinds to fail: "insert", "dequeue"
@@ -342,14 +342,20 @@ class _QueueDB:
         self.connects = 0
         self.closed_count = 0
         self._order = 0
+        self._seq = 0
+        self.lock_owner = None
 
-    def enqueue(self, *ids, table="mempalace_drawers"):
+    def enqueue(self, *ids, table="mempalace_drawers", settled=True, sequence=True):
+        """``sequence``: versions from a global sequence (the shipped SQL); False
+        mimics a per-row counter that restarts at 1 when the row is re-created."""
         for i in ids:
+            self._seq += 1
             if i in self.queue:
-                self.queue[i][2] += 1
+                self.queue[i][2] = self._seq if sequence else self.queue[i][2] + 1
+                self.queue[i][3] = settled
             else:
                 self._order += 1
-                self.queue[i] = [self._order, table, 1]
+                self.queue[i] = [self._order, table, self._seq if sequence else 1, settled]
 
     def connect(self, dsn):
         self.connects += 1
@@ -366,13 +372,25 @@ class _QueueDB:
                 q1 = " ".join(q.split())
                 db.sql.append(q1[:60])
                 self._rows = []
-                if q1.startswith("INSERT"):
+                if q1.startswith("SELECT pg_try_advisory_lock"):
+                    ok = db.lock_owner in (None, conn)
+                    if ok:
+                        db.lock_owner = conn
+                    self._rows = [(ok,)]
+                elif q1.startswith("INSERT"):
                     if "insert" in db.fail:
                         raise RuntimeError("db down")
-                    db.enqueue(*params[0], table=params[1])
+                    db.enqueue(*params[0], table=params[1], settled=False, sequence="nextval" in q1)
                 elif q1.startswith("SELECT drawer_id"):
-                    ordered = sorted(db.queue, key=lambda k: (db.queue[k][0], k))
-                    self._rows = [(i, db.queue[i][1], db.queue[i][2]) for i in ordered[: params[0]]]
+                    _hours, held, limit = params
+                    ordered = [
+                        k
+                        for k in sorted(db.queue, key=lambda k: (db.queue[k][0], k))
+                        if k not in held
+                    ]
+                    self._rows = [
+                        (i, db.queue[i][1], db.queue[i][2], db.queue[i][3]) for i in ordered[:limit]
+                    ]
                     if db.on_select:
                         db.on_select()
                 elif q1.startswith("SELECT id FROM"):
@@ -402,8 +420,11 @@ class _QueueDB:
             def close(self):
                 db.closed_count += 1
                 self.closed = 1
+                if db.lock_owner is self:
+                    db.lock_owner = None  # a session advisory lock ends with its session
 
-        return _Conn()
+        conn = _Conn()
+        return conn
 
 
 class _SweepKG:
@@ -426,7 +447,7 @@ def test_the_hook_only_enqueues_unique_ids_and_creates_the_table_once():
     hook(drawer_ids=["c"])
     hook(drawer_ids=[])
     assert sorted(db.queue) == ["a", "b", "c"]
-    assert sum(1 for q in db.sql if q.startswith("CREATE TABLE")) == 1
+    assert sum(1 for q in db.sql if q.startswith("CREATE SEQUENCE")) == 1  # the DDL, once
     assert db.connects == 1
     assert not any("cypher" in q.lower() or q.startswith("MATCH") for q in db.sql)
 
@@ -475,32 +496,89 @@ def test_the_sweep_batches_oldest_first_and_enforces_max_batches():
     assert sorted(db.queue) == ["d5"] and len(out["seconds"]) == 2 and db.closed_count == 1
 
 
-def test_a_live_drawer_is_acknowledged_without_touching_its_vertex():
+def test_a_settled_live_drawer_is_acknowledged_without_touching_its_vertex():
     from mempalace.kg_delete_queue import sweep
 
     db = _QueueDB()
-    db.enqueue("gone", "back")
+    db.enqueue("gone", "back")  # entries older than the settling window
     db.drawers.add("back")  # re-mined under the same id, or the delete rolled back
     kg = _SweepKG()
     out = sweep("postgresql://fake/l", kg=kg, connect=db.connect)
     assert kg.calls == [["gone"]] and out["live_skipped"] == 1 and db.queue == {}
 
 
+def test_an_uncommitted_delete_stays_queued_until_it_lands():
+    """The hook runs before the deleting transaction commits: a fresh entry whose
+    row is still visible must wait, not be acknowledged as live."""
+    from mempalace.kg_delete_queue import make_queued_deletethrough, sweep
+
+    db = _QueueDB()
+    db.drawers.add("d1")  # the DELETE has not committed yet
+    make_queued_deletethrough("postgresql://fake/u2", connect=db.connect)(drawer_ids=["d1"])
+    kg = _SweepKG()
+    out = sweep("postgresql://fake/u2", kg=kg, batch=10, max_batches=5, connect=db.connect)
+    assert kg.calls == [] and list(db.queue) == ["d1"] and out["waiting"] == 1
+    assert out["batches"] == 1, "a held id is not re-read by later batches of the same sweep"
+    db.drawers.discard("d1")  # the transaction commits
+    sweep("postgresql://fake/u2", kg=kg, connect=db.connect)
+    assert kg.calls == [["d1"]] and db.queue == {}
+
+
 def test_a_re_delete_during_a_batch_stays_queued_for_the_next_sweep():
-    from mempalace.kg_delete_queue import sweep
+    from mempalace.kg_delete_queue import make_queued_deletethrough, sweep
 
     db = _QueueDB()
     db.enqueue("d1", "d2")
+    hook = make_queued_deletethrough("postgresql://fake/v", connect=db.connect)
     fired = []
 
     def redelete():
         if not fired:
             fired.append(1)
-            db.enqueue("d1")  # the same id deleted again while the batch is in flight
+            hook(drawer_ids=["d1"])  # the same id deleted again while the batch is in flight
 
     db.on_select = redelete
     sweep("postgresql://fake/v", kg=_SweepKG(), batch=10, max_batches=1, connect=db.connect)
-    assert list(db.queue) == ["d1"] and db.queue["d1"][2] == 2
+    assert list(db.queue) == ["d1"]
+
+
+def test_a_stale_ack_cannot_remove_a_re_created_entry():
+    """Another sweeper acknowledged d1 and a new delete re-created it while this
+    sweep's batch was in flight; versions never repeat, so this sweep's ack misses."""
+    from mempalace.kg_delete_queue import make_queued_deletethrough, sweep
+
+    db = _QueueDB()
+    db.enqueue("d1")
+    hook = make_queued_deletethrough("postgresql://fake/o", connect=db.connect)
+    fired = []
+
+    def other_sweep_acked_then_new_delete():
+        if not fired:
+            fired.append(1)
+            del db.queue["d1"]
+            hook(drawer_ids=["d1"])
+
+    db.on_select = other_sweep_acked_then_new_delete
+    sweep("postgresql://fake/o", kg=_SweepKG(), batch=10, max_batches=1, connect=db.connect)
+    assert list(db.queue) == ["d1"]
+
+
+def test_only_one_sweeper_runs_at_a_time():
+    from mempalace.kg_delete_queue import sweep
+
+    db = _QueueDB()
+    db.enqueue("d1")
+    holder = db.connect("x")
+    with holder.cursor() as cur:
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (1,))
+    kg = _SweepKG()
+    assert sweep("postgresql://fake/p", kg=kg, connect=db.connect) == {
+        "skipped": "another sweep is running"
+    }
+    assert kg.calls == [] and list(db.queue) == ["d1"]
+    holder.close()
+    sweep("postgresql://fake/p", kg=kg, connect=db.connect)
+    assert kg.calls == [["d1"]] and db.lock_owner is None
 
 
 def test_a_second_batch_failure_keeps_it_and_the_rest_queued():
@@ -579,3 +657,32 @@ def test_with_write_through_on_a_failed_probe_is_retried_for_the_delete_side(mon
     first_write = col.write_hook
     col_mod._maybe_attach_writethrough(col, "postgresql://fake/w")
     assert col.write_hook is first_write, "write-through must not be re-attached"
+
+
+@pgmark
+def test_live_an_uncommitted_delete_is_held_then_swept_after_commit():
+    import psycopg
+
+    from mempalace.kg_delete_queue import make_queued_deletethrough, sweep
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    table = "mp558_drawers_%d" % os.getpid()
+    did = "drawer_558_txn_%d" % os.getpid()
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    kg._run_cypher("CREATE (:Drawer {id: $id})", {"id": did}, commit=True)
+    with psycopg.connect(POSTGRES_DSN, autocommit=True) as admin:
+        admin.execute("CREATE TABLE %s (id TEXT PRIMARY KEY)" % table)
+        admin.execute("INSERT INTO %s VALUES (%%s)" % table, (did,))
+    deleter = psycopg.connect(POSTGRES_DSN)  # a transaction left open on purpose
+    try:
+        deleter.execute("DELETE FROM %s WHERE id = %%s" % table, (did,))
+        make_queued_deletethrough(POSTGRES_DSN, table=table)(drawer_ids=[did])
+        held = sweep(POSTGRES_DSN, kg=kg)
+        assert held["waiting"] >= 1 and _drawer_vertices(did) == 1
+        deleter.commit()
+        swept = sweep(POSTGRES_DSN, kg=kg)
+        assert _drawer_vertices(did) == 0 and swept["removed"] >= 1
+    finally:
+        deleter.close()
+        with psycopg.connect(POSTGRES_DSN, autocommit=True) as admin:
+            admin.execute("DROP TABLE IF EXISTS %s" % table)
