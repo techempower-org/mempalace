@@ -688,7 +688,7 @@ def test_live_an_uncommitted_delete_is_held_then_swept_after_commit():
             admin.execute("DROP TABLE IF EXISTS %s" % table)
 
 
-def test_the_postgres_collection_commits_its_delete_before_the_hook_runs(monkeypatch):
+def test_the_postgres_collection_connection_is_autocommit(monkeypatch):
     """The production caller's invariant the sweep relies on: the collection's
     connection is autocommit, so a delete has committed when the hook fires."""
     import mempalace.backends.postgres as pg
