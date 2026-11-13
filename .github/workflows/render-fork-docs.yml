@@ -5,12 +5,14 @@ name: Render fork-change docs
 # the README fork-queue table and website/public/llms-full.txt, so any two
 # concurrent PRs conflicted on all three. PRs now carry only their entry file
 # (docs/fork-changes/<date>-<id>.yaml, `commit: HEAD`); this job resolves the
-# squash sha (scripts/maintain-fork-changes.py), re-renders, commits the
-# result to main, then runs check-docs.sh strictly on what it pushed.
+# squash sha (scripts/maintain-fork-changes.py), re-renders, runs
+# check-docs.sh strictly on the resulting commit, and only then pushes it.
 #
-# Trust: runs only on pushes to main and manual dispatch, never on pull
-# requests, so the write token never runs pull-request code. No event payload
-# field (titles, bodies, commit messages) is interpolated into a run block.
+# Trust: a trusted-main design. It runs only on pushes to main and manual
+# dispatch, never on pull requests, so an unmerged PR cannot reach the write
+# token; code that has merged (scripts, package install hooks, this file) does
+# run with it. No event payload field (titles, bodies, commit messages) is
+# interpolated into a run block.
 # A push made with GITHUB_TOKEN does not trigger workflows, so this cannot loop.
 
 on:
@@ -57,9 +59,14 @@ jobs:
 
       - run: pip install -e ".[dev]"
 
-      - name: Resolve shas, re-render, commit to main
+      # Each attempt validates its own candidate commit STRICTLY before pushing
+      # it, so nothing unchecked reaches main, and the check is of exactly the
+      # commit pushed (its sha is printed). A push rejected because main moved
+      # starts over from the new head.
+      - name: Resolve shas, re-render, check strictly, push
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STRICT_RESOLVED: '1'
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -70,29 +77,25 @@ jobs:
             python scripts/maintain-fork-changes.py
             python scripts/render-docs.py
             python scripts/render-llms-full.py
-            if git diff --quiet; then
-              echo "fork-change docs already current at $(git rev-parse --short HEAD)"
+            changed=0
+            if ! git diff --quiet; then
+              git add -- docs/fork-changes FORK_CHANGELOG.md README.md website/public/llms-full.txt
+              git commit --quiet -m "docs(generated): resolve fork-change shas and re-render (#473)"
+              changed=1
+            fi
+            candidate=$(git rev-parse HEAD)
+            echo "strict check of candidate $candidate"
+            bash scripts/check-docs.sh   # fails the job (and pushes nothing) on any drift
+            if [ "$changed" = 0 ]; then
+              echo "main is current and passes strictly at $candidate"
               exit 0
             fi
-            git add -- docs/fork-changes FORK_CHANGELOG.md README.md website/public/llms-full.txt
-            git commit --quiet -m "docs(generated): resolve fork-change shas and re-render (#473)"
-            if git push --quiet origin HEAD:main; then
-              echo "pushed $(git rev-parse --short HEAD)"
+            if git push --quiet origin "$candidate:refs/heads/main"; then
+              echo "pushed $candidate (checked strictly above)"
               exit 0
             fi
-            echo "main moved during the render (attempt $attempt); retrying on the new head"
+            echo "main moved during the render (attempt $attempt); starting over on the new head"
             sleep $((attempt * 5))
           done
           echo "could not push the rendered docs after 3 attempts" >&2
           exit 1
-
-      # Strict, on exactly what was pushed: every entry resolved, every
-      # rendered output matching its sources.
-      - name: check-docs (strict)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          STRICT_RESOLVED: '1'
-        run: |
-          git fetch --quiet origin main
-          git reset --quiet --hard origin/main
-          bash scripts/check-docs.sh

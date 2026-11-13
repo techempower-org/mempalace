@@ -44,6 +44,10 @@ on:
       - '.github/workflows/check-docs.yml'
   workflow_dispatch:
 
+# Read-only: pull requests run this, and it never writes.
+permissions:
+  contents: read
+
 jobs:
   check-docs:
     runs-on: ubuntu-latest
