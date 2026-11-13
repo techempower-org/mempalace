@@ -261,15 +261,42 @@ The env parsing deliberately lives in one place: this delegates to the
 per-drawer builder for stage *selection* and swaps the MENTIONS
 implementation, so the two cannot drift on which switches mean what.
 
+### `deletethrough_enabled`
+
+```python
+def deletethrough_enabled() -> bool
+```
+
+``MEMPALACE_KG_DELETETHROUGH``, default ON (#558).
+
+Independent of ``MEMPALACE_KG_WRITETHROUGH``: write-through is a cost
+knob (it can be paused for a re-mine drain), but a graph that already
+holds Drawer vertices must lose them when their rows are deleted, or it
+fills with orphans. Set ``0`` to opt out explicitly.
+
+### `age_graph_exists`
+
+```python
+def age_graph_exists(dsn: str, graph: str = 'mempalace_kg') -> Optional[bool]
+```
+
+Does the AGE graph exist with a Drawer vertex label? Never creates anything.
+
+True: AGE's own catalog lists the graph and its ``Drawer`` vertex label.
+False: confirmed absent -- the catalog answered and has no such graph or
+label, or AGE is not installed (no ``ag_catalog``). None: could not tell
+(no server, timeout, permissions); the caller must not cache that.
+Bounded: 5 s to connect, 5 s per statement.
+
 ### `make_deletethrough_from_env`
 
 ```python
 def make_deletethrough_from_env(kg: Optional[Any] = None)
 ```
 
-Build a delete hook gated on the same env switch as writethrough.
+Build the delete hook when ``MEMPALACE_KG_DELETETHROUGH`` is on
+(the default). Returns ``None`` when it is off.
 
-``MEMPALACE_KG_WRITETHROUGH=1`` enables both write and delete hooks
-— they're a matched pair; running one without the other leaves the
-graph drifting out of sync with the relational table. Returns
-``None`` when the master switch is off.
+Until #558 this was gated on ``MEMPALACE_KG_WRITETHROUGH``, so pausing
+write-through also silently stopped deletes reaching AGE and every
+backfilled Drawer vertex was orphaned by its row's delete.

@@ -1,0 +1,30 @@
+seq: 200
+id: kg-deletethrough-independent
+date: '2026-11-13'
+bucket: Fixed
+commit: HEAD
+area: Knowledge graph
+summary: drawer deletes reach the AGE graph again, even while KG write-through is paused; deleted ids are queued and the nightly dream run removes their vertices in batches (MEMPALACE_KG_DELETETHROUGH, default on)
+body: |
+  The delete hook was attached only alongside write-through, and its
+  factory was gated on `MEMPALACE_KG_WRITETHROUGH`. Production paused
+  write-through on 2026-10-24 for a re-mine drain, so from then on no
+  daemon delete reached AGE: each deleted drawer left its Drawer vertex
+  and edges behind (#558, measured live 2026-11-13).
+
+  Doing the delete inline is not an option on a large graph: AGE 1.6's
+  `DETACH DELETE` measured ~16 s per statement plus ~1 s per vertex on
+  production (#610), and the miners delete stale drawers while holding
+  the mine lock. So the hook now only inserts the ids into
+  `mempalace_kg_delete_queue`, and `python -m mempalace.dream nightly`
+  removes the queued vertices in batches of 500 (one statement per
+  batch, at most 20 batches a night, each batch's time logged and
+  reported in the night's `kg_delete_sweep` step). One sweeper runs at a
+  time; ids whose drawer row is visible again wait out a 12-hour settling
+  window (the hook runs before the deleting transaction commits) and are
+  then acknowledged without touching their live vertex.
+
+  The hook attaches when `MEMPALACE_KG_DELETETHROUGH` is on (the default)
+  and a read-only catalog probe finds the graph; a palace without AGE is
+  never bootstrapped. `MEMPALACE_KG_DELETETHROUGH=0` opts out.
+  Write-through stays its own decision.

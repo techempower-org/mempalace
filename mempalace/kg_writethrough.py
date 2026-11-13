@@ -628,20 +628,77 @@ def make_batch_writethrough_from_env(kg: Optional[Any] = None, dsn: Optional[str
     return _chain_batch_writethroughs(stages)
 
 
-def make_deletethrough_from_env(kg: Optional[Any] = None):
-    """Build a delete hook gated on the same env switch as writethrough.
+def deletethrough_enabled() -> bool:
+    """``MEMPALACE_KG_DELETETHROUGH``, default ON (#558).
 
-    ``MEMPALACE_KG_WRITETHROUGH=1`` enables both write and delete hooks
-    — they're a matched pair; running one without the other leaves the
-    graph drifting out of sync with the relational table. Returns
-    ``None`` when the master switch is off.
+    Independent of ``MEMPALACE_KG_WRITETHROUGH``: write-through is a cost
+    knob (it can be paused for a re-mine drain), but a graph that already
+    holds Drawer vertices must lose them when their rows are deleted, or it
+    fills with orphans. Set ``0`` to opt out explicitly.
     """
     import os
 
-    if os.environ.get("MEMPALACE_KG_WRITETHROUGH") not in ("1", "true", "yes"):
+    return os.environ.get("MEMPALACE_KG_DELETETHROUGH", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+# SQLSTATEs that mean "AGE is not installed here" (a confirmed absence), not a
+# failure: invalid_schema_name (no ag_catalog), undefined_table.
+_NO_AGE_SQLSTATES = frozenset({"3F000", "42P01"})
+
+
+def age_graph_exists(dsn: str, graph: str = "mempalace_kg") -> Optional[bool]:
+    """Does the AGE graph exist with a Drawer vertex label? Never creates anything.
+
+    True: AGE's own catalog lists the graph and its ``Drawer`` vertex label.
+    False: confirmed absent -- the catalog answered and has no such graph or
+    label, or AGE is not installed (no ``ag_catalog``). None: could not tell
+    (no server, timeout, permissions); the caller must not cache that.
+    Bounded: 5 s to connect, 5 s per statement.
+    """
+    try:
+        from .knowledge_graph_age import _load_psycopg2
+
+        conn = _load_psycopg2().connect(dsn, connect_timeout=5, options="-c statement_timeout=5000")
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM ag_catalog.ag_graph g"
+                " JOIN ag_catalog.ag_label l ON l.graph = g.graphid"
+                " WHERE g.name = %s AND l.name = 'Drawer' AND l.kind = 'v'",
+                (graph,),
+            )
+            return cur.fetchone() is not None
+    except Exception as e:  # noqa: BLE001
+        # psycopg 3 (the driver _load_psycopg2 returns) names it .sqlstate;
+        # psycopg2 named it .pgcode. Accept either.
+        code = getattr(e, "sqlstate", None) or getattr(e, "pgcode", None)
+        return False if code in _NO_AGE_SQLSTATES else None
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def make_deletethrough_from_env(kg: Optional[Any] = None):
+    """Build the delete hook when ``MEMPALACE_KG_DELETETHROUGH`` is on
+    (the default). Returns ``None`` when it is off.
+
+    Until #558 this was gated on ``MEMPALACE_KG_WRITETHROUGH``, so pausing
+    write-through also silently stopped deletes reaching AGE and every
+    backfilled Drawer vertex was orphaned by its row's delete.
+    """
+    if not deletethrough_enabled():
         return None
     if kg is None:
-        raise ValueError("kg must be provided when MEMPALACE_KG_WRITETHROUGH is enabled")
+        raise ValueError("kg must be provided when MEMPALACE_KG_DELETETHROUGH is enabled")
     return make_age_deletethrough(kg)
 
 

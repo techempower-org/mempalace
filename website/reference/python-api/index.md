@@ -53,6 +53,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.instructions_cli`](./instructions_cli) — Instruction text output for MemPalace CLI commands.
 - [`mempalace.kg_canonical_vocab`](./kg_canonical_vocab) — Closed-vocabulary predicate mapping spike (issue #72).
 - [`mempalace.kg_canonical_writepass`](./kg_canonical_writepass) — Guarded post-extraction canonical-mapping write pass (issue #72, approach a).
+- [`mempalace.kg_delete_queue`](./kg_delete_queue) — Deferred AGE delete-through (#558, #610).
 - [`mempalace.kg_llm_extractor`](./kg_llm_extractor) — LLM-based triple extractor for the async KG worker.
 - [`mempalace.kg_normalize`](./kg_normalize) — Normalize knowledge-graph predicates onto a closed vocabulary.
 - [`mempalace.kg_predicate_norm`](./kg_predicate_norm) — Predicate normalization for the AGE knowledge graph (issue #50).

@@ -180,6 +180,10 @@
         "link": "/reference/python-api/kg_canonical_writepass"
       },
       {
+        "text": "mempalace.kg_delete_queue",
+        "link": "/reference/python-api/kg_delete_queue"
+      },
+      {
         "text": "mempalace.kg_llm_extractor",
         "link": "/reference/python-api/kg_llm_extractor"
       },

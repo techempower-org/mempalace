@@ -921,25 +921,39 @@ def test_make_age_deletethrough_swallows_kg_errors():
     kg.delete_drawers.assert_called_once()
 
 
-def test_make_deletethrough_from_env_returns_none_when_disabled(monkeypatch):
+@pytest.mark.parametrize("val", ["0", "false", "no", "off", " OFF "])
+def test_make_deletethrough_from_env_returns_none_when_disabled(monkeypatch, val):
     from mempalace.kg_writethrough import make_deletethrough_from_env
 
-    monkeypatch.delenv("MEMPALACE_KG_WRITETHROUGH", raising=False)
+    monkeypatch.setenv("MEMPALACE_KG_WRITETHROUGH", "1")  # write-through on changes nothing
+    monkeypatch.setenv("MEMPALACE_KG_DELETETHROUGH", val)
     assert make_deletethrough_from_env(kg=MagicMock()) is None
 
 
 def test_make_deletethrough_from_env_requires_kg_when_enabled(monkeypatch):
     from mempalace.kg_writethrough import make_deletethrough_from_env
 
-    monkeypatch.setenv("MEMPALACE_KG_WRITETHROUGH", "1")
+    monkeypatch.delenv("MEMPALACE_KG_DELETETHROUGH", raising=False)
     with pytest.raises(ValueError, match="kg must be provided"):
         make_deletethrough_from_env(kg=None)
+
+
+def test_deletethrough_is_on_by_default_with_writethrough_off(monkeypatch):
+    """#558: pausing write-through must not stop deletes reaching AGE."""
+    from mempalace.kg_writethrough import deletethrough_enabled, make_deletethrough_from_env
+
+    monkeypatch.setenv("MEMPALACE_KG_WRITETHROUGH", "0")
+    monkeypatch.delenv("MEMPALACE_KG_DELETETHROUGH", raising=False)
+    assert deletethrough_enabled()
+    kg = MagicMock()
+    make_deletethrough_from_env(kg=kg)(drawer_ids=["d1"])
+    kg.delete_drawers.assert_called_once_with(["d1"])
 
 
 def test_make_deletethrough_from_env_enabled_returns_hook(monkeypatch):
     from mempalace.kg_writethrough import make_deletethrough_from_env
 
-    monkeypatch.setenv("MEMPALACE_KG_WRITETHROUGH", "1")
+    monkeypatch.setenv("MEMPALACE_KG_DELETETHROUGH", "1")
     kg = MagicMock()
     hook = make_deletethrough_from_env(kg=kg)
     assert hook is not None

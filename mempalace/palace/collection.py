@@ -561,26 +561,67 @@ def get_closets_collection(
 
 
 _writethrough_attached: set = set()
+# The attached-marker lives on the collection object itself: a bare id() can be
+# reused by a NEW collection once the old one is collected, which then silently
+# skipped its hooks (xreview of #609). The id set is only the fallback for an
+# object that refuses attributes.
+_KG_WRITE_MARK = "_mempalace_kg_write_attached"
+_KG_DELETE_MARK = "_mempalace_kg_delete_attached"
+_deletethrough_attached: set = set()  # fallback ids for objects refusing attributes
+
+
+def _accepts_mark(obj) -> bool:
+    try:
+        setattr(obj, "_mempalace_kg_mark_probe", True)
+        delattr(obj, "_mempalace_kg_mark_probe")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _is_marked(collection, mark, fallback: set) -> bool:
+    if getattr(collection, mark, False):
+        return True
+    return id(collection) in fallback and not _accepts_mark(collection)
+
+
+def _mark(collection, mark, fallback: set) -> None:
+    try:
+        setattr(collection, mark, True)
+    except Exception:  # noqa: BLE001
+        fallback.add(id(collection))
+
+
+# DSN -> monotonic expiry of a CONFIRMED "no AGE graph" probe, so a palace without
+# AGE is not probed on every collection; a graph created later is seen after the TTL.
+# A probe that could not tell (None) is never cached.
+_no_age_graph: dict = {}
+_NO_AGE_GRAPH_TTL = 600.0
 
 
 def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
-    """Auto-attach the AGE KG write- and delete-through hooks when
-    MEMPALACE_KG_WRITETHROUGH=1.
+    """Auto-attach the AGE KG write-through hooks (MEMPALACE_KG_WRITETHROUGH=1)
+    and, independently, the delete-through (MEMPALACE_KG_DELETETHROUGH, default
+    on, only when the graph already exists; #558).
 
-    Called once per collection instance. Idempotent — tracks by collection id
-    so repeated get_collection() calls don't stack hooks. Attaches both
-    sides (write + delete) as a matched pair so the graph stays in sync
-    with the relational drawer table; without delete-through the graph
-    accumulates orphan Drawer nodes (one per drawer deletion).
+    Idempotent per side: repeated get_collection() calls never stack hooks.
+    Without delete-through the graph accumulates orphan Drawer nodes (one per
+    drawer deletion).
     """
     import os as _os
 
-    cid = id(collection)
-    if cid in _writethrough_attached:
+    # Each side is marked separately, on the collection object itself (a bare
+    # id() can be reused by a new collection): write-through attaches once;
+    # delete-through is retried until it attaches, so a failed graph probe or
+    # a graph created later is picked up even when write-through is on.
+    write_done = _is_marked(collection, _KG_WRITE_MARK, _writethrough_attached)
+    delete_done = _is_marked(collection, _KG_DELETE_MARK, _deletethrough_attached)
+    if write_done and delete_done:
         return
     try:
         from ..kg_writethrough import (
-            make_deletethrough_from_env,
+            age_graph_exists,
+            deletethrough_enabled,
             make_writethrough_from_env,
         )
 
@@ -591,7 +632,7 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
         # the apache_age extension or the graph at all.
         mentions_on = _os.environ.get("MEMPALACE_KG_WRITETHROUGH") in ("1", "true", "yes")
         kg = None
-        if mentions_on:
+        if mentions_on and not write_done:
             from ..knowledge_graph_age import KnowledgeGraphAGE
 
             kg = KnowledgeGraphAGE(dsn=dsn)
@@ -601,27 +642,53 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
         # the palace host (palace-daemon#265). Backends without the batch
         # seam keep the per-drawer path unchanged.
         hook = None
-        if hasattr(collection, "set_kg_writethrough_batch"):
+        if write_done:
+            pass
+        elif hasattr(collection, "set_kg_writethrough_batch"):
             from ..kg_writethrough import make_batch_writethrough_from_env
 
             hook = make_batch_writethrough_from_env(kg=kg, dsn=dsn)
             if hook is not None:
                 collection.set_kg_writethrough_batch(hook)
-        if hook is None:
+        if hook is None and not write_done:
             hook = make_writethrough_from_env(kg=kg, dsn=dsn)
             if hook is not None:
                 collection.set_kg_writethrough(hook)
         if hook is not None:
-            _writethrough_attached.add(cid)
+            _mark(collection, _KG_WRITE_MARK, _writethrough_attached)
             logger.info(
                 "KG write-through attached to collection (AGE entities will be extracted inline)"
             )
-            if hasattr(collection, "set_kg_deletethrough"):
-                delete_hook = make_deletethrough_from_env(kg=kg)
-                if delete_hook is not None:
-                    collection.set_kg_deletethrough(delete_hook)
-                    logger.info(
-                        "KG delete-through attached to collection (drawer deletes propagate to AGE)"
+        # Delete-through is independent of write-through (#558): whenever
+        # MEMPALACE_KG_DELETETHROUGH is on (default) and the graph already
+        # exists, deleted drawer ids are QUEUED (one INSERT); the nightly sweep
+        # removes their vertices in batches. Never inline: AGE 1.6's DETACH
+        # DELETE costs ~16 s per statement on a large graph (#610), and miners
+        # delete while holding the mine lock.
+        if (
+            not delete_done
+            and hasattr(collection, "set_kg_deletethrough")
+            and deletethrough_enabled()
+        ):
+            import time as _time
+
+            if _no_age_graph.get(dsn, 0.0) <= _time.monotonic():
+                _no_age_graph.pop(dsn, None)
+                found = age_graph_exists(dsn)
+                if found is True:
+                    from ..kg_delete_queue import make_queued_deletethrough
+
+                    collection.set_kg_deletethrough(
+                        make_queued_deletethrough(
+                            dsn, table=getattr(collection, "table_name", None)
+                        )
                     )
+                    _mark(collection, _KG_DELETE_MARK, _deletethrough_attached)
+                    logger.info(
+                        "KG delete-through attached to collection "
+                        "(deleted drawer ids are queued for the graph sweep)"
+                    )
+                elif found is False:
+                    _no_age_graph[dsn] = _time.monotonic() + _NO_AGE_GRAPH_TTL
     except Exception as e:
         logger.debug("KG write-through not attached: %s", e)
