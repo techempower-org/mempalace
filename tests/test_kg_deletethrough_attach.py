@@ -20,7 +20,7 @@ def _queue_factory(monkeypatch):
     """Replace the queue-hook factory; returns the DSNs it was asked for."""
     made = []
 
-    def factory(dsn):
+    def factory(dsn, table=None):
         made.append(dsn)
 
         def hook(*, drawer_ids):
@@ -52,6 +52,7 @@ def _env(monkeypatch, write="0", delete=None):
 
 def _attach(col, dsn):
     col_mod._writethrough_attached.discard(id(col))
+    col_mod._deletethrough_attached.discard(id(col))
     col_mod._no_age_graph.pop(dsn, None)
     col_mod._maybe_attach_writethrough(col, dsn)
 
@@ -325,16 +326,30 @@ def test_a_new_collection_reusing_a_dead_ones_id_still_gets_its_hook(monkeypatch
 
 
 # --- the queue hook and the sweep, against an in-memory fake -----------------------------
-class _QueueDB:
-    """A tiny stand-in for the queue table: understands exactly the statements
-    kg_delete_queue issues, and records every one."""
+import pytest as _pt  # noqa: E402
 
-    def __init__(self, fail_insert=False):
-        self.rows = {}  # drawer_id -> order
+
+class _QueueDB:
+    """Stand-in for the queue table and the drawer table: understands exactly the
+    statements kg_delete_queue issues, records them, and can fail on request."""
+
+    def __init__(self):
+        self.queue = {}  # drawer_id -> [order, source_table, version]
+        self.drawers = set()  # ids that have a live drawer row
         self.sql = []
-        self.fail_insert = fail_insert
+        self.fail = set()  # statement kinds to fail: "insert", "dequeue"
+        self.on_select = None  # callback run right after a batch SELECT
         self.connects = 0
         self.closed_count = 0
+        self._order = 0
+
+    def enqueue(self, *ids, table="mempalace_drawers"):
+        for i in ids:
+            if i in self.queue:
+                self.queue[i][2] += 1
+            else:
+                self._order += 1
+                self.queue[i] = [self._order, table, 1]
 
     def connect(self, dsn):
         self.connects += 1
@@ -348,21 +363,28 @@ class _QueueDB:
                 return False
 
             def execute(self, q, params=None):
-                db.sql.append(" ".join(q.split())[:40])
+                q1 = " ".join(q.split())
+                db.sql.append(q1[:60])
                 self._rows = []
-                if q.lstrip().startswith("INSERT"):
-                    if db.fail_insert:
+                if q1.startswith("INSERT"):
+                    if "insert" in db.fail:
                         raise RuntimeError("db down")
-                    for i in params[0]:
-                        db.rows.setdefault(i, len(db.rows))
-                elif q.lstrip().startswith("SELECT drawer_id"):
-                    ordered = sorted(db.rows, key=lambda k: (db.rows[k], k))
-                    self._rows = [(i,) for i in ordered[: params[0]]]
-                elif q.lstrip().startswith("DELETE"):
-                    for i in params[0]:
-                        db.rows.pop(i, None)
-                elif q.lstrip().startswith("SELECT count"):
-                    self._rows = [(len(db.rows),)]
+                    db.enqueue(*params[0], table=params[1])
+                elif q1.startswith("SELECT drawer_id"):
+                    ordered = sorted(db.queue, key=lambda k: (db.queue[k][0], k))
+                    self._rows = [(i, db.queue[i][1], db.queue[i][2]) for i in ordered[: params[0]]]
+                    if db.on_select:
+                        db.on_select()
+                elif q1.startswith("SELECT id FROM"):
+                    self._rows = [(i,) for i in params[0] if i in db.drawers]
+                elif q1.startswith("DELETE FROM mempalace_kg_delete_queue"):
+                    if "dequeue" in db.fail:
+                        raise RuntimeError("dequeue failed")
+                    for i, v in zip(params[0], params[1]):
+                        if i in db.queue and db.queue[i][2] == v:
+                            del db.queue[i]
+                elif q1.startswith("SELECT count"):
+                    self._rows = [(len(db.queue),)]
 
             def fetchall(self):
                 return self._rows
@@ -383,6 +405,17 @@ class _QueueDB:
         return _Conn()
 
 
+class _SweepKG:
+    def __init__(self, fail_on_call=None):
+        self.calls, self.fail_on_call = [], fail_on_call
+
+    def delete_drawers(self, ids):
+        self.calls.append(list(ids))
+        if self.fail_on_call == len(self.calls):
+            raise RuntimeError("statement timeout")
+        return len(ids)
+
+
 def test_the_hook_only_enqueues_unique_ids_and_creates_the_table_once():
     from mempalace.kg_delete_queue import make_queued_deletethrough
 
@@ -391,55 +424,114 @@ def test_the_hook_only_enqueues_unique_ids_and_creates_the_table_once():
     hook(drawer_ids=["b", "a", "b"])
     hook(drawer_ids=["c"])
     hook(drawer_ids=[])
-    assert sorted(db.rows) == ["a", "b", "c"]
+    assert sorted(db.queue) == ["a", "b", "c"]
     assert sum(1 for q in db.sql if q.startswith("CREATE TABLE")) == 1
     assert db.connects == 1
-    assert not any(q.upper().startswith(("MATCH", "SELECT * FROM CYPHER")) for q in db.sql)
+    assert not any("cypher" in q.lower() or q.startswith("MATCH") for q in db.sql)
 
 
 def test_a_failed_enqueue_never_raises_and_reconnects_next_time(caplog):
     from mempalace.kg_delete_queue import make_queued_deletethrough
 
-    db = _QueueDB(fail_insert=True)
+    db = _QueueDB()
+    db.fail.add("insert")
     hook = make_queued_deletethrough("postgresql://fake/r", connect=db.connect)
     hook(drawer_ids=["a"])  # must not raise
     assert "could not queue 1 id(s)" in caplog.text and db.closed_count == 1
-    db.fail_insert = False
+    db.fail.clear()
     hook(drawer_ids=["a"])
-    assert db.connects == 2 and list(db.rows) == ["a"]
+    assert db.connects == 2 and list(db.queue) == ["a"]
 
 
-def test_the_sweep_deletes_in_batches_oldest_first_and_dequeues_only_after_success():
+def test_a_hostile_ids_iterable_never_raises(caplog):
+    from mempalace.kg_delete_queue import make_queued_deletethrough
+
+    def bad():
+        yield "a"
+        raise RuntimeError("iterator broke")
+
+    db = _QueueDB()
+    make_queued_deletethrough("postgresql://fake/h", connect=db.connect)(drawer_ids=bad())
+    assert "could not queue ? id(s)" in caplog.text and db.queue == {}
+
+
+def test_an_unsafe_drawer_table_name_is_refused():
+    from mempalace.kg_delete_queue import make_queued_deletethrough
+
+    with _pt.raises(ValueError):
+        make_queued_deletethrough("postgresql://fake/x", table='drawers"; DROP TABLE x; --')
+
+
+def test_the_sweep_batches_oldest_first_and_enforces_max_batches():
     from mempalace.kg_delete_queue import sweep
 
     db = _QueueDB()
-    for i in ["d1", "d2", "d3", "d4", "d5"]:
-        db.rows[i] = len(db.rows)
-    kg = _RecordingKG()
-    kg.delete_drawers = lambda ids: (kg.deleted.append(list(ids)), len(ids))[1]
-    out = sweep("postgresql://fake/s", kg=kg, batch=2, connect=db.connect)
-    assert kg.deleted == [["d1", "d2"], ["d3", "d4"], ["d5"]]
-    assert out["batches"] == 3 and out["ids"] == 5 and out["removed"] == 5 and out["left"] == 0
-    assert len(out["seconds"]) == 3 and db.closed_count == 1
+    db.enqueue("d1", "d2", "d3", "d4", "d5")
+    kg = _SweepKG()
+    out = sweep("postgresql://fake/s", kg=kg, batch=2, max_batches=2, connect=db.connect)
+    assert kg.calls == [["d1", "d2"], ["d3", "d4"]]
+    assert out["batches"] == 2 and out["removed"] == 4 and out["left"] == 1
+    assert sorted(db.queue) == ["d5"] and len(out["seconds"]) == 2 and db.closed_count == 1
 
 
-def test_a_failing_batch_stops_the_sweep_and_keeps_its_ids_queued():
-    import pytest as _pt
-
+def test_a_live_drawer_is_acknowledged_without_touching_its_vertex():
     from mempalace.kg_delete_queue import sweep
 
     db = _QueueDB()
-    for i in ["d1", "d2", "d3"]:
-        db.rows[i] = len(db.rows)
+    db.enqueue("gone", "back")
+    db.drawers.add("back")  # re-mined under the same id, or the delete rolled back
+    kg = _SweepKG()
+    out = sweep("postgresql://fake/l", kg=kg, connect=db.connect)
+    assert kg.calls == [["gone"]] and out["live_skipped"] == 1 and db.queue == {}
 
-    def boom(ids):
-        raise RuntimeError("statement timeout")
 
-    kg = _RecordingKG()
-    kg.delete_drawers = boom
+def test_a_re_delete_during_a_batch_stays_queued_for_the_next_sweep():
+    from mempalace.kg_delete_queue import sweep
+
+    db = _QueueDB()
+    db.enqueue("d1", "d2")
+    fired = []
+
+    def redelete():
+        if not fired:
+            fired.append(1)
+            db.enqueue("d1")  # the same id deleted again while the batch is in flight
+
+    db.on_select = redelete
+    sweep("postgresql://fake/v", kg=_SweepKG(), batch=10, max_batches=1, connect=db.connect)
+    assert list(db.queue) == ["d1"] and db.queue["d1"][2] == 2
+
+
+def test_a_second_batch_failure_keeps_it_and_the_rest_queued():
+    from mempalace.kg_delete_queue import sweep
+
+    db = _QueueDB()
+    db.enqueue("d1", "d2", "d3", "d4", "d5")
+    kg = _SweepKG(fail_on_call=2)
     with _pt.raises(RuntimeError):
         sweep("postgresql://fake/t", kg=kg, batch=2, connect=db.connect)
-    assert sorted(db.rows) == ["d1", "d2", "d3"] and db.closed_count == 1
+    assert sorted(db.queue) == ["d3", "d4", "d5"] and db.closed_count == 1
+
+
+def test_a_failed_dequeue_after_the_graph_delete_is_retried_harmlessly():
+    from mempalace.kg_delete_queue import sweep
+
+    db = _QueueDB()
+    db.enqueue("d1", "d2")
+    db.fail.add("dequeue")
+    with _pt.raises(RuntimeError):
+        sweep("postgresql://fake/u", kg=_SweepKG(), connect=db.connect)
+    assert sorted(db.queue) == ["d1", "d2"]
+    db.fail.clear()
+
+    class _AlreadyGone(_SweepKG):
+        def delete_drawers(self, ids):
+            self.calls.append(list(ids))
+            return 0  # the vertices went last time
+
+    kg = _AlreadyGone()
+    out = sweep("postgresql://fake/u", kg=kg, connect=db.connect)
+    assert kg.calls == [["d1", "d2"]] and out["removed"] == 0 and db.queue == {}
 
 
 def test_sweep_from_env_skips_without_a_dsn_or_a_graph(monkeypatch):
@@ -455,3 +547,34 @@ def test_sweep_from_env_skips_without_a_dsn_or_a_graph(monkeypatch):
     }
     monkeypatch.setenv("MEMPALACE_KG_DELETETHROUGH", "0")
     assert "off" in q.sweep_from_env(env={"MEMPALACE_POSTGRES_DSN": "x"})["skipped"]
+
+
+# --- attach with write-through ON: the delete side is still retried -------------------
+class _BothCol(_Col):
+    def __init__(self):
+        super().__init__()
+        self.write_hook = None
+
+    def set_kg_writethrough(self, hook):
+        self.write_hook = hook
+
+
+def test_with_write_through_on_a_failed_probe_is_retried_for_the_delete_side(monkeypatch):
+    monkeypatch.setenv("MEMPALACE_KG_WRITETHROUGH", "1")
+    monkeypatch.setenv("MEMPALACE_KG_EXTRACTOR", "null")
+    monkeypatch.setenv("MEMPALACE_KG_EXTRACTION_QUEUE", "0")
+    monkeypatch.delenv("MEMPALACE_KG_DELETETHROUGH", raising=False)
+    monkeypatch.setattr(
+        "mempalace.knowledge_graph_age.KnowledgeGraphAGE", lambda dsn: _RecordingKG()
+    )
+    answers = [None, True]
+    monkeypatch.setattr("mempalace.kg_writethrough.age_graph_exists", lambda dsn: answers.pop(0))
+    made = _queue_factory(monkeypatch)
+    col = _BothCol()
+    _attach(col, "postgresql://fake/w")
+    assert col.write_hook is not None and col.delete_hook is None
+    col_mod._maybe_attach_writethrough(col, "postgresql://fake/w")
+    assert col.delete_hook is not None and made == ["postgresql://fake/w"]
+    first_write = col.write_hook
+    col_mod._maybe_attach_writethrough(col, "postgresql://fake/w")
+    assert col.write_hook is first_write, "write-through must not be re-attached"
