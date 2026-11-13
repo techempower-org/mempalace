@@ -13,7 +13,8 @@ name: Check docs
 
 on:
   push:
-    branches: [main, develop]
+    # main is checked by render-fork-docs.yml, which renders first (#473)
+    branches: [develop]
     paths:
       - 'docs/fork-changes/**'
       - 'docs/fork-changes-meta.yaml'
@@ -80,4 +81,8 @@ jobs:
           # legitimately carries HEAD because the squash commit it will point
           # at does not exist yet.
           STRICT_RESOLVED: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && '1' || '0' }}
+          # Pull requests no longer carry the rendered outputs: steps 3 and 5
+          # re-render in this disposable checkout and pass when that succeeds.
+          # main is rendered and checked strictly by render-fork-docs.yml (#473).
+          FORK_DOCS_RENDER_AFTER_MERGE: ${{ github.event_name == 'pull_request' && '1' || '0' }}
         run: bash scripts/check-docs.sh

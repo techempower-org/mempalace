@@ -40,6 +40,12 @@
 #   scripts/check-docs.sh --quiet          # only print failures
 #   scripts/check-docs.sh --strict         # step 8 fails instead of warning
 #   STRICT_PR_STATE=1 scripts/check-docs.sh  # warn → error on PR-state drift
+#   FORK_DOCS_RENDER_AFTER_MERGE=1 scripts/check-docs.sh
+#       pull-request mode (#473): steps 3 and 5 RE-RENDER the outputs in place
+#       and pass when rendering succeeds, instead of requiring the committed
+#       FORK_CHANGELOG.md / README table / llms-full.txt to match. Those files
+#       are refreshed on main after merge by .github/workflows/render-fork-docs.yml,
+#       so concurrent PRs no longer conflict on them. Rewrites files: CI only.
 
 set -uo pipefail
 shopt -s nullglob
@@ -230,6 +236,12 @@ if [ -x "$render_bin" ]; then
     [ -x "$py" ] || py="$(command -v python3 2>/dev/null || true)"
     if [ -z "$py" ]; then
         warn "no python interpreter — skipping render check"
+    elif [ "${FORK_DOCS_RENDER_AFTER_MERGE:-0}" = 1 ]; then
+        if "$py" "$render_bin" >/dev/null; then
+            ok "docs/fork-changes/ renders (outputs are refreshed on main after merge)"
+        else
+            fail "scripts/render-docs.py failed to render docs/fork-changes/"
+        fi
     elif "$py" "$render_bin" --check >/dev/null 2>&1; then
         ok "FORK_CHANGELOG.md matches docs/fork-changes/"
     else
@@ -360,6 +372,12 @@ if [ -x "$llms_bin" ]; then
     [ -x "$py" ] || py="$(command -v python3 2>/dev/null || true)"
     if [ -z "$py" ]; then
         warn "no python interpreter — skipping llms-full check"
+    elif [ "${FORK_DOCS_RENDER_AFTER_MERGE:-0}" = 1 ]; then
+        if "$py" "$llms_bin" >/dev/null; then
+            ok "llms-full.txt renders (refreshed on main after merge)"
+        else
+            fail "scripts/render-llms-full.py failed to render"
+        fi
     elif "$py" "$llms_bin" --check >/dev/null; then
         ok "website/public/llms-full.txt matches its sources"
     else
