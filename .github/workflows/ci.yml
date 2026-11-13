@@ -172,6 +172,7 @@ jobs:
             tests/test_backends_postgres.py \
             tests/test_knowledge_graph_age.py \
             tests/test_palace_graph.py \
+            tests/test_kg_deletethrough_attach.py \
             -v --cov=mempalace --cov-report=xml --cov-report=term-missing --cov-fail-under=0
       - uses: actions/upload-artifact@v4
         with:
