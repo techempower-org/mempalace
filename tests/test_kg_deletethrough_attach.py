@@ -34,7 +34,7 @@ def _env(monkeypatch, write="0", delete=None):
 
 def _attach(col, dsn):
     col_mod._writethrough_attached.discard(id(col))
-    col_mod._no_age_graph.discard(dsn)
+    col_mod._no_age_graph.pop(dsn, None)
     col_mod._maybe_attach_writethrough(col, dsn)
 
 
@@ -78,7 +78,150 @@ def test_explicit_opt_out_attaches_nothing(monkeypatch):
     assert col.delete_hook is None
 
 
-def test_age_graph_exists_is_false_when_the_server_is_unreachable():
+def test_age_graph_exists_cannot_tell_when_the_server_is_unreachable():
     from mempalace.kg_writethrough import age_graph_exists
 
-    assert age_graph_exists("postgresql://nobody@127.0.0.1:1/none?connect_timeout=1") is False
+    assert age_graph_exists("postgresql://nobody@127.0.0.1:1/none?connect_timeout=1") is None
+
+
+# --- the probe's real code, against a fake driver ---------------------------------
+import pytest  # noqa: E402
+
+
+class _PgError(Exception):
+    def __init__(self, sqlstate):
+        super().__init__(sqlstate)
+        self.sqlstate = sqlstate
+
+
+class _FakeDriver:
+    """Records connect kwargs, every SQL statement, and whether the conn was closed."""
+
+    def __init__(self, rows=None, error=None, connect_error=None):
+        self.rows, self.error, self.connect_error = rows, error, connect_error
+        self.kwargs, self.sql, self.closed = None, [], False
+
+    def connect(self, dsn, **kw):
+        if self.connect_error:
+            raise self.connect_error
+        self.kwargs = kw
+        drv = self
+
+        class _Cur:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, q, params=None):
+                drv.sql.append(q)
+                if drv.error:
+                    raise drv.error
+
+            def fetchone(self):
+                return drv.rows
+
+        class _Conn:
+            def cursor(self):
+                return _Cur()
+
+            def close(self):
+                drv.closed = True
+
+        return _Conn()
+
+
+@pytest.mark.parametrize(
+    "rows,error,want",
+    [
+        ((1,), None, True),                  # graph + Drawer vertex label listed
+        (None, None, False),                 # catalog answered: no such graph/label
+        (None, _PgError("3F000"), False),    # no ag_catalog schema: AGE not installed
+        (None, _PgError("42P01"), False),    # undefined table: AGE not installed
+        (None, _PgError("57014"), None),     # statement timeout: cannot tell
+        (None, _PgError("42501"), None),     # permission denied: cannot tell
+        (None, RuntimeError("boom"), None),  # anything else: cannot tell
+    ],
+)
+def test_probe_reads_the_age_catalog_only_and_always_closes(monkeypatch, rows, error, want):
+    from mempalace.kg_writethrough import age_graph_exists
+
+    drv = _FakeDriver(rows=rows, error=error)
+    monkeypatch.setattr("mempalace.knowledge_graph_age._load_psycopg2", lambda: drv)
+    assert age_graph_exists("postgresql://fake/x") is want
+    assert drv.closed, "the probe connection must be closed on every path"
+    assert drv.kwargs["connect_timeout"] == 5 and "statement_timeout" in drv.kwargs["options"]
+    assert len(drv.sql) == 1 and "ag_catalog.ag_graph" in drv.sql[0] and "ag_label" in drv.sql[0]
+    assert drv.sql[0].lstrip().upper().startswith("SELECT"), "the probe must never create or alter"
+
+
+def test_probe_connect_failure_cannot_tell(monkeypatch):
+    from mempalace.kg_writethrough import age_graph_exists
+
+    drv = _FakeDriver(connect_error=OSError("refused"))
+    monkeypatch.setattr("mempalace.knowledge_graph_age._load_psycopg2", lambda: drv)
+    assert age_graph_exists("postgresql://fake/y") is None
+
+
+# --- attach: idempotence, transient failure, negative-cache expiry ---------------------
+class _CountingCol(_Col):
+    def __init__(self):
+        super().__init__()
+        self.sets = 0
+
+    def set_kg_deletethrough(self, hook):
+        self.sets += 1
+        super().set_kg_deletethrough(hook)
+
+
+def test_attach_is_idempotent_per_collection(monkeypatch):
+    _env(monkeypatch)
+    probes = []
+    monkeypatch.setattr(
+        "mempalace.kg_writethrough.age_graph_exists", lambda dsn: probes.append(dsn) or True
+    )
+    monkeypatch.setattr(
+        "mempalace.knowledge_graph_age.KnowledgeGraphAGE", lambda dsn: _RecordingKG()
+    )
+    col = _CountingCol()
+    _attach(col, "postgresql://fake/d")
+    col_mod._maybe_attach_writethrough(col, "postgresql://fake/d")
+    col_mod._maybe_attach_writethrough(col, "postgresql://fake/d")
+    assert col.sets == 1 and len(probes) == 1
+
+
+def test_a_transient_probe_failure_is_retried_not_cached(monkeypatch):
+    _env(monkeypatch)
+    answers = [None, True]  # server down, then back
+    monkeypatch.setattr(
+        "mempalace.kg_writethrough.age_graph_exists", lambda dsn: answers.pop(0)
+    )
+    monkeypatch.setattr(
+        "mempalace.knowledge_graph_age.KnowledgeGraphAGE", lambda dsn: _RecordingKG()
+    )
+    first, second = _Col(), _Col()
+    _attach(first, "postgresql://fake/e")
+    assert first.delete_hook is None and "postgresql://fake/e" not in col_mod._no_age_graph
+    col_mod._maybe_attach_writethrough(second, "postgresql://fake/e")
+    assert second.delete_hook is not None
+
+
+def test_a_graph_created_after_a_negative_probe_is_seen_once_the_ttl_expires(monkeypatch):
+    _env(monkeypatch)
+    answers = [False, True]
+    monkeypatch.setattr(
+        "mempalace.kg_writethrough.age_graph_exists", lambda dsn: answers.pop(0)
+    )
+    monkeypatch.setattr(
+        "mempalace.knowledge_graph_age.KnowledgeGraphAGE", lambda dsn: _RecordingKG()
+    )
+    first = _Col()
+    _attach(first, "postgresql://fake/f")
+    assert first.delete_hook is None and col_mod._no_age_graph["postgresql://fake/f"] > 0
+    col_mod._maybe_attach_writethrough(_Col(), "postgresql://fake/f")  # inside the TTL: no probe
+    assert answers == [True]
+    col_mod._no_age_graph["postgresql://fake/f"] = 0.0  # TTL expired
+    later = _Col()
+    col_mod._maybe_attach_writethrough(later, "postgresql://fake/f")
+    assert later.delete_hook is not None

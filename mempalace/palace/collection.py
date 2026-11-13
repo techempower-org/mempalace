@@ -561,7 +561,11 @@ def get_closets_collection(
 
 
 _writethrough_attached: set = set()
-_no_age_graph: set = set()  # DSNs probed with no AGE graph: never re-probed per call
+# DSN -> monotonic expiry of a CONFIRMED "no AGE graph" probe, so a palace without
+# AGE is not probed on every collection; a graph created later is seen after the TTL.
+# A probe that could not tell (None) is never cached.
+_no_age_graph: dict = {}
+_NO_AGE_GRAPH_TTL = 600.0
 
 
 def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
@@ -624,14 +628,19 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
         # whenever MEMPALACE_KG_DELETETHROUGH is on (default) and the graph
         # already exists, so pausing write-through never orphans vertices.
         if hasattr(collection, "set_kg_deletethrough") and deletethrough_enabled():
-            dkg = kg
-            if dkg is None and dsn not in _no_age_graph and age_graph_exists(dsn):
-                from ..knowledge_graph_age import KnowledgeGraphAGE
+            import time as _time
 
-                dkg = KnowledgeGraphAGE(dsn=dsn)
-            if dkg is None:
-                _no_age_graph.add(dsn)
-            else:
+            dkg = kg
+            if dkg is None and _no_age_graph.get(dsn, 0.0) <= _time.monotonic():
+                _no_age_graph.pop(dsn, None)
+                found = age_graph_exists(dsn)
+                if found is True:
+                    from ..knowledge_graph_age import KnowledgeGraphAGE
+
+                    dkg = KnowledgeGraphAGE(dsn=dsn)
+                elif found is False:
+                    _no_age_graph[dsn] = _time.monotonic() + _NO_AGE_GRAPH_TTL
+            if dkg is not None:
                 delete_hook = make_deletethrough_from_env(kg=dkg)
                 if delete_hook is not None:
                     collection.set_kg_deletethrough(delete_hook)

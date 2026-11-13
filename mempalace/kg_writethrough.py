@@ -646,27 +646,39 @@ def deletethrough_enabled() -> bool:
     )
 
 
-def age_graph_exists(dsn: str, graph: str = "mempalace_kg") -> bool:
-    """True when the AGE graph already exists. Never creates anything: the
-    delete-through must not bootstrap AGE on a palace that never used it.
-    Any failure (no AGE extension, no permission, no server) reads as False.
+# SQLSTATEs that mean "AGE is not installed here" (a confirmed absence), not a
+# failure: invalid_schema_name (no ag_catalog), undefined_table.
+_NO_AGE_SQLSTATES = frozenset({"3F000", "42P01"})
+
+
+def age_graph_exists(dsn: str, graph: str = "mempalace_kg") -> Optional[bool]:
+    """Does the AGE graph exist with a Drawer vertex label? Never creates anything.
+
+    True: AGE's own catalog lists the graph and its ``Drawer`` vertex label.
+    False: confirmed absent -- the catalog answered and has no such graph or
+    label, or AGE is not installed (no ``ag_catalog``). None: could not tell
+    (no server, timeout, permissions); the caller must not cache that.
+    Bounded: 5 s to connect, 5 s per statement.
     """
     try:
         from .knowledge_graph_age import _load_psycopg2
 
-        conn = _load_psycopg2().connect(dsn)
+        conn = _load_psycopg2().connect(
+            dsn, connect_timeout=5, options="-c statement_timeout=5000"
+        )
     except Exception:  # noqa: BLE001
-        return False
+        return None
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT 1 FROM pg_namespace n JOIN pg_class c ON c.relnamespace = n.oid"
-                " WHERE n.nspname = %s AND c.relname = 'Drawer'",
+                "SELECT 1 FROM ag_catalog.ag_graph g"
+                " JOIN ag_catalog.ag_label l ON l.graph = g.graphid"
+                " WHERE g.name = %s AND l.name = 'Drawer' AND l.kind = 'v'",
                 (graph,),
             )
             return cur.fetchone() is not None
-    except Exception:  # noqa: BLE001
-        return False
+    except Exception as e:  # noqa: BLE001
+        return False if getattr(e, "sqlstate", None) in _NO_AGE_SQLSTATES else None
     finally:
         try:
             conn.close()
