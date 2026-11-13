@@ -1,0 +1,101 @@
+name: Render fork-change docs
+
+# #473: rendered fork-change outputs are refreshed here, on main, after merge,
+# instead of in every pull request. Each PR used to commit FORK_CHANGELOG.md,
+# the README fork-queue table and website/public/llms-full.txt, so any two
+# concurrent PRs conflicted on all three. PRs now carry only their entry file
+# (docs/fork-changes/<date>-<id>.yaml, `commit: HEAD`); this job resolves the
+# squash sha (scripts/maintain-fork-changes.py), re-renders, runs
+# check-docs.sh strictly on the resulting commit, and only then pushes it.
+#
+# Trust: a trusted-main design. It runs only on pushes to main and manual
+# dispatch, never on pull requests, so an unmerged PR cannot reach the write
+# token; code that has merged (scripts, package install hooks, this file) does
+# run with it. No event payload field (titles, bodies, commit messages) is
+# interpolated into a run block.
+# A push made with GITHUB_TOKEN does not trigger workflows, so this cannot loop.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/fork-changes/**'
+      - 'docs/fork-changes-meta.yaml'
+      - 'scripts/render-docs.py'
+      - 'scripts/render-llms-full.py'
+      - 'scripts/maintain-fork-changes.py'
+      - 'scripts/fork_changes.py'
+      - 'scripts/check-docs.sh'
+      - 'README.md'
+      - 'CLAUDE.md'
+      - 'docs/ARCHITECTURE.md'
+      - 'docs/ECOSYSTEM.md'
+      - 'FORK_CHANGELOG.md'
+      - 'website/public/llms-full.txt'
+      - 'mempalace/**/*.py'
+      - '.github/workflows/render-fork-docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: render-fork-docs
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - run: pip install -e ".[dev]"
+
+      # Each attempt validates its own candidate commit STRICTLY before pushing
+      # it, so nothing unchecked reaches main, and the check is of exactly the
+      # commit pushed (its sha is printed). A push rejected because main moved
+      # starts over from the new head.
+      - name: Resolve shas, re-render, check strictly, push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STRICT_RESOLVED: '1'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
+            python scripts/maintain-fork-changes.py
+            python scripts/render-docs.py
+            python scripts/render-llms-full.py
+            changed=0
+            if ! git diff --quiet; then
+              git add -- docs/fork-changes FORK_CHANGELOG.md README.md website/public/llms-full.txt
+              git commit --quiet -m "docs(generated): resolve fork-change shas and re-render (#473)"
+              changed=1
+            fi
+            candidate=$(git rev-parse HEAD)
+            echo "strict check of candidate $candidate"
+            bash scripts/check-docs.sh   # fails the job (and pushes nothing) on any drift
+            if [ "$changed" = 0 ]; then
+              echo "main is current and passes strictly at $candidate"
+              exit 0
+            fi
+            if git push --quiet origin "$candidate:refs/heads/main"; then
+              echo "pushed $candidate (checked strictly above)"
+              exit 0
+            fi
+            echo "main moved during the render (attempt $attempt); starting over on the new head"
+            sleep $((attempt * 5))
+          done
+          echo "could not push the rendered docs after 3 attempts" >&2
+          exit 1
