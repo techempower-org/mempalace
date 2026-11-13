@@ -19,7 +19,10 @@ body: |
   `mempalace_kg_delete_queue`, and `python -m mempalace.dream nightly`
   removes the queued vertices in batches of 500 (one statement per
   batch, at most 20 batches a night, each batch's time logged and
-  reported in the night's `kg_delete_sweep` step).
+  reported in the night's `kg_delete_sweep` step). One sweeper runs at a
+  time; ids whose drawer row is visible again wait out a 12-hour settling
+  window (the hook runs before the deleting transaction commits) and are
+  then acknowledged without touching their live vertex.
 
   The hook attaches when `MEMPALACE_KG_DELETETHROUGH` is on (the default)
   and a read-only catalog probe finds the graph; a palace without AGE is
