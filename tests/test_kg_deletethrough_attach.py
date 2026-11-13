@@ -395,6 +395,8 @@ class _QueueDB:
                     if db.on_select:
                         db.on_select()
                 elif q1.startswith("SELECT ((properties"):
+                    if "vertex" in db.fail:
+                        raise RuntimeError("vertex lookup failed")
                     have = params[0] if db.vertices is None else db.vertices
                     self._rows = [(i,) for i in params[0] if i in have]
                 elif q1.startswith("SELECT id FROM"):
@@ -741,11 +743,51 @@ def test_ids_without_a_vertex_never_reach_the_graph_and_build_no_connection(monk
     assert built == [] and out["removed"] == 0 and out["no_vertex"] == 2 and db.queue == {}
 
 
-def test_the_time_budget_stops_new_batches(monkeypatch):
-    from mempalace.kg_delete_queue import sweep
+def test_the_time_budget_lets_a_started_batch_finish_and_starts_no_more(monkeypatch):
+    from mempalace import kg_delete_queue as q
 
+    clock = [0.0]
+    monkeypatch.setattr(q.time, "monotonic", lambda: clock[0])
     db = _QueueDB()
-    db.enqueue("d1", "d2", "d3", "d4")
-    kg = _SweepKG()
-    out = sweep("postgresql://fake/b", kg=kg, batch=1, budget_s=-1, connect=db.connect)
-    assert out["batches"] == 0 and out["stopped"] == "budget" and len(db.queue) == 4
+    db.enqueue("d1", "d2", "d3")
+
+    class _SlowKG(_SweepKG):
+        def delete_drawers(self, ids):
+            clock[0] += 100.0  # each batch takes 100 s
+            return super().delete_drawers(ids)
+
+    kg = _SlowKG()
+    out = q.sweep("postgresql://fake/b", kg=kg, batch=1, budget_s=150, connect=db.connect)
+    assert kg.calls == [["d1"], ["d2"]] and out["stopped"] == "budget"
+    assert sorted(db.queue) == ["d3"], "finished batches are acknowledged; the rest stay queued"
+
+
+class _ErrCur:
+    def __init__(self, err):
+        self.err = err
+
+    def execute(self, q, params=None):
+        raise self.err
+
+    def fetchall(self):
+        return []
+
+
+@_pt.mark.parametrize("code", ["42P01", "3F000"])
+def test_vertex_lookup_reads_a_missing_label_table_as_no_vertices(code):
+    from mempalace.kg_delete_queue import _ids_with_vertex
+
+    assert _ids_with_vertex(_ErrCur(_PgError(code)), ["a"]) == []
+
+
+def test_vertex_lookup_failure_keeps_the_batch_queued():
+    from mempalace import kg_delete_queue as q
+
+    with _pt.raises(_PgError):
+        q._ids_with_vertex(_ErrCur(_PgError("57014")), ["a"])
+    db = _QueueDB()
+    db.enqueue("d1")
+    db.fail.add("vertex")
+    with _pt.raises(RuntimeError):
+        q.sweep("postgresql://fake/vf", kg=_SweepKG(), connect=db.connect)
+    assert list(db.queue) == ["d1"]

@@ -28,6 +28,12 @@ Correctness rules the sweep keeps:
   (id, version) pairs it selected, so a delete of the same id that lands while
   a batch is in flight stays queued.
 * One sweeper at a time (a session advisory lock); a second one skips.
+* Only ids that still have a vertex reach the DETACH DELETE. Drawer vertices
+  are created only for drawers whose row exists (write-through on add,
+  backfill_age from rows), so a vertex that appears for a queued id after the
+  probe belongs to a re-added, live drawer and is right to keep. Residual (same
+  class as the re-add race above): a backfill that read the row before its
+  delete and writes the vertex after the probe leaves an orphan.
 * A batch leaves the queue only after its graph delete returned. Residual: a
   drawer re-added between the liveness check and the DETACH DELETE loses its
   vertex; with write-through off a re-added drawer has none anyway.
