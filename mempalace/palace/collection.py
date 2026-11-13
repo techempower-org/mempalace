@@ -561,6 +561,29 @@ def get_closets_collection(
 
 
 _writethrough_attached: set = set()
+# The attached-marker lives on the collection object itself: a bare id() can be
+# reused by a NEW collection once the old one is collected, which then silently
+# skipped its hooks (xreview of #609). The id set is only the fallback for an
+# object that refuses attributes.
+_KG_HOOKS_MARK = "_mempalace_kg_hooks_attached"
+
+
+def _accepts_mark(obj) -> bool:
+    try:
+        setattr(obj, "_mempalace_kg_mark_probe", True)
+        delattr(obj, "_mempalace_kg_mark_probe")
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _mark_kg_hooks_attached(collection, cid) -> None:
+    try:
+        setattr(collection, _KG_HOOKS_MARK, True)
+    except Exception:  # noqa: BLE001
+        _writethrough_attached.add(cid)
+
+
 # DSN -> monotonic expiry of a CONFIRMED "no AGE graph" probe, so a palace without
 # AGE is not probed on every collection; a graph created later is seen after the TTL.
 # A probe that could not tell (None) is never cached.
@@ -582,7 +605,9 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
     import os as _os
 
     cid = id(collection)
-    if cid in _writethrough_attached:
+    if getattr(collection, _KG_HOOKS_MARK, False):
+        return
+    if cid in _writethrough_attached and not _accepts_mark(collection):
         return
     try:
         from ..kg_writethrough import (
@@ -620,7 +645,7 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
             if hook is not None:
                 collection.set_kg_writethrough(hook)
         if hook is not None:
-            _writethrough_attached.add(cid)
+            _mark_kg_hooks_attached(collection, cid)
             logger.info(
                 "KG write-through attached to collection (AGE entities will be extracted inline)"
             )
@@ -644,7 +669,7 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
                 delete_hook = make_deletethrough_from_env(kg=dkg)
                 if delete_hook is not None:
                     collection.set_kg_deletethrough(delete_hook)
-                    _writethrough_attached.add(cid)
+                    _mark_kg_hooks_attached(collection, cid)
                     logger.info(
                         "KG delete-through attached to collection (drawer deletes propagate to AGE)"
                     )

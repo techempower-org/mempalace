@@ -663,9 +663,7 @@ def age_graph_exists(dsn: str, graph: str = "mempalace_kg") -> Optional[bool]:
     try:
         from .knowledge_graph_age import _load_psycopg2
 
-        conn = _load_psycopg2().connect(
-            dsn, connect_timeout=5, options="-c statement_timeout=5000"
-        )
+        conn = _load_psycopg2().connect(dsn, connect_timeout=5, options="-c statement_timeout=5000")
     except Exception:  # noqa: BLE001
         return None
     try:

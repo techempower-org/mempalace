@@ -4,6 +4,7 @@ Measured in production 2026-11-13: with MEMPALACE_KG_WRITETHROUGH=0 (paused for 
 re-mine drain) the delete hook was never attached, so every drawer deleted through
 the daemon left its AGE Drawer vertex behind.
 """
+
 from mempalace import palace as col_mod
 
 
@@ -137,13 +138,13 @@ class _FakeDriver:
 @pytest.mark.parametrize(
     "rows,error,want",
     [
-        ((1,), None, True),                  # graph + Drawer vertex label listed
-        (None, None, False),                 # catalog answered: no such graph/label
-        (None, _PgError("3F000"), False),    # no ag_catalog schema: AGE not installed
-        (None, _PgError("42P01"), False),    # undefined table: AGE not installed
+        ((1,), None, True),  # graph + Drawer vertex label listed
+        (None, None, False),  # catalog answered: no such graph/label
+        (None, _PgError("3F000"), False),  # no ag_catalog schema: AGE not installed
+        (None, _PgError("42P01"), False),  # undefined table: AGE not installed
         (None, _PgError("3F000", "pgcode"), False),  # the same, psycopg2-style
-        (None, _PgError("57014"), None),     # statement timeout: cannot tell
-        (None, _PgError("42501"), None),     # permission denied: cannot tell
+        (None, _PgError("57014"), None),  # statement timeout: cannot tell
+        (None, _PgError("42501"), None),  # permission denied: cannot tell
         (None, RuntimeError("boom"), None),  # anything else: cannot tell
     ],
 )
@@ -197,9 +198,7 @@ def test_attach_is_idempotent_per_collection(monkeypatch):
 def test_a_transient_probe_failure_is_retried_not_cached(monkeypatch):
     _env(monkeypatch)
     answers = [None, True]  # server down, then back
-    monkeypatch.setattr(
-        "mempalace.kg_writethrough.age_graph_exists", lambda dsn: answers.pop(0)
-    )
+    monkeypatch.setattr("mempalace.kg_writethrough.age_graph_exists", lambda dsn: answers.pop(0))
     monkeypatch.setattr(
         "mempalace.knowledge_graph_age.KnowledgeGraphAGE", lambda dsn: _RecordingKG()
     )
@@ -213,9 +212,7 @@ def test_a_transient_probe_failure_is_retried_not_cached(monkeypatch):
 def test_a_graph_created_after_a_negative_probe_is_seen_once_the_ttl_expires(monkeypatch):
     _env(monkeypatch)
     answers = [False, True]
-    monkeypatch.setattr(
-        "mempalace.kg_writethrough.age_graph_exists", lambda dsn: answers.pop(0)
-    )
+    monkeypatch.setattr("mempalace.kg_writethrough.age_graph_exists", lambda dsn: answers.pop(0))
     monkeypatch.setattr(
         "mempalace.knowledge_graph_age.KnowledgeGraphAGE", lambda dsn: _RecordingKG()
     )
@@ -234,7 +231,9 @@ def test_a_graph_created_after_a_negative_probe_is_seen_once_the_ttl_expires(mon
 import os  # noqa: E402
 
 POSTGRES_DSN = os.environ.get("TEST_POSTGRES_DSN")
-pgmark = pytest.mark.skipif(POSTGRES_DSN is None, reason="set TEST_POSTGRES_DSN (Postgres with AGE)")
+pgmark = pytest.mark.skipif(
+    POSTGRES_DSN is None, reason="set TEST_POSTGRES_DSN (Postgres with AGE)"
+)
 
 
 def _drawer_vertices(did):
@@ -286,3 +285,20 @@ def test_live_a_database_without_age_is_a_confirmed_absence():
     finally:
         with psycopg.connect(POSTGRES_DSN, autocommit=True) as admin:
             admin.execute("DROP DATABASE IF EXISTS %s" % name)
+
+
+def test_a_new_collection_reusing_a_dead_ones_id_still_gets_its_hook(monkeypatch):
+    """xreview of #609: a stale id() in the attached registry must not skip a new object."""
+    _env(monkeypatch)
+    monkeypatch.setattr("mempalace.kg_writethrough.age_graph_exists", lambda dsn: True)
+    monkeypatch.setattr(
+        "mempalace.knowledge_graph_age.KnowledgeGraphAGE", lambda dsn: _RecordingKG()
+    )
+    fresh = _Col()
+    col_mod._writethrough_attached.add(id(fresh))  # as if a dead collection had this id
+    col_mod._no_age_graph.pop("postgresql://fake/g", None)
+    try:
+        col_mod._maybe_attach_writethrough(fresh, "postgresql://fake/g")
+    finally:
+        col_mod._writethrough_attached.discard(id(fresh))
+    assert fresh.delete_hook is not None
