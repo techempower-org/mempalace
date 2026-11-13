@@ -508,8 +508,8 @@ def test_a_settled_live_drawer_is_acknowledged_without_touching_its_vertex():
 
 
 def test_an_uncommitted_delete_stays_queued_until_it_lands():
-    """The hook runs before the deleting transaction commits: a fresh entry whose
-    row is still visible must wait, not be acknowledged as live."""
+    """Defence in depth: for a caller that held its delete open, a fresh entry
+    whose row is still visible waits instead of being acknowledged as live."""
     from mempalace.kg_delete_queue import make_queued_deletethrough, sweep
 
     db = _QueueDB()
@@ -686,3 +686,27 @@ def test_live_an_uncommitted_delete_is_held_then_swept_after_commit():
         deleter.close()
         with psycopg.connect(POSTGRES_DSN, autocommit=True) as admin:
             admin.execute("DROP TABLE IF EXISTS %s" % table)
+
+
+def test_the_postgres_collection_commits_its_delete_before_the_hook_runs(monkeypatch):
+    """The production caller's invariant the sweep relies on: the collection's
+    connection is autocommit, so a delete has committed when the hook fires."""
+    import mempalace.backends.postgres as pg
+
+    made = []
+
+    class _FakePsycopg:
+        @staticmethod
+        def connect(dsn):
+            class _C:
+                closed = 0
+                autocommit = False
+
+            made.append(_C())
+            return made[-1]
+
+    monkeypatch.setattr(pg, "_load_psycopg2", lambda: (_FakePsycopg, None))
+    col = pg.PostgresCollection.__new__(pg.PostgresCollection)
+    col._conn, col.dsn = None, "postgresql://fake/ac"
+    monkeypatch.setattr(col, "_apply_session_settings", lambda conn: None, raising=False)
+    assert col._get_conn().autocommit is True

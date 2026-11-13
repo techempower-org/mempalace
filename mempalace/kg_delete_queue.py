@@ -13,11 +13,12 @@ than once per delete. The nightly dream run calls :func:`sweep_from_env`.
 
 Correctness rules the sweep keeps:
 
-* The hook runs before the deleting transaction commits, so a row the sweep
-  still sees may be a delete in flight. A visible row is therefore left queued
-  until its entry is older than ``SETTLE_HOURS``; only then is it taken as live
-  (re-mined under the same deterministic id, or a delete that rolled back) and
-  acknowledged WITHOUT touching its vertex.
+* The production caller, ``PostgresCollection.delete``, runs on an autocommit
+  connection: its DELETE has committed before the hook is called, so a row the
+  sweep still sees was re-added (deterministic ids re-mined) and is live. As
+  defence in depth for any caller that does hold a transaction open, a visible
+  row is still left queued until its entry is older than ``SETTLE_HOURS``, and
+  only then acknowledged WITHOUT touching its vertex.
 * Every enqueue takes a fresh ``version`` from a sequence (never repeats, even
   after the row was dequeued and re-created); the sweep acknowledges only the
   (id, version) pairs it selected, so a delete of the same id that lands while
