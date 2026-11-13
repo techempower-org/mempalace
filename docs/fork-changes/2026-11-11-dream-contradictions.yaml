@@ -2,8 +2,7 @@ seq: 198
 id: dream-contradictions
 date: '2026-11-11'
 bucket: Added
-commit: HEAD
-fork_pr: 606
+commit: e80fc49
 area: Dreaming
 summary: dream day 2, `python -m mempalace.dream contradictions`, asks a local model whether a feedback memory contradicts a CLAUDE.md rule that governs it, on similarity-prefiltered pairs, and proposes only the contradictions
 body: |
@@ -19,3 +18,4 @@ body: |
   contradictions become proposals, labelled unreviewed. The first failed judgement
   stops the pass with the error in the stats file; nothing is retried. First real
   run: 60 pairs judged in 134 s, 4 contradictions, all against global rules.
+fork_pr: 606

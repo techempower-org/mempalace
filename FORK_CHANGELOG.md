@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **the KG delete sweep only runs DETACH DELETE for ids that still have a vertex, gets its own statement limit, and is bounded by a 30-minute budget** (`HEAD` — pending resolution)
+- **the KG delete sweep only runs DETACH DELETE for ids that still have a vertex, gets its own statement limit, and is bounded by a 30-minute budget** ([`2ffe1d7`](https://github.com/techempower-org/mempalace/commit/2ffe1d7))
   Right after the queued delete-through shipped, the first production
   sweep was cancelled by the database role's 30 s statement timeout: one
   DETACH DELETE took 70-91 s under daytime load. Miners also queued about
@@ -38,7 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   starting batches after 30 minutes instead of after 20.
 
 
-- **drawer deletes reach the AGE graph again, even while KG write-through is paused; deleted ids are queued and the nightly dream run removes their vertices in batches (MEMPALACE_KG_DELETETHROUGH, default on)** (`HEAD` — pending resolution)
+- **drawer deletes reach the AGE graph again, even while KG write-through is paused; deleted ids are queued and the nightly dream run removes their vertices in batches (MEMPALACE_KG_DELETETHROUGH, default on)** ([`9a72630`](https://github.com/techempower-org/mempalace/commit/9a72630))
   The delete hook was attached only alongside write-through, and its
   factory was gated on `MEMPALACE_KG_WRITETHROUGH`. Production paused
   write-through on 2026-10-24 for a re-mine drain, so from then on no
@@ -69,7 +69,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **the nightly dream, `python -m mempalace.dream nightly`, runs the inventory and the contradictions pass and publishes one dreams/v1 JSON document with stable proposal ids for a private review page; decided ids are never proposed again** (`HEAD` — pending resolution)
+- **the nightly dream, `python -m mempalace.dream nightly`, runs the inventory and the contradictions pass and publishes one dreams/v1 JSON document with stable proposal ids for a private review page; decided ids are never proposed again** ([`bcb228f`](https://github.com/techempower-org/mempalace/commit/bcb228f))
   Day 3 of the dreaming decision. One document per night (`YYYY-MM-DD.json` and
   `latest.json`, atomic, 0640 in a 0700 folder, pruned after 30 days) carries
   each proposal's stable id (kind, source paths without line numbers, rule lead),
@@ -81,7 +81,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and stops the model pass before the next call when the host drops under it.
 
 
-- **dream day 2, `python -m mempalace.dream contradictions`, asks a local model whether a feedback memory contradicts a CLAUDE.md rule that governs it, on similarity-prefiltered pairs, and proposes only the contradictions** (`HEAD` — pending resolution)
+- **dream day 2, `python -m mempalace.dream contradictions`, asks a local model whether a feedback memory contradicts a CLAUDE.md rule that governs it, on similarity-prefiltered pairs, and proposes only the contradictions** ([`e80fc49`](https://github.com/techempower-org/mempalace/commit/e80fc49))
   Every normative rule and every feedback memory is embedded once through
   palace-daemon `/embed`; each memory is paired with its nearest rules at cosine
   0.55 or more (two per memory, 60 pairs at most, closest first). A rule in the
@@ -96,7 +96,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   run: 60 pairs judged in 134 s, 4 contradictions, all against global rules.
 
 
-- **dream day 1, `python -m mempalace.dream inventory`, proposes oversized MEMORY.md indexes, CLAUDE.md rules with no named mechanism, and near-duplicate feedback memories, without editing any input** (`HEAD` — pending resolution)
+- **dream day 1, `python -m mempalace.dream inventory`, proposes oversized MEMORY.md indexes, CLAUDE.md rules with no named mechanism, and near-duplicate feedback memories, without editing any input** ([`45e4377`](https://github.com/techempower-org/mempalace/commit/45e4377))
   First step of the dreaming decision (docs/superpowers/specs/2026-11-05-dreaming-decision.md):
   read-only checks that need no model. `oversized-index` flags a memory folder's
   MEMORY.md over 200 lines or 25 KB. `no-mechanism` flags a top-level bold-lead rule
@@ -114,7 +114,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **bare JWTs, base64 vault-item blobs, otpauth URIs, one-time codes, PINs, TOTP seeds and Bitwarden notes and secret custom fields are redacted on every write, and a Google client secret of any tail from 24 characters** (`HEAD` — pending resolution)
+- **bare JWTs, base64 vault-item blobs, otpauth URIs, one-time codes, PINs, TOTP seeds and Bitwarden notes and secret custom fields are redacted on every write, and a Google client secret of any tail from 24 characters** ([`6b9bb08`](https://github.com/techempower-org/mempalace/commit/6b9bb08))
   The 2026-11-07..09 leak sweeps found secrets that #603's shapes and
   named-assignment pass still let through: Home Assistant long-lived tokens
   printed as bare JWTs, a `bw encode` blob (a whole vault item in base64), a
@@ -333,7 +333,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **the KG delete-through deletes again; a Python list now reaches Cypher as a list, so delete_drawers' UNWIND matches its drawers instead of one JSON string, and its count is real** (`HEAD` — pending resolution)
+- **the KG delete-through deletes again; a Python list now reaches Cypher as a list, so delete_drawers' UNWIND matches its drawers instead of one JSON string, and its count is real** ([`7189e6b`](https://github.com/techempower-org/mempalace/commit/7189e6b))
   `_cypher_literal` rendered every non-scalar through `json.dumps` as a
   quoted string, so `delete_drawers`' `UNWIND $ids` unwound a single
   string and matched no drawer. The delete-through never removed a

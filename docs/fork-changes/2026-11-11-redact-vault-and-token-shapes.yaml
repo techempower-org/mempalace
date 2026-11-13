@@ -2,7 +2,7 @@ seq: 196
 id: redact-vault-and-token-shapes
 date: '2026-11-11'
 bucket: Fixed
-commit: HEAD
+commit: 6b9bb08
 area: Privacy
 summary: bare JWTs, base64 vault-item blobs, otpauth URIs, one-time codes, PINs, TOTP seeds and Bitwarden notes and secret custom fields are redacted on every write, and a Google client secret of any tail from 24 characters
 body: |
