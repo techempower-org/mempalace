@@ -883,15 +883,20 @@ is the loader every consumer goes through.
    One file per entry means concurrent PRs no longer conflict here: a
    10-PR wave on 2026-09-10/11 hit a conflict on every shared docs file
    with zero source conflicts (#473).
-3. Run `scripts/render-docs.py` to regenerate `FORK_CHANGELOG.md` and
-   the README table.
-4. Run `scripts/check-docs.sh` to verify nothing has drifted (commit
-   hashes **and their ancestry**, render parity, upstream PR states).
-5. Commit your entry file + the regenerated artefacts together.
+3. Commit **only your entry file**. Do not commit the rendered outputs
+   (`FORK_CHANGELOG.md`, the README fork-queue table,
+   `website/public/llms-full.txt`): every PR that did made every other
+   open PR conflict on all three (#473). On a pull request `check-docs`
+   runs with `FORK_DOCS_RENDER_AFTER_MERGE=1`, which proves the entries
+   render without requiring the committed outputs to match.
+4. Optional, locally: `FORK_DOCS_RENDER_AFTER_MERGE=1 scripts/check-docs.sh`
+   (it rewrites the outputs in place: discard them before committing).
 
-After the PR merges, `scripts/maintain-fork-changes.py` resolves
-`commit: HEAD` to the squash sha — from `fork_pr:` via the GitHub API
-when present, otherwise by matching the commit subject.
+After the PR merges, `.github/workflows/render-fork-docs.yml` runs on
+main: `scripts/maintain-fork-changes.py` resolves `commit: HEAD` to the
+squash sha (from `fork_pr:` via the GitHub API when present, otherwise by
+matching the commit subject), the renderers refresh the outputs, the bot
+commits them to main, and `check-docs.sh` runs strictly on the result.
 
 ### Targets
 
