@@ -2,8 +2,7 @@ seq: 202
 id: dream-symlink-judge-off-apply
 date: '2026-11-14'
 bucket: Fixed
-commit: HEAD
-fork_pr: 614
+commit: 36b5ce3
 area: Dream
 summary: the nightly dream reads a symlinked memory folder once, reports a stopped judge as off instead of an error, and applies accepted decisions it can apply without judgement
 body: |
@@ -19,3 +18,4 @@ body: |
   recorded in the applied ledger; every other accepted decision is listed
   with the reason it waits for a lane. A lock keeps two runs from
   overwriting each other's ledgers.
+fork_pr: 614
