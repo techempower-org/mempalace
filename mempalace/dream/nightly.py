@@ -152,7 +152,7 @@ def _same_file(sources: Sequence[str]) -> Optional[str]:
         fa, fb = (q.parent.resolve(strict=True) for q in paths)
     except OSError:
         return None
-    if a != b or fa != fb or paths[0].parent == paths[1].parent:
+    if a != b or fa != fb or paths[0].parent == paths[1].parent or paths[0].name != paths[1].name:
         return None
     if a.parent != fa or not any(q.parent.is_symlink() for q in paths):
         return None

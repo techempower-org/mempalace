@@ -510,3 +510,18 @@ def test_a_second_run_while_one_holds_the_lock_does_not_start(tmp_path, monkeypa
     assert not (out / "latest.json").exists()
     held.close()
     assert nightly.single_writer(out) is not None
+
+
+def test_two_entries_of_one_aliased_folder_are_not_one_file(tmp_path):
+    real = tmp_path / "real" / "memory"
+    real.mkdir(parents=True)
+    (real / "a.md").write_text("x\n")
+    (real / "b.md").symlink_to("a.md")
+    (tmp_path / "alias").mkdir()
+    (tmp_path / "alias" / "memory").symlink_to("../real/memory")
+    srcs = [str(real / "a.md"), str(tmp_path / "alias" / "memory" / "b.md")]
+    prop = {"id": "ffffffffffffffff", "kind": "near-duplicate", "sources": srcs}
+    ledger, waiting = nightly.apply_decisions(
+        {prop["id"]: {"decision": "accept"}}, [], {prop["id"]: prop}
+    )
+    assert ledger == [] and waiting[0]["id"] == prop["id"]
