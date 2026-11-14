@@ -209,3 +209,186 @@ def test_a_refusal_after_the_first_judgement_is_still_an_error(tmp_path):
     )
     assert stats["judged"] == 1 and stats["error"].startswith("ConnectionRefusedError")
     assert "judge" not in stats
+
+
+def _refused(rule, memory):
+    import urllib.error
+
+    raise urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+
+
+def test_a_judged_pair_is_kept_and_not_judged_again(tmp_path):
+    mems, rules, embed = _setup(tmp_path)
+    ledger, calls = {}, []
+
+    def judge(rule, memory):
+        calls.append(rule)
+        return {"verdict": "contradict" if "English" in rule else "consistent", "why": "w"}
+
+    judge.authority = "big-model (cloud), unreviewed"
+    kw = dict(floor=0.5, per_memory=1, global_dirs=[tmp_path], ledger=ledger)
+    first, s1 = c.contradictions(mems, rules, embed, judge, **kw)
+    assert len(calls) == 2 and s1["judged"] == 2 and s1["cached"] == 0
+    assert {v["by"] for v in ledger.values()} == {"big-model (cloud), unreviewed"}
+    assert all(v["at"] and v["verdict"] in c.VERDICTS for v in ledger.values())
+    again, s2 = c.contradictions(mems, rules, embed, judge, **kw)
+    assert len(calls) == 2  # nothing sent twice
+    assert s2["judged"] == 0 and s2["cached"] == 2 and s2["verdicts"] == s1["verdicts"]
+    assert [p.summary for p in again] == [p.summary for p in first]
+
+
+def test_with_the_judge_off_earlier_verdicts_still_count_and_only_new_pairs_wait(tmp_path):
+    mems, rules, embed = _setup(tmp_path)
+    ledger = {}
+
+    def big(rule, memory):
+        return {"verdict": "contradict", "why": "w"}
+
+    big.authority = "big-model (AMD cloud), unreviewed"
+    kw = dict(floor=0.5, per_memory=1, global_dirs=[tmp_path], ledger=ledger)
+    c.contradictions(mems[:1], rules, embed, big, **kw)  # only "push" judged
+    assert len(ledger) == 1
+    used = set()
+    props, stats = c.contradictions(mems, rules, embed, _refused, used=used, **kw)
+    assert stats["judge"] == "off" and stats["error"] is None
+    assert stats["cached"] == 1 and stats["waiting"] == 1 and stats["judged"] == 0
+    assert [p.authority for p in props] == ["big-model (AMD cloud), unreviewed"]
+    assert len(used) == 2 and set(ledger) <= used
+
+
+def test_a_changed_memory_is_judged_again(tmp_path):
+    mems, rules, embed = _setup(tmp_path)
+    ledger, calls = {}, []
+
+    def judge(rule, memory):
+        calls.append(memory)
+        return {"verdict": "consistent", "why": "w"}
+
+    kw = dict(floor=0.5, per_memory=1, global_dirs=[tmp_path], ledger=ledger)
+    c.contradictions(mems, rules, embed, judge, **kw)
+    edited = [
+        _mem(m.name, kind="project" if m.name == "proj" else "feedback", body="edited")
+        for m in mems
+    ]
+    c.contradictions(edited, rules, embed, judge, **kw)
+    assert len(calls) == 4 and len(ledger) == 4
+
+
+def test_after_a_failure_later_pairs_still_take_their_ledger_verdicts(tmp_path):
+    mems, rules, embed = _setup(tmp_path)
+    ledger = {}
+
+    def big(rule, memory):
+        return {"verdict": "contradict", "why": "w"}
+
+    kw = dict(floor=0.5, per_memory=1, global_dirs=[tmp_path], ledger=ledger)
+    c.contradictions(mems, rules, embed, big, **kw)
+    first_key = next(iter(ledger))  # the closest pair's verdict is forgotten
+    del ledger[first_key]
+
+    def busy(rule, memory):
+        raise TimeoutError("busy")
+
+    props, stats = c.contradictions(mems, rules, embed, busy, **kw)
+    assert stats["error"].startswith("TimeoutError") and "judge" not in stats
+    assert stats["cached"] == 1 and stats["waiting"] == 1 and len(props) == 1
+
+
+def test_a_ledger_entry_with_an_unknown_verdict_is_judged_again(tmp_path):
+    mems, rules, embed = _setup(tmp_path)
+    ledger, calls = {}, []
+
+    def judge(rule, memory):
+        calls.append(rule)
+        return {"verdict": "consistent", "why": "w"}
+
+    kw = dict(floor=0.5, per_memory=1, global_dirs=[tmp_path], ledger=ledger)
+    c.contradictions(mems, rules, embed, judge, **kw)
+    for v in ledger.values():
+        v["verdict"] = "maybe"
+    c.contradictions(mems, rules, embed, judge, **kw)
+    assert len(calls) == 4
+
+
+def test_the_local_judge_names_where_it_ran(monkeypatch):
+    monkeypatch.delenv("DREAM_LLM_WHERE", raising=False)
+    assert (
+        c.local_judge(url="http://127.0.0.1:8091", model="m").authority == "m (local), unreviewed"
+    )
+    assert "(gpu.example)" in c.local_judge(url="http://gpu.example:8000", model="m").authority
+    monkeypatch.setenv("DREAM_LLM_WHERE", "AMD Developer Cloud MI300X")
+    j = c.local_judge(url="http://127.0.0.1:18000", model="Qwen2.5-72B-Instruct")
+    assert j.authority == "Qwen2.5-72B-Instruct (AMD Developer Cloud MI300X), unreviewed"
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [[], "contradict", {"verdict": "contradict"}, {"verdict": "contradict", "by": " "}, None],
+)
+def test_a_malformed_ledger_entry_is_judged_again_never_credited(tmp_path, entry):
+    mems, rules, embed = _setup(tmp_path)
+    ledger, calls = {}, []
+
+    def judge(rule, memory):
+        calls.append(rule)
+        return {"verdict": "consistent", "why": "w"}
+
+    judge.authority = "now (local), unreviewed"
+    kw = dict(floor=0.5, per_memory=1, global_dirs=[tmp_path], ledger=ledger)
+    c.contradictions(mems, rules, embed, judge, **kw)
+    for k in ledger:
+        ledger[k] = entry
+    _, stats = c.contradictions(mems, rules, embed, judge, **kw)
+    assert len(calls) == 4 and stats["cached"] == 0 and stats["judged"] == 2
+    assert all(v["by"] == "now (local), unreviewed" for v in ledger.values())
+
+
+def test_a_guard_stop_with_a_ledger_still_meets_every_pair(tmp_path):
+    mems, rules, embed = _setup(tmp_path)
+    ledger, used = {}, set()
+
+    def judge(rule, memory):
+        return {"verdict": "contradict", "why": "w"}
+
+    judge.authority = "big (cloud), unreviewed"
+    kw = dict(floor=0.5, per_memory=1, global_dirs=[tmp_path], ledger=ledger)
+    c.contradictions(mems, rules, embed, judge, **kw)
+    props, stats = c.contradictions(
+        mems, rules, embed, judge, guard=lambda: "low memory", used=used, **kw
+    )
+    # all pairs were in the ledger: the guard is never consulted, nothing waits
+    assert stats["cached"] == 2 and stats["error"] is None and len(used) == 2 and len(props) == 2
+    first = next(iter(ledger))
+    del ledger[first]
+    props, stats = c.contradictions(
+        mems, rules, embed, judge, guard=lambda: "low memory", used=used, **kw
+    )
+    assert stats["error"] == "stopped: low memory" and stats["waiting"] == 1
+    assert stats["cached"] == 1 and len(props) == 1
+
+
+def test_a_refusal_after_a_judgement_with_a_ledger_is_an_error_and_keeps_the_verdict(tmp_path):
+    mems, rules, embed = _setup(tmp_path)
+    ledger, calls = {}, []
+
+    def judge(rule, memory):
+        calls.append(rule)
+        if len(calls) > 1:
+            raise ConnectionRefusedError(111, "Connection refused")
+        return {"verdict": "consistent", "why": "ok"}
+
+    saves = []
+    _, stats = c.contradictions(
+        mems,
+        rules,
+        embed,
+        judge,
+        floor=0.5,
+        per_memory=1,
+        global_dirs=[tmp_path],
+        ledger=ledger,
+        on_verdict=lambda: saves.append(dict(ledger)),
+    )
+    assert stats["judged"] == 1 and stats["error"].startswith("ConnectionRefusedError")
+    assert "judge" not in stats and stats["waiting"] == 1
+    assert len(ledger) == 1 and len(saves) == 1 and saves[0] == ledger

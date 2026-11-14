@@ -79,11 +79,14 @@ Every other accepted id waits, with its reason, for a lane; a rejected id needs 
 ### `run`
 
 ```python
-def run(memory_root: Path, claude_md: Sequence[Path], embed: inventory.Embedder, judge: Optional[contradictions.Judge], decisions: Dict[str, dict], guard: Optional[Callable[[], Optional[str]]] = None, day: Optional[str] = None, seen: Optional[Dict[str, str]] = None, applied: Optional[List[dict]] = None, global_dirs: Sequence[Path] = (), known: Optional[Dict[str, dict]] = None)
+def run(memory_root: Path, claude_md: Sequence[Path], embed: inventory.Embedder, judge: Optional[contradictions.Judge], decisions: Dict[str, dict], guard: Optional[Callable[[], Optional[str]]] = None, day: Optional[str] = None, seen: Optional[Dict[str, str]] = None, applied: Optional[List[dict]] = None, global_dirs: Sequence[Path] = (), known: Optional[Dict[str, dict]] = None, verdicts: Optional[Dict[str, dict]] = None, checkpoint: Optional[Callable[[], None]] = None)
 ```
 
 (the night's document, the updated first-seen ledger). ``judge`` None skips the model
 pass (recorded in ``run``). ``seen`` maps each id to the night it first appeared.
+``verdicts``, the judge's ledger, is updated in place: new verdicts are added and those of
+pairs this night no longer has are dropped (left alone when the model pass is skipped).
+``checkpoint`` runs after each new verdict (see :func:`save_verdicts`).
 
 ### `fit`
 
@@ -136,14 +139,22 @@ def read_json(path: Path, default)
 
 A ledger this writer or the lane keeps; ``default`` when it does not exist yet.
 
+### `save_verdicts`
+
+```python
+def save_verdicts(publish_dir: Path, verdicts: Dict[str, dict]) -> None
+```
+
+Write the verdict ledger atomically (0640, in the private publish dir).
+
 ### `publish`
 
 ```python
-def publish(doc: dict, publish_dir: Path, seen: Optional[Dict[str, str]] = None) -> Path
+def publish(doc: dict, publish_dir: Path, seen: Optional[Dict[str, str]] = None, verdicts: Optional[Dict[str, dict]] = None) -> Path
 ```
 
 Write ``&lt;day>.json`` and ``latest.json`` (0640) atomically into ``publish_dir`` (0700),
-save the first-seen ledger, and prune day files older than :data:`KEEP_DAYS`.
+save the first-seen and verdict ledgers, and prune day files older than :data:`KEEP_DAYS`.
 
 ### `prune`
 
