@@ -40,6 +40,7 @@ KEEP_DAYS = 30
 # Kinds in the order they are kept when the file would be too big: the last go first.
 KIND_PRIORITY = ["contradiction", "near-duplicate", "oversized-index", "no-mechanism"]
 SEEN = ".seen.json"
+LOCK = ".nightly.lock"
 APPLIED = "applied.json"
 _DAY_FILE = re.compile(r"^\d{4}-\d{2}-\d{2}\.json$")
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -140,14 +141,22 @@ def published_proposals(publish_dir: Path) -> Dict[str, dict]:
 
 
 def _same_file(sources: Sequence[str]) -> Optional[str]:
-    """For two sources that are one file reached two ways, the real path; else None."""
+    """For two sources that are one file reached through two names of ONE memory folder (the
+    alias :func:`inventory.memory_folders` now reads once), the real path; else None. Two real
+    folders that each hold a link to a shared file are still read twice, so they never count."""
     if len(sources) != 2:
         return None
     try:
-        a, b = (Path(_LINE.sub("", s)).resolve(strict=True) for s in sources)
+        paths = [Path(_LINE.sub("", s)) for s in sources]
+        a, b = (q.resolve(strict=True) for q in paths)
+        fa, fb = (q.parent.resolve(strict=True) for q in paths)
     except OSError:
         return None
-    return str(a) if a == b else None
+    if a != b or fa != fb or paths[0].parent == paths[1].parent:
+        return None
+    if a.parent != fa or not any(q.parent.is_symlink() for q in paths):
+        return None
+    return str(a)
 
 
 def apply_decisions(
@@ -300,6 +309,20 @@ def within_size(doc: dict) -> dict:
     if _size(out) > MAX_BYTES:
         raise TooLarge(f"{_size(out)} bytes without proposals; limit {MAX_BYTES}")
     return out
+
+
+def single_writer(publish_dir: Path):
+    """An exclusive, non-blocking lock on ``<publish_dir>/.nightly.lock``, held while the
+    returned file object stays open (the process's life); None when another run holds it."""
+    import fcntl
+
+    f = open(publish_dir / LOCK, "a+")
+    try:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        f.close()
+        return None
+    return f
 
 
 def private_dir(path: Path) -> Path:

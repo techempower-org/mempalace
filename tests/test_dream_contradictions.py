@@ -191,6 +191,7 @@ def test_a_judge_that_refuses_the_connection_is_off_not_an_error(tmp_path):
     assert props == []
     assert stats["error"] is None
     assert stats["skipped"] is True and stats["judge"] == "off" and stats["waiting"] == 2
+    assert "Connection refused" in stats["refused"]
 
 
 def test_a_refusal_after_the_first_judgement_is_still_an_error(tmp_path):

@@ -217,7 +217,12 @@ def contradictions(
         except Exception as exc:  # one hiccup ends the pass; no retry
             if stats["judged"] == 0 and judge_refused(exc):
                 # Off before the first judgement: say so, with what waits for it, and no error.
-                stats.update(skipped=True, judge="off", waiting=len(pairs))
+                stats.update(
+                    skipped=True,
+                    judge="off",
+                    waiting=len(pairs),
+                    refused=f"{type(exc).__name__}: {exc}"[:300],
+                )
                 break
             stats["error"] = f"{type(exc).__name__}: {exc}"[:300]
             break

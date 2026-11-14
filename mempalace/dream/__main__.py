@@ -66,6 +66,12 @@ def main(argv=None) -> int:
             print(f"not starting: {reason}")
             return 4
         nightly.private_dir(args.out)
+        # One writer for the whole night: the ledgers are read, extended and replaced, so two
+        # overlapping runs (the timer and a manual re-run) could each drop the other's entries.
+        lock = nightly.single_writer(args.out)
+        if lock is None:
+            print(f"not starting: another dream run holds {args.out / nightly.LOCK}")
+            return 4
         doc, seen = nightly.run(
             args.memory_root,
             _claude_md(args),

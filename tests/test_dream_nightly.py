@@ -462,3 +462,51 @@ def test_a_judge_that_is_off_does_not_fail_the_night(tmp_path, monkeypatch):
     con = json.loads((out / "latest.json").read_text())["run"]["steps"]["contradictions"]
     assert rc == 0 and con.get("judge") == "off" and con["error"] is None
     assert con["waiting"] == con["pairs"] > 0
+
+
+def test_two_real_folders_linking_one_file_are_not_applied(tmp_path):
+    shared = tmp_path / "shared.md"
+    shared.write_text("x\n")
+    a, b = tmp_path / "p" / "memory", tmp_path / "q" / "memory"
+    a.mkdir(parents=True)
+    b.mkdir(parents=True)
+    (a / "m.md").symlink_to(shared)
+    (b / "m.md").symlink_to(shared)
+    prop = {
+        "id": "eeeeeeeeeeeeeeee",
+        "kind": "near-duplicate",
+        "sources": [str(a / "m.md"), str(b / "m.md")],
+    }
+    ledger, waiting = nightly.apply_decisions(
+        {prop["id"]: {"decision": "accept"}}, [], {prop["id"]: prop}
+    )
+    assert ledger == [] and waiting[0]["reason"] == "needs a lane: not mechanical"
+
+
+def test_a_second_run_while_one_holds_the_lock_does_not_start(tmp_path, monkeypatch, capsys):
+    root, md = _tree(tmp_path)
+    out = tmp_path / "o"
+    out.mkdir()
+    held = nightly.single_writer(out)
+    assert held is not None
+    monkeypatch.setattr(nightly.inventory, "daemon_embedder", lambda: _embed)
+    rc = main(
+        [
+            "nightly",
+            "--memory-root",
+            str(root),
+            "--claude-md",
+            str(md),
+            "--out",
+            str(out),
+            "--day",
+            "2026-11-14",
+            "--no-model",
+            "--min-available-mb",
+            "0",
+        ]
+    )
+    assert rc == 4 and "another dream run" in capsys.readouterr().out
+    assert not (out / "latest.json").exists()
+    held.close()
+    assert nightly.single_writer(out) is not None
