@@ -1,0 +1,21 @@
+seq: 202
+id: dream-symlink-judge-off-apply
+date: '2026-11-14'
+bucket: Fixed
+commit: HEAD
+fork_pr: 614
+area: Dream
+summary: the nightly dream reads a symlinked memory folder once, reports a stopped judge as off instead of an error, and applies accepted decisions it can apply without judgement
+body: |
+  A project run from two checkouts gets two harness memory folders, and
+  one is often a symlink to the other. The inventory read through both, so
+  every memory in that project paired with itself at similarity 1.000: 35
+  of the 43 near-duplicates in one night were such pairs, and merging one
+  would have deleted the only copy. Each real folder is now read once.
+
+  A local judge whose port refuses the connection before the first
+  judgement is recorded as judge off, with the pairs waiting for it, and the
+  night no longer fails. An accepted decision on a pair that is one file is
+  recorded in the applied ledger; every other accepted decision is listed
+  with the reason it waits for a lane. A lock keeps two runs from
+  overwriting each other's ledgers.

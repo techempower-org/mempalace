@@ -189,3 +189,26 @@ def test_discovery_skips_worktrees_and_goes_one_level(tmp_path):
     (tmp_path / "plain" / "deep" / "CLAUDE.md").write_text("x")
     found = [p.parent.name for p in inventory.discover_claude_md(tmp_path)]
     assert found == ["plain", "repo"]
+
+
+def test_a_symlinked_memory_folder_is_read_once_and_never_pairs_with_itself(tmp_path):
+    # One project from two checkouts: the ~/srv harness folder's memory is a link to ~/Projects'.
+    root = tmp_path / "projects"
+    real = root / "-home-jp-Projects-x" / "memory"
+    _memory(real, "a", "feedback", "same")
+    _memory(real, "b", "feedback", "other")
+    (root / "-home-jp-srv-x").mkdir(parents=True)
+    (root / "-home-jp-srv-x" / "memory").symlink_to("../-home-jp-Projects-x/memory")
+    (real / "MEMORY.md").write_text("- x\n" * 250)
+    assert inventory.memory_folders(root) == [real]
+    assert sorted(m.name for m in inventory.read_memories(root)) == ["a", "b"]
+    embed, _ = _fake_embed({"a": [1.0, 0.0], "b": [0.0, 1.0]})
+    assert inventory.near_duplicates(inventory.read_memories(root), embed) == []
+    assert len(inventory.oversized_indexes(root)) == 1
+
+
+def test_two_real_folders_are_both_read(tmp_path):
+    root = tmp_path / "projects"
+    _memory(root / "p" / "memory", "a", "feedback", "x")
+    _memory(root / "q" / "memory", "a", "feedback", "x")
+    assert len(inventory.read_memories(root)) == 2
