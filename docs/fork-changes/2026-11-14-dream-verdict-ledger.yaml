@@ -2,7 +2,7 @@ seq: 204
 id: dream-verdict-ledger
 date: '2026-11-14'
 bucket: Added
-commit: HEAD
+commit: 30447c9
 area: Dream
 summary: the dream judge's verdicts are kept in judged.json, so a pair judged once is not judged again and a night with the judge off still reports them
 body: |

@@ -21,6 +21,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [2026-11-14]
 
 
+### Added
+
+
+- **the dream judge's verdicts are kept in judged.json, so a pair judged once is not judged again and a night with the judge off still reports them** ([`30447c9`](https://github.com/techempower-org/mempalace/commit/30447c9))
+  The contradictions pass asked the judge about every pair every night,
+  and a night with the local model stopped left all of them waiting, so a
+  verdict from an earlier night was lost. Each verdict is now kept in
+  judged.json beside the published nights, keyed by the exact rule and
+  memory text the judge read, with the model and where it ran. A pair
+  found there is answered from it; either text changing asks again; pairs
+  the night no longer has are dropped. An unreadable ledger is judged
+  afresh. DREAM_LLM_WHERE names a judge reached through a tunnel.
+
+
 ### Fixed
 
 
