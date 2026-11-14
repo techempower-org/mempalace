@@ -42,7 +42,9 @@ custom field is redacted by a secret-ish sibling ``name`` or a hidden
 only near ``"object": "item"`` (proximity: an adjacent ``notes`` may be
 over-redacted). A one-time code is caught only beside the words that say what
 it is ("is your Google verification code", "sign-in code is"), and only its
-digits are replaced. A JWT is caught only with a compact ``eyJ`` header.
+digits are replaced. A JWT is caught only with a compact ``eyJ`` header. A short ``sk-`` key (LiteLLM's) is
+caught only when it holds two of upper case, lower case and digits, so a mixed-case name after
+``sk-`` (``sk-ManagementDashboardOverview``) is over-redacted and a key of letters in one case passes.
 A quote that never closes leaves only its first word redacted. Embeddings passed in by
 the caller were computed from the text before redaction. Configured patterns
 are trusted like the rest of the config: one with nested quantifiers can

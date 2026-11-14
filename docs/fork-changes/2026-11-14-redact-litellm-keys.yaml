@@ -14,4 +14,4 @@ body: |
   and a mixed-case name after "sk-" is replaced. A bare OpenAI key is now
   replaced to the end of its token, where it stopped at the first "_" or
   "-". Anthropic and OpenAI keys keep their own kinds.
-fork_pr: 0
+fork_pr: 615
