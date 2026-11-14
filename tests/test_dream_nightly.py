@@ -328,3 +328,137 @@ def test_run_treats_an_empty_day_as_an_error_not_today(tmp_path):
     root, md = _tree(tmp_path)
     with pytest.raises(ValueError):
         nightly.run(root, [md], _embed, None, {}, day="")
+
+
+def _linked_pair(tmp_path):
+    """One memory reached through a symlinked folder, as the night before the fix proposed it."""
+    real = tmp_path / "projects" / "-home-jp-Projects-x" / "memory"
+    real.mkdir(parents=True)
+    (real / "m.md").write_text(
+        "---\nname: m\ndescription: d\nmetadata:\n  type: feedback\n---\nb\n"
+    )
+    link = tmp_path / "projects" / "-home-jp-srv-x"
+    link.mkdir()
+    (link / "memory").symlink_to("../-home-jp-Projects-x/memory")
+    return {
+        "id": "0154343f2d6447e0",
+        "kind": "near-duplicate",
+        "sources": [str(real / "m.md"), str(link / "memory" / "m.md")],
+    }
+
+
+def test_an_accepted_pair_that_is_one_file_is_applied_and_logged(tmp_path):
+    prop = _linked_pair(tmp_path)
+    dec = {
+        prop["id"]: {"decision": "accept", "by": "JP", "at": "2026-11-14T03:34:26-08:00"},
+        "aaaaaaaaaaaaaaaa": {"decision": "accept", "by": "JP", "at": "t"},
+        "bbbbbbbbbbbbbbbb": {"decision": "reject", "by": "JP", "at": "t"},
+        "cccccccccccccccc": {"decision": "accept", "by": "JP", "at": "t"},
+    }
+    other = {"id": "aaaaaaaaaaaaaaaa", "kind": "no-mechanism", "sources": ["x:1"]}
+    old = [{"id": "zz", "result": "earlier"}]
+    ledger, waiting = nightly.apply_decisions(
+        dec, old, {prop["id"]: prop, other["id"]: other}, now="N"
+    )
+    assert ledger[0] == old[0] and len(ledger) == 2
+    entry = ledger[1]
+    assert entry["id"] == prop["id"] and entry["by"] == "JP" and entry["applied_at"] == "N"
+    assert "nothing to merge" in entry["result"]
+    assert (tmp_path / "projects" / "-home-jp-Projects-x" / "memory" / "m.md").is_file()
+    assert {w["id"]: w["reason"] for w in waiting} == {
+        "aaaaaaaaaaaaaaaa": "needs a lane: not mechanical",
+        "cccccccccccccccc": "not in any published night",
+    }
+    # Applied once: a second night adds nothing.
+    again, _ = nightly.apply_decisions(dec, ledger, {prop["id"]: prop}, now="M")
+    assert again == ledger
+
+
+def test_two_real_files_are_never_applied_mechanically(tmp_path):
+    a, b = tmp_path / "a.md", tmp_path / "b.md"
+    a.write_text("same\n")
+    b.write_text("same\n")
+    prop = {"id": "dddddddddddddddd", "kind": "near-duplicate", "sources": [str(a), str(b)]}
+    ledger, waiting = nightly.apply_decisions(
+        {prop["id"]: {"decision": "accept"}}, [], {prop["id"]: prop}
+    )
+    assert ledger == [] and waiting[0]["reason"] == "needs a lane: not mechanical"
+
+
+def test_the_cli_applies_a_decision_from_an_earlier_night(tmp_path, monkeypatch):
+    root, md = _tree(tmp_path)
+    prop = _linked_pair(tmp_path / "mem")
+    out = tmp_path / "o"
+    out.mkdir()
+    (out / "2026-11-13.json").write_text(json.dumps({"schema": "dreams/v1", "proposals": [prop]}))
+    (out / "decisions.json").write_text(
+        json.dumps({prop["id"]: {"decision": "accept", "by": "JP", "at": "t"}})
+    )
+    (out / nightly.SEEN).write_text("{}")
+    monkeypatch.setattr(nightly.inventory, "daemon_embedder", lambda: _embed)
+    rc = main(
+        [
+            "nightly",
+            "--memory-root",
+            str(root),
+            "--claude-md",
+            str(md),
+            "--out",
+            str(out),
+            "--day",
+            "2026-11-14",
+            "--no-model",
+            "--min-available-mb",
+            "0",
+        ]
+    )
+    assert rc == 0
+    doc = json.loads((out / "latest.json").read_text())
+    assert [a["id"] for a in doc["applied"]] == [prop["id"]]
+    assert json.loads((out / nightly.APPLIED).read_text()) == doc["applied"]
+    assert "accepted_waiting" not in doc["run"]
+
+
+def test_a_judge_that_is_off_does_not_fail_the_night(tmp_path, monkeypatch):
+    import urllib.error
+
+    # A project rule and a memory saved in that project, so the pass has pairs to wait.
+    proj = tmp_path / "repo"
+    proj.mkdir()
+    md = proj / "CLAUDE.md"
+    md.write_text(RULES)
+    root = tmp_path / "projects"
+    folder = root / nightly.contradictions._project_key(proj.resolve()) / "memory"
+    folder.mkdir(parents=True)
+    (folder / "a.md").write_text(
+        "---\nname: a\ndescription: d\nmetadata:\n  type: feedback\n---\nx\n"
+    )
+    out = tmp_path / "o"
+    monkeypatch.setattr(nightly.inventory, "daemon_embedder", lambda: _embed)
+
+    def judge():
+        def j(rule, memory):
+            raise urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+
+        return j
+
+    monkeypatch.setattr(nightly.contradictions, "local_judge", judge)
+    monkeypatch.setattr("mempalace.kg_delete_queue.sweep_from_env", lambda: {"skipped": "test"})
+    rc = main(
+        [
+            "nightly",
+            "--memory-root",
+            str(root),
+            "--claude-md",
+            str(md),
+            "--out",
+            str(out),
+            "--day",
+            "2026-11-14",
+            "--min-available-mb",
+            "0",
+        ]
+    )
+    con = json.loads((out / "latest.json").read_text())["run"]["steps"]["contradictions"]
+    assert rc == 0 and con.get("judge") == "off" and con["error"] is None
+    assert con["waiting"] == con["pairs"] > 0

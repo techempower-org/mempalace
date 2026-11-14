@@ -79,6 +79,7 @@ def main(argv=None) -> int:
             day=args.day,
             seen=nightly.read_json(args.out / nightly.SEEN, {}),
             applied=nightly.read_json(args.out / nightly.APPLIED, []),
+            known=nightly.published_proposals(args.out),
         )
         # Deferred AGE delete-through (#558): remove the queued Drawer vertices in
         # batches, at the night's quiet hour. Skips or reports; never fails the night.

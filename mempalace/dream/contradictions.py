@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -183,6 +184,14 @@ def local_judge(
     return judge
 
 
+def judge_refused(exc: BaseException) -> bool:
+    """The judge's port refused the connection: the model is stopped, which is a state (JP
+    stops :8091/:8092 when he needs the GPU), not a failure of the pass."""
+    if isinstance(exc, urllib.error.URLError):
+        exc = exc.reason if isinstance(exc.reason, BaseException) else exc
+    return isinstance(exc, ConnectionRefusedError)
+
+
 def contradictions(
     memories: Sequence[Memory],
     rules: Sequence[Rule],
@@ -206,6 +215,10 @@ def contradictions(
         try:
             v = judge(rule.text[:RULE_CHARS], f"{mem.description}\n{mem.body}"[:MEMORY_CHARS])
         except Exception as exc:  # one hiccup ends the pass; no retry
+            if stats["judged"] == 0 and judge_refused(exc):
+                # Off before the first judgement: say so, with what waits for it, and no error.
+                stats.update(skipped=True, judge="off", waiting=len(pairs))
+                break
             stats["error"] = f"{type(exc).__name__}: {exc}"[:300]
             break
         stats["judged"] = int(stats["judged"]) + 1

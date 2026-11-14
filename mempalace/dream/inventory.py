@@ -107,10 +107,26 @@ def parse_memory(path: Path) -> Optional[Memory]:
 
 
 def memory_folders(root: Path) -> List[Path]:
-    """Every ``<project>/memory`` folder one level under ``root`` (no deeper walk)."""
+    """Every ``<project>/memory`` folder one level under ``root`` (no deeper walk), each real
+    folder once. A project run from two checkouts (``~/srv/<x>`` and ``~/Projects/<x>``) gets two
+    harness folders, and one ``memory`` is often a symlink to the other: read through both, every
+    memory would pair with itself at similarity 1.0, and merging such a "pair" would delete the
+    only copy. A real folder wins over a symlink to it; otherwise the first in sorted order."""
     if not root.is_dir():
         return []
-    return sorted(p / "memory" for p in root.iterdir() if (p / "memory").is_dir())
+    candidates = sorted(p / "memory" for p in root.iterdir() if (p / "memory").is_dir())
+    candidates.sort(key=lambda m: m.is_symlink())  # stable: real folders first, sorted within
+    seen, out = set(), []
+    for folder in candidates:
+        try:
+            real = folder.resolve(strict=True)
+        except OSError:
+            continue
+        if real in seen:
+            continue
+        seen.add(real)
+        out.append(folder)
+    return sorted(out)
 
 
 def read_memories(root: Path) -> List[Memory]:

@@ -175,3 +175,36 @@ def test_pairs_skip_rules_from_other_projects_and_take_the_next_nearest(tmp_path
         [mem], rules, embed, floor=0.5, per_memory=1, global_dirs=[home_claude]
     )
     assert [r.lead for _, _, r in pairs] == ["Always answer in English."]
+
+
+def test_a_judge_that_refuses_the_connection_is_off_not_an_error(tmp_path):
+    import urllib.error
+
+    mems, rules, embed = _setup(tmp_path)
+
+    def judge(rule, memory):
+        raise urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+
+    props, stats = c.contradictions(
+        mems, rules, embed, judge, floor=0.5, per_memory=1, global_dirs=[tmp_path]
+    )
+    assert props == []
+    assert stats["error"] is None
+    assert stats["skipped"] is True and stats["judge"] == "off" and stats["waiting"] == 2
+
+
+def test_a_refusal_after_the_first_judgement_is_still_an_error(tmp_path):
+    mems, rules, embed = _setup(tmp_path)
+    calls = []
+
+    def judge(rule, memory):
+        calls.append(rule)
+        if len(calls) > 1:
+            raise ConnectionRefusedError(111, "Connection refused")
+        return {"verdict": "consistent", "why": "ok"}
+
+    _, stats = c.contradictions(
+        mems, rules, embed, judge, floor=0.5, per_memory=1, global_dirs=[tmp_path]
+    )
+    assert stats["judged"] == 1 and stats["error"].startswith("ConnectionRefusedError")
+    assert "judge" not in stats
