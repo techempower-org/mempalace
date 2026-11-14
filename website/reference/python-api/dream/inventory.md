@@ -50,7 +50,11 @@ the top level or under ``metadata:``, the two shapes the harness has written.
 def memory_folders(root: Path) -> List[Path]
 ```
 
-Every ``&lt;project>/memory`` folder one level under ``root`` (no deeper walk).
+Every ``&lt;project>/memory`` folder one level under ``root`` (no deeper walk), each real
+folder once. A project run from two checkouts (``~/srv/&lt;x>`` and ``~/Projects/&lt;x>``) gets two
+harness folders, and one ``memory`` is often a symlink to the other: read through both, every
+memory would pair with itself at similarity 1.0, and merging such a "pair" would delete the
+only copy. A real folder wins over a symlink to it; otherwise the first in sorted order.
 
 ### `read_memories`
 

@@ -247,18 +247,20 @@ def test_live_readme_has_markers(render_docs):
     )
 
 
-def test_live_readme_check_clean():
-    """render-docs.py --check on the live tree should exit 0 (no drift)."""
-    result = subprocess.run(
-        [sys.executable, str(SCRIPT_PATH), "--check", "--target", "readme"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, (
-        f"README is stale — run scripts/render-docs.py --target readme to regenerate.\n"
-        f"stdout: {result.stdout}\nstderr: {result.stderr}"
-    )
+def test_live_entries_render_into_the_readme(render_docs):
+    """Every live docs/fork-changes/ entry renders into README.md's fork-queue table.
+
+    Not a freshness check: since #473 the committed table is refreshed on main after
+    each merge (render-fork-docs.yml), so a PR that adds an entry is stale by design,
+    and comparing here failed every such PR. check-docs on main runs the strict check."""
+    manifest = render_docs.load_manifest()
+    existing = render_docs.README_PATH.read_text()
+    assert render_docs.README_BEGIN_MARKER in existing
+    assert render_docs.README_END_MARKER in existing
+    rendered = render_docs.render_readme(manifest, existing)
+    table = rendered.split(render_docs.README_BEGIN_MARKER, 1)[1]
+    table = table.split(render_docs.README_END_MARKER, 1)[0]
+    assert table.strip(), "the fork-queue table rendered empty"
 
 
 # ── CLI surface ───────────────────────────────────────────────────────────

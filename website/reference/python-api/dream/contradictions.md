@@ -61,6 +61,15 @@ def local_judge(url: Optional[str] = None, model: Optional[str] = None, api_key:
 An OpenAI-compatible chat endpoint; ``DREAM_LLM_URL``, ``DREAM_LLM_MODEL`` and
 ``DREAM_LLM_API_KEY`` from the environment by default (the key never in argv).
 
+### `judge_refused`
+
+```python
+def judge_refused(exc: BaseException) -> bool
+```
+
+The judge's port refused the connection: the model is stopped, which is a state (JP
+stops :8091/:8092 when he needs the GPU), not a failure of the pass.
+
 ### `contradictions`
 
 ```python

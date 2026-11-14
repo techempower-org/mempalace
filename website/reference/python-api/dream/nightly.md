@@ -9,7 +9,9 @@ The run writes one JSON document (``schema: dreams/v1``) to a review folder, as
 records each decision in ``decisions.json`` in the same folder (``&#123;id: &#123;"decision": "accept" |
 "reject", ...}}``). Every proposal has a stable id, so the same finding keeps its id from night
 to night even when the lines around it move. A decided id is never proposed again: a rejected
-one is settled, and an accepted one is the lane's to apply.
+one is settled, and an accepted one is applied by the next run when that is mechanical (see
+:func:`apply_decisions`), recorded in ``applied`` and the ``applied.json`` ledger; otherwise it is
+listed under ``run.accepted_waiting`` with the reason, for a lane.
 
 The inputs are private, and so is the document: point ``--publish-dir`` at a folder that is
 never in a repository. The host's memory is checked before every model call; under the floor
@@ -54,10 +56,30 @@ def memory_guard(min_available_mb: int = MIN_AVAILABLE_MB, meminfo: str = '/proc
 
 A guard for the model pass: a reason to stop when MemAvailable is under the floor.
 
+### `published_proposals`
+
+```python
+def published_proposals(publish_dir: Path) -> Dict[str, dict]
+```
+
+Every proposal the folder's published nights still show, by id (newest night wins), so
+a decision on a proposal that no longer recurs can still be applied.
+
+### `apply_decisions`
+
+```python
+def apply_decisions(decisions: Dict[str, dict], applied: Sequence[dict], known: Dict[str, dict], now: Optional[str] = None)
+```
+
+(the applied ledger with tonight's additions, the accepted ids still waiting). Only what
+needs no judgement is applied here: a near-duplicate whose two sources are one file read
+through a symlinked folder (nothing to merge; the inventory now reads each folder once).
+Every other accepted id waits, with its reason, for a lane; a rejected id needs nothing.
+
 ### `run`
 
 ```python
-def run(memory_root: Path, claude_md: Sequence[Path], embed: inventory.Embedder, judge: Optional[contradictions.Judge], decisions: Dict[str, dict], guard: Optional[Callable[[], Optional[str]]] = None, day: Optional[str] = None, seen: Optional[Dict[str, str]] = None, applied: Optional[List[dict]] = None, global_dirs: Sequence[Path] = ())
+def run(memory_root: Path, claude_md: Sequence[Path], embed: inventory.Embedder, judge: Optional[contradictions.Judge], decisions: Dict[str, dict], guard: Optional[Callable[[], Optional[str]]] = None, day: Optional[str] = None, seen: Optional[Dict[str, str]] = None, applied: Optional[List[dict]] = None, global_dirs: Sequence[Path] = (), known: Optional[Dict[str, dict]] = None)
 ```
 
 (the night's document, the updated first-seen ledger). ``judge`` None skips the model
@@ -80,6 +102,15 @@ def within_size(doc: dict) -> dict
 
 Drop the lowest-priority proposals (they are sorted) until the final document, its
 ``run.truncated`` count included, fits; refuse when the rest alone is over the limit.
+
+### `single_writer`
+
+```python
+def single_writer(publish_dir: Path)
+```
+
+An exclusive, non-blocking lock on ``&lt;publish_dir>/.nightly.lock``, held while the
+returned file object stays open (the process's life); None when another run holds it.
 
 ### `private_dir`
 
