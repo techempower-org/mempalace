@@ -1045,9 +1045,10 @@ def test_an_odd_escaped_quote_and_a_brace_in_a_string_do_not_hide_a_field(escape
     ],
 )
 @pytest.mark.parametrize("before", ["api_key ", "Bearer ", "\\n", '"', "key: ", "KEY="])
-def test_a_litellm_key_is_redacted_wherever_it_is_printed(body, before):
+@pytest.mark.parametrize("after", [" end", "@proxy.example:4000/v1", "@openssh.com.evil/v1"])
+def test_a_litellm_key_is_redacted_wherever_it_is_printed(body, before, after):
     value = "sk-" + body
-    out = redact(f"{before}{value} end")
+    out = redact(f"{before}{value}{after}")
     assert value not in out
     assert body[:8] not in out
 
@@ -1060,6 +1061,8 @@ def test_a_litellm_key_is_redacted_wherever_it_is_printed(body, before):
         "SK-" + "Q7" * 12,  # not the lower-case prefix
         "sk-" + "Ab1" * 6,  # 18 characters: shorter than any key
         "sk-" + "abcdefghij" * 3,  # letters of one case: a name, not a key
+        "PubkeyAcceptedAlgorithms sk-ecdsa-sha2-nistp256@openssh.com,"
+        "sk-ssh-ed25519-cert-v01@openssh.com",  # SSH key types
     ],
 )
 def test_text_that_only_resembles_a_litellm_key_is_left(text):

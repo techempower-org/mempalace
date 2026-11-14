@@ -71,9 +71,12 @@ DEFAULT_PATTERNS: Dict[str, str] = {
     # "sk-" string, caught here only in this shape: an "sk-" run of 20-1000 that starts a token
     # (or follows a raw JSONL escape), ends one, and holds two of upper case, lower case and
     # digits, so a lower-case kebab name ("sk-learn-…") and a word holding "sk-" ("task-…") are
-    # left, and so is a key of letters in one case. Kinds above win at a tie.
+    # left, and so is a key of letters in one case. The two OpenSSH security-key types
+    # ("sk-ecdsa-sha2-nistp256@openssh.com", "sk-ssh-ed25519@openssh.com") are names, not
+    # keys. Kinds above win at a tie.
     # Each kind is looked for with its complement class, so each scan has one way to match.
     "litellm": r"(?:(?<![A-Za-z0-9_-])|(?<=\\[nrt]))sk-"
+    r"(?!(?:ecdsa-sha2-nistp256|ssh-ed25519)(?:-cert-v01)?@openssh\.com(?![A-Za-z0-9_.-]))"
     r"(?:(?=[a-z0-9_-]{0,1000}[A-Z])(?=[A-Z0-9_-]{0,1000}[a-z])"
     r"|(?=[a-z0-9_-]{0,1000}[A-Z])(?=[A-Za-z_-]{0,1000}[0-9])"
     r"|(?=[A-Z0-9_-]{0,1000}[a-z])(?=[A-Za-z_-]{0,1000}[0-9]))"
