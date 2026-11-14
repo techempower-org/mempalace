@@ -17,6 +17,8 @@ FAKE = {
     "aws": "AK" + "IA" + "Q7" * 8,
     "google": "AI" + "za" + "x" * 35,
     "notion": "nt" + "n_" + "N0" * 23,
+    # A LiteLLM virtual key: "sk-" and token_urlsafe(16), 22 characters.
+    "litellm": "sk-" + "Xq7" * 7 + "B",
 }
 
 
@@ -1029,3 +1031,82 @@ def test_an_odd_escaped_quote_and_a_brace_in_a_string_do_not_hide_a_field(escape
     )
     text = json.dumps({"content": obj}) if escaped else obj
     assert "k3yv4l" not in redact(text)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Xq7" * 7 + "B",  # alphanumeric, as the key leaked on 2026-11-14 was
+        "aB3_" * 5 + "c-D",  # token_urlsafe may use "_" and "-"
+        "Mk" + "9z" * 30,  # a longer master key
+        "q4" * 11,  # lower case and digits only
+        "Q4" * 11,  # upper case and digits only
+        "aB3_" * 30 + "x",  # past 100 characters
+    ],
+)
+@pytest.mark.parametrize("before", ["api_key ", "Bearer ", "\\n", '"', "key: ", "KEY="])
+@pytest.mark.parametrize("after", [" end", "@proxy.example:4000/v1", "@openssh.com.evil/v1"])
+def test_a_litellm_key_is_redacted_wherever_it_is_printed(body, before, after):
+    value = "sk-" + body
+    out = redact(f"{before}{value}{after}")
+    assert value not in out
+    assert body[:8] not in out
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "pip install sk-learn-compatible-estimators-for-x",  # one case only: a kebab name
+        "the task-ManagementDashboardOverview page",  # "sk-" inside a word
+        "SK-" + "Q7" * 12,  # not the lower-case prefix
+        "sk-" + "Ab1" * 6,  # 18 characters: shorter than any key
+        "sk-" + "abcdefghij" * 3,  # letters of one case: a name, not a key
+        "PubkeyAcceptedAlgorithms sk-ecdsa-sha2-nistp256@openssh.com,"
+        "sk-ssh-ed25519-cert-v01@openssh.com",  # SSH key types
+    ],
+)
+def test_text_that_only_resembles_a_litellm_key_is_left(text):
+    assert redact(text) is text
+
+
+def test_a_provider_key_keeps_its_own_kind_before_the_litellm_shape():
+    for kind in ("anthropic", "openai"):
+        value = FAKE[kind]
+        assert redact(value) == _placeholder(kind, value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sk-" + "A1" * 20 + "_" + "b2C" * 10,
+        "sk-" + "A" * 40 + "_",  # letters of one case: only the openai shape takes it
+        "sk-" + "Ab1" * 334 + "_",  # past the litellm shape's 1000
+    ],
+)
+def test_a_long_key_with_punctuation_is_redacted_to_the_end_of_its_token(value):
+    # The bare openai shape once stopped at "_" and left the rest of the key.
+    out = redact(f"key {value} end")
+    assert out == f"key {_placeholder('openai', value)} end"
+
+
+def test_a_key_inside_a_longer_word_is_still_redacted():
+    value = "sk-" + "Ab1" * 20 + "_"
+    out = redact(f"prefix-{value} end")
+    assert value not in out and "Ab1Ab1" not in out
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        " sk-" * 20000,
+        (" sk-" + "aB3-" * 400) * 40,
+        "sk-" + "a" * 100000,
+        ("sk-" + "A" * 999 + "_") * 60,
+    ],
+)
+def test_adversarial_sk_runs_scan_in_linear_time(text):
+    import time
+
+    start = time.perf_counter()
+    redact(text)
+    assert time.perf_counter() - start < 2.0
