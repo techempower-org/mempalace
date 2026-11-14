@@ -248,7 +248,7 @@ def test_live_readme_has_markers(render_docs):
 
 
 def test_live_entries_render_into_the_readme(render_docs):
-    """Every live docs/fork-changes/ entry renders into README.md's fork-queue table.
+    """The live docs/fork-changes/ entries render into a non-empty README fork-queue table.
 
     Not a freshness check: since #473 the committed table is refreshed on main after
     each merge (render-fork-docs.yml), so a PR that adds an entry is stale by design,
