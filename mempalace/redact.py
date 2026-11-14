@@ -38,7 +38,9 @@ custom field is redacted by a secret-ish sibling ``name`` or a hidden
 only near ``"object": "item"`` (proximity: an adjacent ``notes`` may be
 over-redacted). A one-time code is caught only beside the words that say what
 it is ("is your Google verification code", "sign-in code is"), and only its
-digits are replaced. A JWT is caught only with a compact ``eyJ`` header.
+digits are replaced. A JWT is caught only with a compact ``eyJ`` header. A short ``sk-`` key (LiteLLM's) is
+caught only when it holds two of upper case, lower case and digits, so a mixed-case name after
+``sk-`` (``sk-ManagementDashboardOverview``) is over-redacted and a key of letters in one case passes.
 A quote that never closes leaves only its first word redacted. Embeddings passed in by
 the caller were computed from the text before redaction. Configured patterns
 are trusted like the rest of the config: one with nested quantifiers can
@@ -61,7 +63,21 @@ from typing import Any, Dict, List, Optional, Tuple
 # Kind -> pattern. Each matches a credential's shape only.
 DEFAULT_PATTERNS: Dict[str, str] = {
     "anthropic": r"sk-ant-[A-Za-z0-9_-]{30,}",
-    "openai": r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{40,}",
+    # A bare legacy key: 40+ letters and digits, then the rest of its token whatever follows, so a
+    # key holding "_" or "-" past that point is never redacted only up to it.
+    "openai": r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{40,}[A-Za-z0-9_-]*",
+    # A LiteLLM key (2026-11-14: a virtual key was printed into a transcript): "sk-" and
+    # token_urlsafe(16), 22 characters, too short for the openai shape; a master key is any
+    # "sk-" string, caught here only in this shape: an "sk-" run of 20-1000 that starts a token
+    # (or follows a raw JSONL escape), ends one, and holds two of upper case, lower case and
+    # digits, so a lower-case kebab name ("sk-learn-…") and a word holding "sk-" ("task-…") are
+    # left, and so is a key of letters in one case. Kinds above win at a tie.
+    # Each kind is looked for with its complement class, so each scan has one way to match.
+    "litellm": r"(?:(?<![A-Za-z0-9_-])|(?<=\\[nrt]))sk-"
+    r"(?:(?=[a-z0-9_-]{0,1000}[A-Z])(?=[A-Z0-9_-]{0,1000}[a-z])"
+    r"|(?=[a-z0-9_-]{0,1000}[A-Z])(?=[A-Za-z_-]{0,1000}[0-9])"
+    r"|(?=[A-Z0-9_-]{0,1000}[a-z])(?=[A-Za-z_-]{0,1000}[0-9]))"
+    r"[A-Za-z0-9_-]{20,1000}(?![A-Za-z0-9_-])",
     "github": r"(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{60,}",
     # Bot, user, app-level, refresh and rotated tokens: xoxb-, xoxp-, xapp-, xoxe-, xoxe.xoxp-.
     "slack": r"(?:xox[abposre](?:\.xox[abposre])?|xapp)-[0-9]+-[A-Za-z0-9-]{20,}",
