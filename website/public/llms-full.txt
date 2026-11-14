@@ -316,6 +316,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| an "sk-" key of 20 to 1000 characters holding two of upper case, lower case and digits, such as a LiteLLM virtual key, is redacted on every write, and a bare OpenAI key is redacted to the end of its token | — | [`1cbc611`](https://github.com/techempower-org/mempalace/commit/1cbc611) |
 | the nightly dream reads a symlinked memory folder once, reports a stopped judge as off instead of an error, and applies accepted decisions it can apply without judgement | — | [`36b5ce3`](https://github.com/techempower-org/mempalace/commit/36b5ce3) |
 | the KG delete sweep only runs DETACH DELETE for ids that still have a vertex, gets its own statement limit, and is bounded by a 30-minute budget | — | [`2ffe1d7`](https://github.com/techempower-org/mempalace/commit/2ffe1d7) |
 | drawer deletes reach the AGE graph again, even while KG write-through is paused; deleted ids are queued and the nightly dream run removes their vertices in batches (MEMPALACE_KG_DELETETHROUGH, default on) | — | [`9a72630`](https://github.com/techempower-org/mempalace/commit/9a72630) |

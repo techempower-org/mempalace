@@ -24,6 +24,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **an "sk-" key of 20 to 1000 characters holding two of upper case, lower case and digits, such as a LiteLLM virtual key, is redacted on every write, and a bare OpenAI key is redacted to the end of its token** ([`1cbc611`](https://github.com/techempower-org/mempalace/commit/1cbc611))
+  A LiteLLM virtual key is "sk-" and 22 random characters, too short for
+  the OpenAI shape, so one printed into a session transcript would have
+  been stored as is. An "sk-" run of 20 to 1000 characters that stands as
+  its own token and holds two of upper case, lower case and digits is now
+  replaced with a placeholder. A key of letters in one case still passes,
+  and a mixed-case name after "sk-" is replaced. A bare OpenAI key is now
+  replaced to the end of its token, where it stopped at the first "_" or
+  "-". Anthropic and OpenAI keys keep their own kinds.
+
+
 - **the nightly dream reads a symlinked memory folder once, reports a stopped judge as off instead of an error, and applies accepted decisions it can apply without judgement** ([`36b5ce3`](https://github.com/techempower-org/mempalace/commit/36b5ce3))
   A project run from two checkouts gets two harness memory folders, and
   one is often a symlink to the other. The inventory read through both, so

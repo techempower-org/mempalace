@@ -2,7 +2,7 @@ seq: 203
 id: redact-litellm-keys
 date: '2026-11-14'
 bucket: Fixed
-commit: HEAD
+commit: 1cbc611
 area: Privacy
 summary: an "sk-" key of 20 to 1000 characters holding two of upper case, lower case and digits, such as a LiteLLM virtual key, is redacted on every write, and a bare OpenAI key is redacted to the end of its token
 body: |
