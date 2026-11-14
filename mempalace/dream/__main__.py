@@ -72,6 +72,13 @@ def main(argv=None) -> int:
         if lock is None:
             print(f"not starting: another dream run holds {args.out / nightly.LOCK}")
             return 4
+        # A cache: unreadable means empty (the pairs are judged again), never a failed night.
+        try:
+            verdicts = nightly.read_json(args.out / nightly.JUDGED, {})
+        except (OSError, ValueError):
+            verdicts = {}
+        if not isinstance(verdicts, dict):
+            verdicts = {}
         doc, seen = nightly.run(
             args.memory_root,
             _claude_md(args),
@@ -86,13 +93,15 @@ def main(argv=None) -> int:
             seen=nightly.read_json(args.out / nightly.SEEN, {}),
             applied=nightly.read_json(args.out / nightly.APPLIED, []),
             known=nightly.published_proposals(args.out),
+            verdicts=verdicts,
+            checkpoint=lambda: nightly.save_verdicts(args.out, verdicts),
         )
         # Deferred AGE delete-through (#558): remove the queued Drawer vertices in
         # batches, at the night's quiet hour. Skips or reports; never fails the night.
         from ..kg_delete_queue import sweep_from_env
 
         doc["run"]["steps"]["kg_delete_sweep"] = sweep_from_env()
-        path = nightly.publish(doc, args.out, seen)
+        path = nightly.publish(doc, args.out, seen, verdicts=verdicts)
         steps = doc["run"]["steps"]
         print(f"{len(doc['proposals'])} proposals {json.dumps(steps)} -> {path}")
         error = steps.get("contradictions", {}).get("error")

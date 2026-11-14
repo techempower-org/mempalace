@@ -42,6 +42,8 @@ KIND_PRIORITY = ["contradiction", "near-duplicate", "oversized-index", "no-mecha
 SEEN = ".seen.json"
 LOCK = ".nightly.lock"
 APPLIED = "applied.json"
+# The judge's verdicts by pair_key: kept so a night with the judge off still has them.
+JUDGED = "judged.json"
 _DAY_FILE = re.compile(r"^\d{4}-\d{2}-\d{2}\.json$")
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 _LINE = re.compile(r":\d+$")
@@ -216,13 +218,19 @@ def run(
     applied: Optional[List[dict]] = None,
     global_dirs: Sequence[Path] = (),
     known: Optional[Dict[str, dict]] = None,
+    verdicts: Optional[Dict[str, dict]] = None,
+    checkpoint: Optional[Callable[[], None]] = None,
 ):
     """(the night's document, the updated first-seen ledger). ``judge`` None skips the model
-    pass (recorded in ``run``). ``seen`` maps each id to the night it first appeared."""
+    pass (recorded in ``run``). ``seen`` maps each id to the night it first appeared.
+    ``verdicts``, the judge's ledger, is updated in place: new verdicts are added and those of
+    pairs this night no longer has are dropped (left alone when the model pass is skipped).
+    ``checkpoint`` runs after each new verdict (see :func:`save_verdicts`)."""
     steps: Dict[str, dict] = {}
     proposals: List[inventory.Proposal] = inventory.run(memory_root, claude_md, embed)
     steps["inventory"] = {"ok": True, "proposals": len(proposals)}
     if judge is not None:
+        used: set = set()
         found, stats = contradictions.contradictions(
             inventory.read_memories(memory_root),
             contradictions.read_rules(claude_md),
@@ -230,7 +238,13 @@ def run(
             judge,
             guard=guard,
             global_dirs=global_dirs,
+            ledger=verdicts,
+            used=used,
+            on_verdict=checkpoint,
         )
+        if verdicts is not None:
+            for key in [k for k in verdicts if k not in used]:
+                del verdicts[key]
         proposals += found
         steps["contradictions"] = stats
     else:
@@ -360,9 +374,19 @@ def read_json(path: Path, default):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def publish(doc: dict, publish_dir: Path, seen: Optional[Dict[str, str]] = None) -> Path:
+def save_verdicts(publish_dir: Path, verdicts: Dict[str, dict]) -> None:
+    """Write the verdict ledger atomically (0640, in the private publish dir)."""
+    _atomic_write(publish_dir / JUDGED, json.dumps(verdicts, indent=1, sort_keys=True) + "\n")
+
+
+def publish(
+    doc: dict,
+    publish_dir: Path,
+    seen: Optional[Dict[str, str]] = None,
+    verdicts: Optional[Dict[str, dict]] = None,
+) -> Path:
     """Write ``<day>.json`` and ``latest.json`` (0640) atomically into ``publish_dir`` (0700),
-    save the first-seen ledger, and prune day files older than :data:`KEEP_DAYS`."""
+    save the first-seen and verdict ledgers, and prune day files older than :data:`KEEP_DAYS`."""
     name = check_day(doc["day"])
     text = json.dumps(doc, indent=2) + "\n"
     if len(text.encode()) > MAX_BYTES:
@@ -375,6 +399,8 @@ def publish(doc: dict, publish_dir: Path, seen: Optional[Dict[str, str]] = None)
         _atomic_write(publish_dir / SEEN, json.dumps(seen, indent=0, sort_keys=True) + "\n")
     if "applied" in doc:
         _atomic_write(publish_dir / APPLIED, json.dumps(doc["applied"], indent=2) + "\n")
+    if verdicts is not None:
+        save_verdicts(publish_dir, verdicts)
     _atomic_write(day, text)
     _atomic_write(publish_dir / "latest.json", text)
     prune(publish_dir, name)

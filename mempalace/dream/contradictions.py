@@ -9,18 +9,26 @@ proposal, labelled with the model as its authority: unreviewed.
 
 A failed model call stops the pass where it is: what was judged is still reported, with the
 failure, and nothing is retried (a busy shared model is not hammered).
+
+A verdict is kept in a ledger keyed by the exact rule and memory text the judge read
+(:func:`pair_key`), so a pair judged once is not judged again, and a night with the judge off
+still reports what an earlier judge said (2026-11-14: a one-off cloud run judged the 60 pairs
+the local model had left waiting). Either text changing makes a new key, and so a new judgement.
 """
 
 from __future__ import annotations
 
+import datetime as _dt
+import hashlib
 import json
 import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Set
 
 from .inventory import EMBED_BATCH, Embedder, Memory, Proposal, is_rule, rule_blocks
 
@@ -134,6 +142,7 @@ Would following one of these make an agent break the other? Answer with JSON onl
 narrower, stricter or an example of the rule is "consistent"."""
 
 _JSON = re.compile(r"\{.*\}", re.S)
+VERDICTS = ("contradict", "consistent", "unrelated")
 
 
 def parse_verdict(text: str) -> Dict[str, str]:
@@ -142,7 +151,7 @@ def parse_verdict(text: str) -> Dict[str, str]:
         raise ValueError("no JSON in the model's answer")
     data = json.loads(m.group(0))
     verdict = str(data.get("verdict", "")).strip().lower()
-    if verdict not in ("contradict", "consistent", "unrelated"):
+    if verdict not in VERDICTS:
         raise ValueError(f"unknown verdict {verdict!r}")
     return {"verdict": verdict, "why": str(data.get("why", "")).strip()[:400]}
 
@@ -151,7 +160,9 @@ def local_judge(
     url: Optional[str] = None, model: Optional[str] = None, api_key: Optional[str] = None
 ) -> Judge:
     """An OpenAI-compatible chat endpoint; ``DREAM_LLM_URL``, ``DREAM_LLM_MODEL`` and
-    ``DREAM_LLM_API_KEY`` from the environment by default (the key never in argv)."""
+    ``DREAM_LLM_API_KEY`` from the environment by default (the key never in argv). The judge's
+    ``authority`` names the model and where it ran: ``DREAM_LLM_WHERE`` when set (a tunnelled
+    remote looks local by its URL), else "local" for a loopback URL, else the URL's host."""
     base = (url or os.environ.get("DREAM_LLM_URL") or "http://127.0.0.1:8091").rstrip("/")
     name = model or os.environ.get("DREAM_LLM_MODEL") or "qwen36-coder"
     key = api_key or os.environ.get("DREAM_LLM_API_KEY", "")
@@ -181,7 +192,22 @@ def local_judge(
             answer = json.load(resp)["choices"][0]["message"]["content"]
         return parse_verdict(answer)
 
+    where = os.environ.get("DREAM_LLM_WHERE") or (
+        "local" if _is_local(base) else urllib.parse.urlsplit(base).hostname or base
+    )
+    judge.authority = f"{name} ({where}), unreviewed"
     return judge
+
+
+def _is_local(base: str) -> bool:
+    host = urllib.parse.urlsplit(base).hostname or ""
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
+def pair_key(rule_text: str, memory_text: str) -> str:
+    """The ledger key of one judgement: the exact texts the judge reads, nothing else."""
+    digest = hashlib.sha256(f"{rule_text}\0{memory_text}".encode("utf-8")).hexdigest()
+    return digest[:24]
 
 
 def judge_refused(exc: BaseException) -> bool:
@@ -192,41 +218,98 @@ def judge_refused(exc: BaseException) -> bool:
     return isinstance(exc, ConnectionRefusedError)
 
 
+def _usable(entry: object) -> bool:
+    """A ledger entry that can stand in for a judgement: a known verdict and who gave it."""
+    return (
+        isinstance(entry, dict)
+        and entry.get("verdict") in VERDICTS
+        and isinstance(entry.get("by"), str)
+        and bool(entry["by"].strip())
+    )
+
+
 def contradictions(
     memories: Sequence[Memory],
     rules: Sequence[Rule],
     embed: Embedder,
     judge: Judge,
-    authority: str = "qwen36-coder (local), unreviewed",
+    authority: Optional[str] = None,
     guard: Optional[Callable[[], Optional[str]]] = None,
+    ledger: Optional[Dict[str, dict]] = None,
+    used: Optional[Set[str]] = None,
+    on_verdict: Optional[Callable[[], None]] = None,
     **pair_args,
 ):
-    """(proposals, stats). Stops at the first failed judgement and records it in ``stats``.
-    ``guard``, called before each judgement, stops the pass the same way when it returns a
-    reason (a host under memory pressure, say)."""
+    """(proposals, stats). Stops calling the judge at the first failed judgement and records it
+    in ``stats``. ``guard``, called before each model call, stops it the same way when it returns
+    a reason (a host under memory pressure, say).
+
+    ``ledger`` (updated in place) holds earlier verdicts by :func:`pair_key`: a pair found there
+    is not sent to the judge, and its verdict carries the authority that gave it. With a ledger,
+    ``stats["cached"]`` counts those, and pairs past a failure or an off judge still take their
+    ledger verdicts. ``used`` collects every key this pass met, so the caller can drop the rest.
+    An entry that is not a dict with a known verdict and a ``by`` is a miss: it is judged again,
+    never credited to the current judge. ``on_verdict`` runs after each new verdict enters the
+    ledger, so the caller can save it then and a run killed part way keeps what it judged."""
+    authority = authority or getattr(judge, "authority", None) or "qwen36-coder (local), unreviewed"
     pairs = candidate_pairs(memories, rules, embed, **pair_args)
     stats: Dict[str, object] = {"pairs": len(pairs), "judged": 0, "verdicts": {}, "error": None}
+    if ledger is not None:
+        stats["cached"] = 0
+    calling = True  # False once the judge is off or has failed: only the ledger answers then
+    waiting = 0
     out = []
     for sim, mem, rule in pairs:
-        reason = guard() if guard else None
-        if reason:
-            stats["error"] = f"stopped: {reason}"
-            break
-        try:
-            v = judge(rule.text[:RULE_CHARS], f"{mem.description}\n{mem.body}"[:MEMORY_CHARS])
-        except Exception as exc:  # one hiccup ends the pass; no retry
-            if stats["judged"] == 0 and judge_refused(exc):
-                # Off before the first judgement: say so, with what waits for it, and no error.
-                stats.update(
-                    skipped=True,
-                    judge="off",
-                    waiting=len(pairs),
-                    refused=f"{type(exc).__name__}: {exc}"[:300],
-                )
-                break
-            stats["error"] = f"{type(exc).__name__}: {exc}"[:300]
-            break
-        stats["judged"] = int(stats["judged"]) + 1
+        rule_text = rule.text[:RULE_CHARS]
+        memory_text = f"{mem.description}\n{mem.body}"[:MEMORY_CHARS]
+        key = pair_key(rule_text, memory_text)
+        if used is not None:
+            used.add(key)
+        by = authority
+        hit = ledger.get(key) if ledger is not None else None
+        if _usable(hit):
+            v = {"verdict": hit["verdict"], "why": str(hit.get("why", ""))}
+            by = hit["by"]
+            stats["cached"] = int(stats["cached"]) + 1
+        elif not calling:
+            waiting += 1
+            continue
+        else:
+            reason = guard() if guard else None
+            if reason:
+                stats["error"] = f"stopped: {reason}"
+                calling = False
+                waiting += 1
+                if ledger is None:
+                    break
+                continue
+            try:
+                v = judge(rule_text, memory_text)
+            except Exception as exc:  # one hiccup ends the model calls; no retry
+                calling = False
+                waiting += 1
+                if stats["judged"] == 0 and judge_refused(exc):
+                    # Off before the first judgement: say so, with what waits for it, and no error.
+                    stats.update(
+                        skipped=True,
+                        judge="off",
+                        refused=f"{type(exc).__name__}: {exc}"[:300],
+                    )
+                else:
+                    stats["error"] = f"{type(exc).__name__}: {exc}"[:300]
+                if ledger is None:
+                    break
+                continue
+            stats["judged"] = int(stats["judged"]) + 1
+            if ledger is not None:
+                ledger[key] = {
+                    "verdict": v["verdict"],
+                    "why": v["why"],
+                    "by": authority,
+                    "at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                }
+                if on_verdict is not None:
+                    on_verdict()
         counts = stats["verdicts"]
         counts[v["verdict"]] = counts.get(v["verdict"], 0) + 1
         if v["verdict"] != "contradict":
@@ -239,7 +322,7 @@ def contradictions(
                     "Reconcile: change one, or narrow it."
                 ),
                 sources=[str(mem.path), rule.source],
-                authority=authority,
+                authority=by,
                 detail={
                     "similarity": round(sim, 4),
                     "why": v["why"],
@@ -248,4 +331,8 @@ def contradictions(
                 },
             )
         )
+    if stats.get("judge") == "off":
+        stats["waiting"] = waiting if ledger is not None else len(pairs)
+    elif ledger is not None and waiting:
+        stats["waiting"] = waiting
     return out, stats

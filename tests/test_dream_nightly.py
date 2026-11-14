@@ -525,3 +525,163 @@ def test_two_entries_of_one_aliased_folder_are_not_one_file(tmp_path):
         {prop["id"]: {"decision": "accept"}}, [], {prop["id"]: prop}
     )
     assert ledger == [] and waiting[0]["id"] == prop["id"]
+
+
+def test_verdicts_from_one_night_carry_into_a_night_with_the_judge_off(tmp_path, monkeypatch):
+    import urllib.error
+
+    proj = tmp_path / "repo"
+    proj.mkdir()
+    md = proj / "CLAUDE.md"
+    md.write_text(RULES)
+    root = tmp_path / "projects"
+    folder = root / nightly.contradictions._project_key(proj.resolve()) / "memory"
+    folder.mkdir(parents=True)
+    (folder / "a.md").write_text(
+        "---\nname: a\ndescription: d\nmetadata:\n  type: feedback\n---\nx\n"
+    )
+    out = tmp_path / "o"
+    monkeypatch.setattr(nightly.inventory, "daemon_embedder", lambda: _embed)
+    monkeypatch.setattr("mempalace.kg_delete_queue.sweep_from_env", lambda: {"skipped": "test"})
+
+    def big():
+        def j(rule, memory):
+            return {"verdict": "contradict", "why": "says the opposite"}
+
+        j.authority = "big (AMD cloud), unreviewed"
+        return j
+
+    def off():
+        def j(rule, memory):
+            raise urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+
+        return j
+
+    args = [
+        "nightly",
+        "--memory-root",
+        str(root),
+        "--claude-md",
+        str(md),
+        "--out",
+        str(out),
+        "--min-available-mb",
+        "0",
+    ]
+    monkeypatch.setattr(nightly.contradictions, "local_judge", big)
+    assert main(args + ["--day", "2026-11-14"]) == 0
+    ledger = json.loads((out / nightly.JUDGED).read_text())
+    first = json.loads((out / "latest.json").read_text())
+    assert ledger and {v["by"] for v in ledger.values()} == {"big (AMD cloud), unreviewed"}
+    (out / nightly.JUDGED).write_text(json.dumps({**ledger, "stale": {"verdict": "unrelated"}}))
+    monkeypatch.setattr(nightly.contradictions, "local_judge", off)
+    assert main(args + ["--day", "2026-11-15"]) == 0
+    second = json.loads((out / "latest.json").read_text())
+    con = second["run"]["steps"]["contradictions"]
+    # every pair answered from the ledger: the judge was never asked, so no state is claimed
+    assert con["cached"] == con["pairs"] > 0 and con["judged"] == 0 and con["error"] is None
+    assert "waiting" not in con and "judge" not in con
+
+    def contradiction_ids(doc):
+        return sorted(p["id"] for p in doc["proposals"] if p["kind"] == "contradiction")
+
+    assert contradiction_ids(second) == contradiction_ids(first) != []
+    assert "stale" not in json.loads((out / nightly.JUDGED).read_text())
+
+
+def test_an_unreadable_verdict_ledger_is_judged_afresh_not_a_failed_night(tmp_path, monkeypatch):
+    root, md = _tree(tmp_path)
+    out = tmp_path / "o"
+    out.mkdir(mode=0o700)
+    (out / nightly.JUDGED).write_text("{not json")
+    monkeypatch.setattr(nightly.inventory, "daemon_embedder", lambda: _embed)
+    monkeypatch.setattr("mempalace.kg_delete_queue.sweep_from_env", lambda: {"skipped": "test"})
+    monkeypatch.setattr(
+        nightly.contradictions,
+        "local_judge",
+        lambda: lambda r, m: {"verdict": "unrelated", "why": ""},
+    )
+    rc = main(
+        [
+            "nightly",
+            "--memory-root",
+            str(root),
+            "--claude-md",
+            str(md),
+            "--out",
+            str(out),
+            "--day",
+            "2026-11-14",
+            "--min-available-mb",
+            "0",
+        ]
+    )
+    assert rc == 0 and isinstance(json.loads((out / nightly.JUDGED).read_text()), dict)
+
+
+def _project_tree(tmp_path, names=("a",)):
+    proj = tmp_path / "repo"
+    proj.mkdir()
+    md = proj / "CLAUDE.md"
+    md.write_text(RULES)
+    root = tmp_path / "projects"
+    folder = root / nightly.contradictions._project_key(proj.resolve()) / "memory"
+    folder.mkdir(parents=True)
+    for n in names:
+        (folder / f"{n}.md").write_text(
+            f"---\nname: {n}\ndescription: d{n}\nmetadata:\n  type: feedback\n---\n{n}\n"
+        )
+    return root, md
+
+
+def _nightly_args(root, md, out, day):
+    return [
+        "nightly",
+        "--memory-root",
+        str(root),
+        "--claude-md",
+        str(md),
+        "--out",
+        str(out),
+        "--day",
+        day,
+        "--min-available-mb",
+        "0",
+    ]
+
+
+def test_a_run_killed_part_way_keeps_the_verdicts_it_already_had(tmp_path, monkeypatch):
+    root, md = _project_tree(tmp_path, names=("a", "b"))
+    out = tmp_path / "o"
+    monkeypatch.setattr(nightly.inventory, "daemon_embedder", lambda: _embed)
+    monkeypatch.setattr("mempalace.kg_delete_queue.sweep_from_env", lambda: {"skipped": "test"})
+    calls = []
+
+    def dies():
+        def j(rule, memory):
+            calls.append(memory)
+            if len(calls) > 1:
+                raise KeyboardInterrupt  # the process is killed mid-pass
+            return {"verdict": "unrelated", "why": "w"}
+
+        j.authority = "big (cloud), unreviewed"
+        return j
+
+    monkeypatch.setattr(nightly.contradictions, "local_judge", dies)
+    with pytest.raises(KeyboardInterrupt):
+        main(_nightly_args(root, md, out, "2026-11-14"))
+    assert not (out / "latest.json").exists()
+    kept = json.loads((out / nightly.JUDGED).read_text())
+    assert len(kept) == 1 and next(iter(kept.values()))["by"] == "big (cloud), unreviewed"
+
+
+def test_a_night_without_the_model_leaves_the_verdict_ledger_alone(tmp_path, monkeypatch):
+    root, md = _project_tree(tmp_path)
+    out = tmp_path / "o"
+    out.mkdir(mode=0o700)
+    ledger = {"k": {"verdict": "contradict", "why": "w", "by": "big (cloud), unreviewed"}}
+    (out / nightly.JUDGED).write_text(json.dumps(ledger))
+    monkeypatch.setattr(nightly.inventory, "daemon_embedder", lambda: _embed)
+    monkeypatch.setattr("mempalace.kg_delete_queue.sweep_from_env", lambda: {"skipped": "test"})
+    assert main(_nightly_args(root, md, out, "2026-11-14") + ["--no-model"]) == 0
+    assert json.loads((out / nightly.JUDGED).read_text()) == ledger
