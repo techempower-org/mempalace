@@ -71,6 +71,7 @@ export default withMermaid(
         {
           text: 'Fork',
           items: [
+            { text: 'Where the fork stands', link: '/fork/today' },
             { text: 'Architecture', link: 'https://github.com/techempower-org/mempalace/blob/main/docs/ARCHITECTURE.md' },
             { text: 'Ecosystem', link: 'https://github.com/techempower-org/mempalace/blob/main/docs/ECOSYSTEM.md' },
             { text: 'Bibliography', link: 'https://github.com/techempower-org/mempalace/blob/main/docs/BIBLIOGRAPHY.md' },
