@@ -97,3 +97,57 @@ Claude Code has two complementary memory layers, used in tandem:
 **Auto Dream ratifies the verbatim-vs-derivative axis.** Anthropic shipped Auto Dream in two surfaces in late April: a [research-preview consolidator inside Claude Code](https://claudefa.st/blog/guide/mechanics/auto-dream) and a [Dreams API in Managed Agents](https://platform.claude.com/docs/en/managed-agents/dreams). The Dreams API design ratifies this fork's axis: **the input memory store is never modified; the dream produces a separate output store you can review, attach, or discard.** Non-destructive consolidation of verbatim inputs, with a review gate.
 
 **Why MemPalace deliberately doesn't consolidate the verbatim layer.** Both Dreams surfaces consume the *same* JSONL transcripts that MemPalace mines. The pairing is complementary: Auto Dream curates a small high-signal index; MemPalace stores the corpus verbatim for post-hoc retrieval. Consolidating MemPalace's verbatim layer would forfeit exactly the property that makes it useful — the ability to audit, re-derive, and recover the original utterance. The verbatim layer doesn't need consolidation; it needs durability.
+
+## Safety layers (2026-11-15)
+
+Verbatim storage means anything a session printed is a candidate for the palace, so two layers sit between a
+transcript and a search result. Neither summarizes or rewrites the verbatim text beyond replacing a secret.
+
+### Redaction on every write
+
+Every backend collection passes the documents and string metadata of each `add`, `upsert` and `update` through
+`mempalace.redact` before the backend sees them (`BaseCollection.__init_subclass__`, #596). A secret becomes
+`[redacted <kind> sha256:<first 8 hex>]`; existing placeholders are never matched again.
+
+- **Shapes, never values.** Vendor shapes (provider keys, JWTs, vault blobs, one-time codes and PINs: #604, #615),
+  credential assignments (`NAME_SECRET=…`, `"password": "…"`, a URL's password), and, since 2026-11-15, prefix-free
+  shapes: long mixed-class tokens, long hex runs (except a 40-hex git sha), and quoted runs from the secret
+  alphabet (#619, #621).
+- **Vault-item needles.** A bare password has no shape. The palace config can list vault item ids and labels (never
+  values) under `secret_vault_items`; each value is fetched in process when the patterns load and replaced on word
+  boundaries with `[redacted vault <label>]`.
+- **Fail closed.** A config that cannot be read, a pattern that does not compile, or a needle that cannot be
+  fetched raises `SecretPatternsUnavailable` and the write is refused: a stale palace is visible and recoverable,
+  a re-mined password is not. Pattern matching still cannot recognise every secret; the needles exist for known
+  values without a shape. Because a locked vault stops all mining, a check in
+  [palace-daemon](https://github.com/techempower-org/palace-daemon) (`palace-redact-needles`) loads the patterns as
+  a write does, reads the daemon's journal for refused writes, and reports them on the operator's status page; it
+  names needle labels only, never values.
+
+### Judged drawer classes: a flag, never a delete
+
+A batch of open-weight judges classified drawers as keep, chatter, stale or secret (the batch judge backend in
+[BACKENDS.md](BACKENDS.md)). The design ([designs/judged-drawer-classes.md](designs/judged-drawer-classes.md), #622)
+applies a class where the two models' first passes agree; where they disagree, each gives a tie-break verdict, and a
+class applies only when at least three of the four verdicts agree and none of them is secret.
+For chatter and stale, an acted-on drawer gets three metadata keys (`judged_class`, `judged_at`, `judges`); no
+text, embedding or id changes, and rollback removes the keys. A `secret` drawer is different: it is first
+re-redacted in place under the rules above (its text changes and its embedding is recomputed), then flagged.
+Removing the keys does not undo that redaction, by design; the pre-redaction text is not kept, and the run backs up
+the metadata of every row before it writes.
+
+Default search will exclude chatter and stale, with an include flag in the CLI and the daemon API so that a flagged
+drawer is never unreachable. That reader is a separate change that ships before any flag is written; as of
+2026-11-15 the design is approved and no drawer carries `judged_class`.
+
+### Proposals, not consolidation
+
+The nightly dream writer (#605, #606, #608, #614, #616) publishes an inventory and possible contradictions between
+feedback memories and the rules that govern them, for a person to review. It writes no drawer. The judge's verdicts
+are kept in a ledger (`judged.json`), so a night with the judge off still reports them.
+
+### Machine-readable surfaces
+
+Many CLI verbs have machine-readable output (`--json`, or `--format json` on search and the read verbs); coverage is
+partial. The MCP server exposes `mempalace_search`. The gap an interfaces registry tracks is a machine-readable
+`mempalace status --json` (wings, rooms, drawer counts, last mine): #618, open.
