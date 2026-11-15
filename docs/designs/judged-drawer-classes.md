@@ -1,6 +1,6 @@
 # Judged drawer classes: applying a three-judge triage without deleting anything
 
-Status: **proposal, not applied.** Nothing below runs until the lead approves this doc. Nothing in it deletes a drawer.
+Status: **approved as a design, with the conditions below; not applied.** Nothing in it deletes a drawer.
 
 ## What exists
 
@@ -18,6 +18,14 @@ The judges:
 - **Judge 1:** Qwen2.5-72B-Instruct.
 - **Judge 2:** Llama-3.1-Tulu-3-70B. About half of its inputs also passed outbound scrub v3 (#619).
 - **Judge 3, tie-break:** Tulu-3-70B with a third prompt. It ran only on the 11,918 drawers where the first two disagreed, saw both earlier verdicts and their reasons, and gave a final class.
+
+## Conditions of approval (lead, 2026-11-15)
+
+1. **Four verdicts, strict majority.** On the disagreement set every drawer has four verdicts: Qwen first pass, Tulu first pass, the Tulu tie-break, and the Qwen tie-break. The run acts only on a strict majority there, at least 3 of 4, and only when no judge said `secret`. Ties (2–2) and three-way splits stay untouched and are counted in the report. Outside the disagreement set the first two judges agreed, and that agreement is the majority.
+2. **Reachability first.** The search-exclusion code PR ships before any flag is written. It must include a red test and the include flag: `mempalace search --all-classes` and the daemon API's equivalent. A flagged drawer must never become unreachable.
+3. **Backup first.** Before the run writes, it backs up the metadata of every row it will flag, in the same form as the 2026-11-15 redaction backup (row-level COPY, 0600, sha in a manifest).
+
+The tables below predate condition 1. The run recomputes them under it and reports the final counts.
 
 ## The rule: act only where two of three agree
 
