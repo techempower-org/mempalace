@@ -1299,7 +1299,7 @@ def test_619_vault_fetch_keeps_inner_and_edge_spaces(monkeypatch):
     import mempalace.redact as R
 
     class Done:
-        returncode, stdout = 0, "  two words  \n"
+        returncode, stdout = 0, b"  two words  \n"
 
     monkeypatch.setattr(_sp, "run", lambda *a, **k: Done())
     assert R._vault_fetch("i") == "  two words  "
@@ -1354,3 +1354,44 @@ def test_619_vault_needle_in_raw_jsonl_and_json_escaped(_config, monkeypatch):
     monkeypatch.setattr(R, "_vault_fetch", lambda _i: VAULT_VALUE)
     R._cache["key"] = None
     assert VAULT_VALUE not in redact(raw_jsonl)  # right after a literal \n escape
+
+
+
+def test_619_vault_value_with_too_short_a_core_fails_closed(_config, monkeypatch):
+    import json as _json
+
+    import mempalace.redact as R
+
+    (_config / "config.json").write_text(_json.dumps({"secret_vault_items": [{"id": "i", "label": "pad"}]}))
+    monkeypatch.setattr(R, "_vault_fetch", lambda _i: "   abc   ")
+    R._cache["key"] = None
+    with pytest.raises(SecretPatternsUnavailable):
+        redact("abc")
+
+
+def test_619_vault_fetch_keeps_carriage_returns_through_a_real_subprocess(tmp_path, monkeypatch):
+    import mempalace.redact as R
+
+    fake = tmp_path / "bw"
+    fake.write_text("#!/bin/sh\nprintf 'alpha\\rbeta\\n'\n")
+    fake.chmod(0o700)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
+    assert R._vault_fetch("i") == "alpha\rbeta"
+
+
+def test_619_vault_needle_matches_utf8_kept_json(_config, monkeypatch):
+    import json as _json
+
+    import mempalace.redact as R
+
+    (_config / "config.json").write_text(_json.dumps({"secret_vault_items": [{"id": "i", "label": "u8"}]}))
+    value = "\u00e9" + '"passw'
+    monkeypatch.setattr(R, "_vault_fetch", lambda _i: value)
+    R._cache["key"] = None
+    for text in (
+        _json.dumps({"text": value}, ensure_ascii=False),
+        _json.dumps({"text": value}),
+        _json.dumps({"line": _json.dumps({"text": value}, ensure_ascii=False)}, ensure_ascii=False),
+    ):
+        out = redact(text)
+        assert "[redacted vault u8]" in out and "passw" not in out, text

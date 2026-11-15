@@ -279,11 +279,14 @@ def _vault_fetch(item_id: str) -> str:
     try:
         r = subprocess.run(
             [bw, "--nointeraction", "get", "password", item_id],
-            capture_output=True, text=True, timeout=30, env=env,
+            capture_output=True, timeout=30, env=env,  # bytes: text mode would turn "\r" into "\n"
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise SecretPatternsUnavailable(f"vault unreachable ({type(exc).__name__})") from exc
-    value = r.stdout or ""
+    try:
+        value = (r.stdout or b"").decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SecretPatternsUnavailable("vault answered undecodable bytes") from exc
     if value.endswith("\n"):  # the CLI's line terminator, if any; the value itself is kept as is
         value = value[:-1]
     if r.returncode != 0 or not value.strip():
@@ -293,21 +296,29 @@ def _vault_fetch(item_id: str) -> str:
 
 
 def _needle_pattern(value: str) -> str:
-    """Every spelling of ``value`` a drawer can hold: as is, its whitespace-trimmed core, and the
-    JSON-escaped forms (once, as in a JSON string; twice, as in a raw JSONL line holding JSON).
+    """The spellings of ``value`` a drawer commonly holds: as is, its whitespace-trimmed core, and
+    the JSON-escaped forms (once, as in a JSON string; twice, as in a raw JSONL line holding JSON),
+    each with ASCII escapes and with UTF-8 kept. Other equivalent JSON escapes (a letter written as
+    ``\\u0061``) are not generated; no JSON writer in the mining path emits them.
     Word boundaries apply only at an alphanumeric edge, and a raw JSONL escape (``\\n`` etc.) right
     before the value counts as a boundary, as in the shape rules."""
     import json as _json
 
     spellings = {value, value.strip()}
     for v in list(spellings):
-        once = _json.dumps(v)[1:-1]
-        spellings |= {once, _json.dumps(once)[1:-1]}
+        for ascii_once in (True, False):
+            once = _json.dumps(v, ensure_ascii=ascii_once)[1:-1]
+            spellings.add(once)
+            for ascii_twice in (True, False):
+                spellings.add(_json.dumps(once, ensure_ascii=ascii_twice)[1:-1])
     alts = []
     for v in sorted((v for v in spellings if len(v.strip()) >= 6), key=len, reverse=True):
         head = r"(?:(?<![A-Za-z0-9])|(?<=\\[nrt]))" if v[0].isalnum() else ""
         tail = r"(?![A-Za-z0-9])" if v[-1].isalnum() else ""
         alts.append(f"{head}{re.escape(v)}{tail}")
+    if not alts:
+        # an empty alternation would match empty positions and redact nothing: fail closed
+        raise SecretPatternsUnavailable("vault value has no spelling long enough to match safely")
     return "(?:" + "|".join(alts) + ")"
 
 
@@ -328,7 +339,7 @@ def _vault_passes(items: Any) -> List[Pass]:
             value = _vault_fetch(it["id"])
         except SecretPatternsUnavailable as exc:
             raise SecretPatternsUnavailable(f"vault item {it['label']}: {exc}") from exc
-        if len(value) < 6:
+        if len(value.strip()) < 6:
             raise SecretPatternsUnavailable(f"vault item {it['label']}: value too short to match safely")
         out.append(_pass([(f"vault {it['label']}", _needle_pattern(value))]))
     return out
