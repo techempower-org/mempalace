@@ -219,7 +219,15 @@ def _shape_pass() -> Pass:
     return _SHAPE_PASS
 
 
+# Every #619 shape needs a run of 17+ characters of the secret alphabet (quoted 17+, token 20+, hex 32+):
+# one single-class scan decides whether the combined pass can match at all. Text with no such run (most
+# prose, and adversarial runs of short keys) skips it (test_adversarial_runs_of_keys_scan_in_linear_time).
+_SHAPE_HINT = re.compile(r"[A-Za-z0-9_+/=-]{17}")
+
+
 def _redact_shapes(text: str, skip_hex: bool = False) -> str:
+    if not _SHAPE_HINT.search(text):
+        return text
     combined, kinds = _shape_pass()
 
     def replace(m: re.Match) -> str:
