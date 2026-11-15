@@ -1413,3 +1413,15 @@ def test_619_metadata_hash_and_id_fields_keep_their_value_but_text_fields_do_not
     assert out["content_hash"] == h and out["source_dir_ino"] == h and out["drawer_id"] == SHAPE_TOKEN
     assert SHAPE_TOKEN not in out["aaak_source"] and h not in out["aaak_source"]
     assert SHAPE_TOKEN not in out["entities"][0]  # an extracted entity is not an id field
+
+
+
+def test_619_the_id_field_exemption_is_narrow():
+    out = redact_metadatas({
+        "hashtag_notes": SHAPE_TOKEN,                 # "hash" inside a word, not a suffix
+        "content_hash": {"nested": SHAPE_TOKEN},      # nested under an id-named key
+        "drawer_id": f"free text {SHAPE_TOKEN}",      # whitespace: free text, not an id
+        "row_ids": [SHAPE_TOKEN],                     # a list under an id-named key
+    })
+    for k in out:
+        assert SHAPE_TOKEN not in str(out[k]), k

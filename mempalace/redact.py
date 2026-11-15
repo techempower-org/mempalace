@@ -924,7 +924,7 @@ def redact_documents(documents):
 # A metadata field named for a hash or an id holds one by design (a content hash for dedup, a drawer
 # id): the #619 hex/token shapes would replace it and break lookups (test_convo_miner dedup). The
 # vendor shapes, the assignment rule and vault needles still apply to these fields.
-_ID_FIELD = re.compile(r"(?i)(?:hash|sha|digest|(?:^|_)ids?$|_ino$|recipe|checksum|etag|fingerprint)")
+_ID_FIELD = re.compile(r"(?i)(?:^|_)(?:hash|sha\d*|digest|ids?|ino|checksum|etag|fingerprint|recipe)$")
 
 
 def _redact_value(value, shapes: bool = True):
@@ -933,7 +933,14 @@ def _redact_value(value, shapes: bool = True):
         clean = redact(value, shapes=shapes)
         return value if clean == value else clean
     if isinstance(value, dict):
-        out = {k: _redact_value(v, shapes and not (isinstance(k, str) and _ID_FIELD.search(k))) for k, v in value.items()}
+        # The exemption covers only a direct, whitespace-free string under a key whose whole
+        # "_"-suffix names a hash or an id; nested values and free text get every shape.
+        out = {
+            k: _redact_value(v, shapes and not (
+                isinstance(k, str) and _ID_FIELD.search(k) and isinstance(v, str) and not any(c.isspace() for c in v)
+            ))
+            for k, v in value.items()
+        }
         return value if all(out[k] is value[k] for k in value) else out
     if isinstance(value, (list, tuple)):
         out = [_redact_value(v, shapes) for v in value]
