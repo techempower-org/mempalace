@@ -1256,3 +1256,101 @@ def test_619_vault_items_config_must_be_well_formed(_config, body):
     R._cache["key"] = None
     with pytest.raises(SecretPatternsUnavailable):
         redact("anything")
+
+
+
+def test_619_long_runs_are_redacted_whole_and_fast():
+    import time as _time
+
+    rnd = _random.Random(5000)
+    alpha = _string.ascii_letters + _string.digits
+    long_tok = "".join(rnd.choice(alpha) for _ in range(5000))
+    long_hex = "".join(rnd.choice("0123456789abcdef") for _ in range(3000))
+    out = redact(f"a {long_tok} b {long_hex} c")
+    assert long_tok[:50] not in out and long_tok[-50:] not in out
+    assert long_hex[:50] not in out
+    blob = ("word " * 40000) + "x" * 100000  # 300 KB of prose and one long single-class run
+    t0 = _time.monotonic()
+    redact(blob)
+    assert _time.monotonic() - t0 < 5
+
+
+def test_619_a_git_sha_in_any_case_is_kept():
+    rnd = _random.Random(40)
+    sha = "".join(rnd.choice("0123456789abcdefABCDEF") for _ in range(40))
+    assert redact(f"commit {sha} and '{sha}'") == f"commit {sha} and '{sha}'"
+
+
+def test_619_vault_value_whitespace_is_kept_exactly(_config, monkeypatch):
+    import json as _json
+
+    import mempalace.redact as R
+
+    (_config / "config.json").write_text(_json.dumps({"secret_vault_items": [{"id": "i", "label": "sp"}]}))
+    monkeypatch.setattr(R, "_vault_fetch", lambda _i: " " + VAULT_VALUE + " ")
+    R._cache["key"] = None
+    out = redact(f"pw: {VAULT_VALUE} done")  # the stored value has spaces round it
+    assert "[redacted vault sp]" in out and VAULT_VALUE not in out
+
+
+def test_619_vault_fetch_keeps_inner_and_edge_spaces(monkeypatch):
+    import subprocess as _sp
+
+    import mempalace.redact as R
+
+    class Done:
+        returncode, stdout = 0, "  two words  \n"
+
+    monkeypatch.setattr(_sp, "run", lambda *a, **k: Done())
+    assert R._vault_fetch("i") == "  two words  "
+
+
+def test_619_vault_values_refresh_after_the_ttl_and_fail_closed(_config, monkeypatch):
+    import json as _json
+
+    import mempalace.redact as R
+
+    (_config / "config.json").write_text(_json.dumps({"secret_vault_items": [{"id": "i", "label": "rot"}]}))
+    state = {"value": VAULT_VALUE, "now": 1000.0}
+    monkeypatch.setattr(R, "_vault_fetch", lambda _i: state["value"])
+    monkeypatch.setattr(R.time, "monotonic", lambda: state["now"])
+    R._cache["key"] = None
+    assert "[redacted vault rot]" in redact(f"a {VAULT_VALUE} b")
+    rotated = "rotat" + "edpass"
+    state["value"] = rotated
+    state["now"] += R._VAULT_TTL + 1  # no config change: only the TTL
+    assert "[redacted vault rot]" in redact(f"a {rotated} b")
+
+    def locked(_i):
+        raise SecretPatternsUnavailable("vault answered rc 1, empty")
+
+    monkeypatch.setattr(R, "_vault_fetch", locked)
+    state["now"] += R._VAULT_TTL + 1
+    with pytest.raises(SecretPatternsUnavailable):
+        redact("anything")
+    with pytest.raises(SecretPatternsUnavailable):  # nothing stale stays cached after a failed refresh
+        redact("anything")
+
+
+
+def test_619_vault_needle_in_raw_jsonl_and_json_escaped(_config, monkeypatch):
+    import json as _json
+
+    import mempalace.redact as R
+
+    (_config / "config.json").write_text(_json.dumps({"secret_vault_items": [{"id": "i", "label": "js"}]}))
+    tricky = 'hunt"er\\pass'  # a quote and a backslash: JSON escapes them
+    monkeypatch.setattr(R, "_vault_fetch", lambda _i: tricky)
+    R._cache["key"] = None
+    raw_jsonl = '{"text": "line one\\n' + VAULT_VALUE + '"}'
+    for text in (
+        "plain " + tricky + " end",
+        _json.dumps({"text": "pw " + tricky}),  # JSON-escaped once
+        _json.dumps({"line": _json.dumps({"text": "pw " + tricky})}),  # twice
+    ):
+        out = redact(text)
+        assert "[redacted vault js]" in out, text
+        assert "hunt" not in out
+    monkeypatch.setattr(R, "_vault_fetch", lambda _i: VAULT_VALUE)
+    R._cache["key"] = None
+    assert VAULT_VALUE not in redact(raw_jsonl)  # right after a literal \n escape

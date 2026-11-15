@@ -70,6 +70,7 @@ import hashlib
 import os
 import re
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 # Kind -> pattern. Each matches a credential's shape only.
@@ -126,25 +127,26 @@ SHAPE_PATTERNS: Dict[str, str] = {
     # whole run: not started right after a backslash (so in raw JSONL "\n<token>" the "n" of the
     # escape is never taken; the second branch starts the match after the escape instead).
     "token": r"(?:(?<![A-Za-z0-9_\\-])|(?<=\\[nrt]))"
-    r"(?=[A-Za-z0-9_-]{0,1000}[A-Z])(?=[A-Za-z0-9_-]{0,1000}[a-z])(?=[A-Za-z0-9_-]{0,1000}[0-9])"
-    r"[A-Za-z0-9_-]{20,1000}(?![A-Za-z0-9_-])",
+    r"(?![0-9a-fA-F]{40}(?![A-Za-z0-9_-]))"  # a git sha in any case is never a token
+    r"(?=[A-Za-z0-9_-]*[A-Z])(?=[A-Za-z0-9_-]*[a-z])(?=[A-Za-z0-9_-]*[0-9])"
+    r"[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])",
     # A hex run of 32+ (64-hex master keys, 32-hex API keys), EXCEPT exactly 40: a git commit sha,
     # one of the palace's most-searched strings. Cost, accepted by the lead 2026-11-15: a 40-hex
     # secret (a legacy GitHub OAuth token) passes, and sha256 digests in logs are redacted.
     "hex": r"(?:(?<![A-Za-z0-9_\\-])|(?<=\\[nrt]))(?![0-9a-fA-F]{40}(?![A-Za-z0-9_-]))"
-    r"[0-9a-fA-F]{32,1000}(?![A-Za-z0-9_-])",
+    r"[0-9a-fA-F]{32,}(?![A-Za-z0-9_-])",
     # A quoted string of 17+ with no spaces, ONLY from the secret alphabet [A-Za-z0-9+/=_-], holding
     # upper+lower+digit, or two of them plus "+" or "=" (base64), and not starting "/". So quoted
     # paths, URLs, dotted names, timestamps ("2026-11-15T13:21:02Z") and snake_case names stay:
     # they hold a character outside the alphabet or a single class. Cost: a quoted secret that
     # holds "." or ":" passes here (the assignment rule may still take it).
-    "quoted": r"(?<=[\"'`])(?!/)"
-    r"(?:(?=[A-Za-z0-9+/=_-]{0,1000}[A-Z])(?=[A-Za-z0-9+/=_-]{0,1000}[a-z])(?=[A-Za-z0-9+/=_-]{0,1000}[0-9])"
-    r"|(?=[A-Za-z0-9+/=_-]{0,1000}[+=])"
-    r"(?:(?=[A-Za-z0-9+/=_-]{0,1000}[A-Z])(?=[A-Za-z0-9+/=_-]{0,1000}[a-z])"
-    r"|(?=[A-Za-z0-9+/=_-]{0,1000}[A-Z])(?=[A-Za-z0-9+/=_-]{0,1000}[0-9])"
-    r"|(?=[A-Za-z0-9+/=_-]{0,1000}[a-z])(?=[A-Za-z0-9+/=_-]{0,1000}[0-9])))"
-    r"[A-Za-z0-9+/=_-]{17,1000}(?=[\"'`])",
+    "quoted": r"(?<=[\"'`])(?!/)(?![0-9a-fA-F]{40}[\"'`])"
+    r"(?:(?=[A-Za-z0-9+/=_-]*[A-Z])(?=[A-Za-z0-9+/=_-]*[a-z])(?=[A-Za-z0-9+/=_-]*[0-9])"
+    r"|(?=[A-Za-z0-9+/=_-]*[+=])"
+    r"(?:(?=[A-Za-z0-9+/=_-]*[A-Z])(?=[A-Za-z0-9+/=_-]*[a-z])"
+    r"|(?=[A-Za-z0-9+/=_-]*[A-Z])(?=[A-Za-z0-9+/=_-]*[0-9])"
+    r"|(?=[A-Za-z0-9+/=_-]*[a-z])(?=[A-Za-z0-9+/=_-]*[0-9])))"
+    r"[A-Za-z0-9+/=_-]{17,}(?=[\"'`])",
 }
 _SHAPE_MIN_DISTINCT = 8
 
@@ -261,6 +263,8 @@ def _load() -> List[Tuple[str, re.Pattern]]:
 
 
 _VAULT_LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
+_VAULT_MAX_ITEMS = 5
+_VAULT_TTL = 600.0  # a rotated vault value is picked up within 10 minutes
 
 
 def _vault_fetch(item_id: str) -> str:
@@ -275,15 +279,36 @@ def _vault_fetch(item_id: str) -> str:
     try:
         r = subprocess.run(
             [bw, "--nointeraction", "get", "password", item_id],
-            capture_output=True, text=True, timeout=60, env=env,
+            capture_output=True, text=True, timeout=30, env=env,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise SecretPatternsUnavailable(f"vault unreachable ({type(exc).__name__})") from exc
-    value = (r.stdout or "").strip()
-    if r.returncode != 0 or not value:
+    value = r.stdout or ""
+    if value.endswith("\n"):  # the CLI's line terminator, if any; the value itself is kept as is
+        value = value[:-1]
+    if r.returncode != 0 or not value.strip():
         # rc 0 with empty stdout is a failure too (a locked vault can answer that way)
         raise SecretPatternsUnavailable(f"vault answered rc {r.returncode}, {'empty' if not value else 'value'}")
     return value
+
+
+def _needle_pattern(value: str) -> str:
+    """Every spelling of ``value`` a drawer can hold: as is, its whitespace-trimmed core, and the
+    JSON-escaped forms (once, as in a JSON string; twice, as in a raw JSONL line holding JSON).
+    Word boundaries apply only at an alphanumeric edge, and a raw JSONL escape (``\\n`` etc.) right
+    before the value counts as a boundary, as in the shape rules."""
+    import json as _json
+
+    spellings = {value, value.strip()}
+    for v in list(spellings):
+        once = _json.dumps(v)[1:-1]
+        spellings |= {once, _json.dumps(once)[1:-1]}
+    alts = []
+    for v in sorted((v for v in spellings if len(v.strip()) >= 6), key=len, reverse=True):
+        head = r"(?:(?<![A-Za-z0-9])|(?<=\\[nrt]))" if v[0].isalnum() else ""
+        tail = r"(?![A-Za-z0-9])" if v[-1].isalnum() else ""
+        alts.append(f"{head}{re.escape(v)}{tail}")
+    return "(?:" + "|".join(alts) + ")"
 
 
 def _vault_passes(items: Any) -> List[Pass]:
@@ -292,6 +317,8 @@ def _vault_passes(items: Any) -> List[Pass]:
     labels only. Any item that cannot be fetched fails closed, like an unreadable config."""
     if not isinstance(items, list):
         raise SecretPatternsUnavailable("secret_vault_items must be a list")
+    if len(items) > _VAULT_MAX_ITEMS:  # each fetch may take its 30 s timeout; keep a load bounded
+        raise SecretPatternsUnavailable(f"secret_vault_items lists more than {_VAULT_MAX_ITEMS} items")
     out: List[Pass] = []
     for it in items:
         if not (isinstance(it, dict) and isinstance(it.get("id"), str) and it["id"]
@@ -303,17 +330,24 @@ def _vault_passes(items: Any) -> List[Pass]:
             raise SecretPatternsUnavailable(f"vault item {it['label']}: {exc}") from exc
         if len(value) < 6:
             raise SecretPatternsUnavailable(f"vault item {it['label']}: value too short to match safely")
-        pattern = rf"(?<![A-Za-z0-9]){re.escape(value)}(?![A-Za-z0-9])"
-        out.append(_pass([(f"vault {it['label']}", pattern)]))
+        out.append(_pass([(f"vault {it['label']}", _needle_pattern(value))]))
     return out
 
 
 def patterns() -> List[Pass]:
-    """The compiled patterns, re-read only when the config file changes."""
+    """The compiled patterns, re-read when the config file changes, and also every ``_VAULT_TTL``
+    seconds while vault needles are configured, so a rotated value is picked up; a refresh that
+    fails raises (fails closed) rather than keep matching a stale value."""
     key = _config_signature()
     with _lock:
-        if _cache["key"] != key:
-            _cache["patterns"] = _load()
+        now = time.monotonic()
+        stale = _cache.get("vault") and now - _cache.get("loaded_at", 0.0) > _VAULT_TTL
+        if _cache["key"] != key or stale:
+            _cache["key"] = None  # a failed reload leaves nothing cached
+            loaded = _load()
+            _cache["patterns"] = loaded
+            _cache["vault"] = any(k.startswith("vault ") for _rx, kinds in loaded for k in kinds)
+            _cache["loaded_at"] = now
             _cache["key"] = key
         return _cache["patterns"]
 
