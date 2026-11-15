@@ -946,8 +946,8 @@ _WHOLE_HEX = re.compile(
 )  # one digest, or a "," / ";" list of them
 # (a bundle's content_hash joins its conversations' digests with ",": convo_miner)
 _ID_FIELD = re.compile(
-    r"(?i)(?:^|_)(?:hash|sha\d*|digest|ids?|ino|checksum|etag|fingerprint|recipe)$"
-)
+    r"(?i)(?:^|_)(?:hash|sha\d*|digest|ids?|ino|checksum|etag|fingerprint|recipe)\Z"
+)  # \Z, not $: "$" also matches before a final newline ("content_hash\n" is not this key)
 
 
 def _redact_value(value, skip_hex: bool = False):

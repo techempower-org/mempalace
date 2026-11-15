@@ -1473,3 +1473,8 @@ def test_619_a_list_of_digests_under_a_digest_key_is_kept():
         redact_metadatas({"content_hash": hs + "," + SHAPE_TOKEN})["content_hash"]
         != hs + "," + SHAPE_TOKEN
     )
+
+
+def test_619_a_key_with_a_trailing_newline_is_not_a_digest_field():
+    h = "0123456789abcdef" * 4
+    assert redact_metadatas({"content_hash\n": h})["content_hash\n"] != h
