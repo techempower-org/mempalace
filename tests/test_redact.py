@@ -1395,3 +1395,21 @@ def test_619_vault_needle_matches_utf8_kept_json(_config, monkeypatch):
     ):
         out = redact(text)
         assert "[redacted vault u8]" in out and "passw" not in out, text
+
+
+
+def test_619_an_all_digit_run_is_a_number_not_hex():
+    digits = "0123456789" * 6
+    assert redact(f"n {digits} m") == f"n {digits} m"
+
+
+
+def test_619_metadata_hash_and_id_fields_keep_their_value_but_text_fields_do_not():
+    rnd = _random.Random(64)
+    h = "".join(rnd.choice("0123456789abcdef") for _ in range(64))
+    meta = {"content_hash": h, "source_dir_ino": h, "drawer_id": SHAPE_TOKEN,
+            "aaak_source": f"cfg {SHAPE_TOKEN} and {h}", "entities": [SHAPE_TOKEN]}
+    out = redact_metadatas(meta)
+    assert out["content_hash"] == h and out["source_dir_ino"] == h and out["drawer_id"] == SHAPE_TOKEN
+    assert SHAPE_TOKEN not in out["aaak_source"] and h not in out["aaak_source"]
+    assert SHAPE_TOKEN not in out["entities"][0]  # an extracted entity is not an id field

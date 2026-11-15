@@ -134,6 +134,8 @@ SHAPE_PATTERNS: Dict[str, str] = {
     # one of the palace's most-searched strings. Cost, accepted by the lead 2026-11-15: a 40-hex
     # secret (a legacy GitHub OAuth token) passes, and sha256 digests in logs are redacted.
     "hex": r"(?:(?<![A-Za-z0-9_\\-])|(?<=\\[nrt]))(?![0-9a-fA-F]{40}(?![A-Za-z0-9_-]))"
+    r"(?=[0-9]*[a-fA-F])"  # at least one letter: an all-digit run is a number, not hex (32 random hex
+    # digits hold no letter about 3 times in ten million)
     r"[0-9a-fA-F]{32,}(?![A-Za-z0-9_-])",
     # A quoted string of 17+ with no spaces, ONLY from the secret alphabet [A-Za-z0-9+/=_-], holding
     # upper+lower+digit, or two of them plus "+" or "=" (base64), and not starting "/". So quoted
@@ -373,8 +375,10 @@ def _placeholder(kind: str, value: str) -> str:
     return f"[redacted {kind} sha256:{hashlib.sha256(value.encode()).hexdigest()[:8]}]"
 
 
-def redact(text: str) -> str:
-    """``text`` with every secret-shaped run replaced by its placeholder."""
+def redact(text: str, shapes: bool = True) -> str:
+    """``text`` with every secret-shaped run replaced by its placeholder. ``shapes=False`` skips the
+    #619 prefix-free shapes (vendor shapes, assignments and vault needles still apply): used for a
+    metadata field whose NAME says it holds a hash or an id, which a hex or token shape would break."""
     passes = patterns()
     if not text:
         return text
@@ -402,7 +406,8 @@ def redact(text: str) -> str:
         clean = again
     else:
         clean = _redact_assignments(clean, wide=True)
-    clean = _redact_shapes(clean)
+    if shapes:
+        clean = _redact_shapes(clean)
     return text if clean == text else clean
 
 
@@ -916,16 +921,22 @@ def redact_documents(documents):
     return [redact(d) if isinstance(d, str) else d for d in documents]
 
 
-def _redact_value(value):
+# A metadata field named for a hash or an id holds one by design (a content hash for dedup, a drawer
+# id): the #619 hex/token shapes would replace it and break lookups (test_convo_miner dedup). The
+# vendor shapes, the assignment rule and vault needles still apply to these fields.
+_ID_FIELD = re.compile(r"(?i)(?:hash|sha|digest|(?:^|_)ids?$|_ino$|recipe|checksum|etag|fingerprint)")
+
+
+def _redact_value(value, shapes: bool = True):
     """``value`` with its strings redacted, at any depth; the same object when nothing changed."""
     if isinstance(value, str):
-        clean = redact(value)
+        clean = redact(value, shapes=shapes)
         return value if clean == value else clean
     if isinstance(value, dict):
-        out = {k: _redact_value(v) for k, v in value.items()}
+        out = {k: _redact_value(v, shapes and not (isinstance(k, str) and _ID_FIELD.search(k))) for k, v in value.items()}
         return value if all(out[k] is value[k] for k in value) else out
     if isinstance(value, (list, tuple)):
-        out = [_redact_value(v) for v in value]
+        out = [_redact_value(v, shapes) for v in value]
         if all(a is b for a, b in zip(out, value)):
             return value
         # A changed tuple comes back as a plain one: a subclass (a namedtuple) may not rebuild
