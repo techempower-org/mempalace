@@ -1206,7 +1206,7 @@ def _vault(_config, monkeypatch):
     import mempalace.redact as R
 
     (_config / "config.json").write_text(
-        _json.dumps({"secret_vault_items": [{"id": "item-0001", "label": "homelab-shared"}]})
+        _json.dumps({"secret_vault_items": [{"id": "item-0001", "label": "example-shared"}]})
     )
     calls = []
 
@@ -1221,7 +1221,7 @@ def _vault(_config, monkeypatch):
 
 def test_619_vault_needle_redacts_the_value_on_word_boundaries(_vault, _config):
     out = redact(f"wifi pw {VAULT_VALUE}, and {VAULT_VALUE}1 and x{VAULT_VALUE}x")
-    assert out.startswith("wifi pw [redacted vault homelab-shared],")
+    assert out.startswith("wifi pw [redacted vault example-shared],")
     assert f"x{VAULT_VALUE}x" in out  # inside a longer word: not this value
     assert _vault == ["item-0001"]
     assert VAULT_VALUE not in (_config / "config.json").read_text()
