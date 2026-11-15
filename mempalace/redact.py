@@ -283,7 +283,9 @@ def _vault_fetch(item_id: str) -> str:
     try:
         r = subprocess.run(
             [bw, "--nointeraction", "get", "password", item_id],
-            capture_output=True, timeout=30, env=env,  # bytes: text mode would turn "\r" into "\n"
+            capture_output=True,
+            timeout=30,
+            env=env,  # bytes: text mode would turn "\r" into "\n"
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise SecretPatternsUnavailable(f"vault unreachable ({type(exc).__name__})") from exc
@@ -295,7 +297,9 @@ def _vault_fetch(item_id: str) -> str:
         value = value[:-1]
     if r.returncode != 0 or not value.strip():
         # rc 0 with empty stdout is a failure too (a locked vault can answer that way)
-        raise SecretPatternsUnavailable(f"vault answered rc {r.returncode}, {'empty' if not value else 'value'}")
+        raise SecretPatternsUnavailable(
+            f"vault answered rc {r.returncode}, {'empty' if not value else 'value'}"
+        )
     return value
 
 
@@ -333,18 +337,29 @@ def _vault_passes(items: Any) -> List[Pass]:
     if not isinstance(items, list):
         raise SecretPatternsUnavailable("secret_vault_items must be a list")
     if len(items) > _VAULT_MAX_ITEMS:  # each fetch may take its 30 s timeout; keep a load bounded
-        raise SecretPatternsUnavailable(f"secret_vault_items lists more than {_VAULT_MAX_ITEMS} items")
+        raise SecretPatternsUnavailable(
+            f"secret_vault_items lists more than {_VAULT_MAX_ITEMS} items"
+        )
     out: List[Pass] = []
     for it in items:
-        if not (isinstance(it, dict) and isinstance(it.get("id"), str) and it["id"]
-                and isinstance(it.get("label"), str) and _VAULT_LABEL.fullmatch(it["label"])):
-            raise SecretPatternsUnavailable("secret_vault_items entries need an id and a label [a-z0-9-]")
+        if not (
+            isinstance(it, dict)
+            and isinstance(it.get("id"), str)
+            and it["id"]
+            and isinstance(it.get("label"), str)
+            and _VAULT_LABEL.fullmatch(it["label"])
+        ):
+            raise SecretPatternsUnavailable(
+                "secret_vault_items entries need an id and a label [a-z0-9-]"
+            )
         try:
             value = _vault_fetch(it["id"])
         except SecretPatternsUnavailable as exc:
             raise SecretPatternsUnavailable(f"vault item {it['label']}: {exc}") from exc
         if len(value.strip()) < 6:
-            raise SecretPatternsUnavailable(f"vault item {it['label']}: value too short to match safely")
+            raise SecretPatternsUnavailable(
+                f"vault item {it['label']}: value too short to match safely"
+            )
         out.append(_pass([(f"vault {it['label']}", _needle_pattern(value))]))
     return out
 
@@ -926,9 +941,13 @@ def redact_documents(documents):
 # #619 hex shape would replace it and break lookups (test_convo_miner dedup). Only that: a direct value
 # that is ENTIRELY hex, under a key whose whole "_"-suffix names a digest or an id, skips the hex shape.
 # A token-shaped value there (mixed case: no digest is) is still redacted, and so is anything nested.
-_WHOLE_HEX = re.compile(r"[0-9a-fA-F]+(?:[,;][0-9a-fA-F]+)*")  # one digest, or a "," / ";" list of them
+_WHOLE_HEX = re.compile(
+    r"[0-9a-fA-F]+(?:[,;][0-9a-fA-F]+)*"
+)  # one digest, or a "," / ";" list of them
 # (a bundle's content_hash joins its conversations' digests with ",": convo_miner)
-_ID_FIELD = re.compile(r"(?i)(?:^|_)(?:hash|sha\d*|digest|ids?|ino|checksum|etag|fingerprint|recipe)$")
+_ID_FIELD = re.compile(
+    r"(?i)(?:^|_)(?:hash|sha\d*|digest|ids?|ino|checksum|etag|fingerprint|recipe)$"
+)
 
 
 def _redact_value(value, skip_hex: bool = False):
@@ -938,8 +957,13 @@ def _redact_value(value, skip_hex: bool = False):
         return value if clean == value else clean
     if isinstance(value, dict):
         out = {
-            k: _redact_value(v, isinstance(k, str) and bool(_ID_FIELD.search(k)) and isinstance(v, str)
-                             and bool(_WHOLE_HEX.fullmatch(v)))
+            k: _redact_value(
+                v,
+                isinstance(k, str)
+                and bool(_ID_FIELD.search(k))
+                and isinstance(v, str)
+                and bool(_WHOLE_HEX.fullmatch(v)),
+            )
             for k, v in value.items()
         }
         return value if all(out[k] is value[k] for k in value) else out
