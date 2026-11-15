@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| mempalace mine --wait-lock SECONDS — a scheduled mine waits a bounded time for the palace lock instead of failing at once | — | [`2c0cdd4`](https://github.com/techempower-org/mempalace/commit/2c0cdd4) |
 | the dream judge's verdicts are kept in judged.json, so a pair judged once is not judged again and a night with the judge off still reports them | — | [`30447c9`](https://github.com/techempower-org/mempalace/commit/30447c9) |
 | an "sk-" key of 20 to 1000 characters holding two of upper case, lower case and digits, such as a LiteLLM virtual key, is redacted on every write, and a bare OpenAI key is redacted to the end of its token | — | [`1cbc611`](https://github.com/techempower-org/mempalace/commit/1cbc611) |
 | the nightly dream reads a symlinked memory folder once, reports a stopped judge as off instead of an error, and applies accepted decisions it can apply without judgement | — | [`36b5ce3`](https://github.com/techempower-org/mempalace/commit/36b5ce3) |

@@ -18,6 +18,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-11-15]
+
+
+### Added
+
+
+- **mempalace mine --wait-lock SECONDS — a scheduled mine waits a bounded time for the palace lock instead of failing at once** ([`2c0cdd4`](https://github.com/techempower-org/mempalace/commit/2c0cdd4))
+  ``mine_palace_lock`` is non-blocking on purpose: hook-spawned mines must not
+  pile up as waiting workers. A scheduled mine that shares the palace with them
+  then lost every race (each attempt failed in about a second) and only tried
+  again on its unit's restart delay.
+
+  ``--wait-lock SECONDS`` (default 0, unchanged fail-fast) retries on
+  ``MineAlreadyRunning`` about every 15 s with jitter until the budget is spent,
+  printing one stderr line per wait that names the holder, then fails exactly
+  as before (same message, exit 1). It covers the ``--source`` adapter path and
+  every ``--mode`` path. The adapter, projects and convos paths lock before
+  their first write; session and extract lock per write and re-file the same
+  stable ids on retry. Closes #623.
+
+
 ## [2026-11-14]
 
 

@@ -2,7 +2,7 @@ seq: 205
 id: mine-wait-lock
 date: '2026-11-15'
 bucket: Added
-commit: HEAD
+commit: 2c0cdd4
 area: CLI
 summary: mempalace mine --wait-lock SECONDS — a scheduled mine waits a bounded time for the palace lock instead of failing at once
 body: |
