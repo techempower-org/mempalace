@@ -24,7 +24,19 @@ scan: a config that cannot be read, or a pattern that does not compile,
 raises :class:`SecretPatternsUnavailable` and the write fails rather than
 store text unscanned.
 
-Known limits. Shapes catch tokens with a recognisable prefix. A bare
+Prefix-free shapes (#619, 2026-11-15, after a judge's free-text output quoted a bare 32-character
+key): ``token`` (20+ of [A-Za-z0-9_-] with upper, lower and digit), ``hex`` (32+ hex digits EXCEPT
+exactly 40, which is a git sha: a 40-hex secret passes, and sha256 digests are redacted), and
+``quoted`` (a quoted 17+ run from the secret alphabet [A-Za-z0-9+/=_-] with three classes, or two
+plus "+" or "="; not starting "/"; quoted paths, URLs, dotted names and timestamps are left, so a
+quoted secret holding "." or ":" passes this rule). A bare lower-case password matches no shape:
+for that, ``secret_vault_items`` in the config lists vault item ids and labels (never values);
+each value is fetched in process at pattern load (``bw --nointeraction``) and replaced on word
+boundaries with ``[redacted vault <label>]``. An item that cannot be fetched (a locked vault)
+fails every write closed, as an unreadable config does: a stale palace is visible and
+recoverable, a re-mined password is not.
+
+Known limits. Vendor shapes catch tokens with a recognisable prefix. A bare
 password or a provider token without one is caught only beside a secret-ish
 name (``NEXTAUTH_SECRET=…``, ``"password": "…"``) or as a URL's password
 (``postgres://user:…@``), by :func:`_redact_assignments`, which keeps the
@@ -104,6 +116,38 @@ DEFAULT_PATTERNS: Dict[str, str] = {
     "otpauth": r"otpauth://[A-Za-z]{4}/[^\s\"'\\<>]+",
 }
 
+# #619 prefix-free shapes. They run as their OWN pass after the assignment rule, so a value beside a
+# secret-ish name keeps "[redacted assignment]" and only a bare one reaches these kinds; and a value
+# with fewer than 8 distinct characters (a mask like "Ab1Ab1Ab1...", a repeated filler) is left,
+# since a random 20+ token or a 32-hex key has far more.
+SHAPE_PATTERNS: Dict[str, str] = {
+    # #619 (2026-11-15: a judge's free-text "why" quoted a bare 32-character key; no vendor prefix).
+    # A token of 20+ from [A-Za-z0-9_-] holding upper case AND lower case AND a digit. It must be a
+    # whole run: not started right after a backslash (so in raw JSONL "\n<token>" the "n" of the
+    # escape is never taken; the second branch starts the match after the escape instead).
+    "token": r"(?:(?<![A-Za-z0-9_\\-])|(?<=\\[nrt]))"
+    r"(?=[A-Za-z0-9_-]{0,1000}[A-Z])(?=[A-Za-z0-9_-]{0,1000}[a-z])(?=[A-Za-z0-9_-]{0,1000}[0-9])"
+    r"[A-Za-z0-9_-]{20,1000}(?![A-Za-z0-9_-])",
+    # A hex run of 32+ (64-hex master keys, 32-hex API keys), EXCEPT exactly 40: a git commit sha,
+    # one of the palace's most-searched strings. Cost, accepted by the lead 2026-11-15: a 40-hex
+    # secret (a legacy GitHub OAuth token) passes, and sha256 digests in logs are redacted.
+    "hex": r"(?:(?<![A-Za-z0-9_\\-])|(?<=\\[nrt]))(?![0-9a-fA-F]{40}(?![A-Za-z0-9_-]))"
+    r"[0-9a-fA-F]{32,1000}(?![A-Za-z0-9_-])",
+    # A quoted string of 17+ with no spaces, ONLY from the secret alphabet [A-Za-z0-9+/=_-], holding
+    # upper+lower+digit, or two of them plus "+" or "=" (base64), and not starting "/". So quoted
+    # paths, URLs, dotted names, timestamps ("2026-11-15T13:21:02Z") and snake_case names stay:
+    # they hold a character outside the alphabet or a single class. Cost: a quoted secret that
+    # holds "." or ":" passes here (the assignment rule may still take it).
+    "quoted": r"(?<=[\"'`])(?!/)"
+    r"(?:(?=[A-Za-z0-9+/=_-]{0,1000}[A-Z])(?=[A-Za-z0-9+/=_-]{0,1000}[a-z])(?=[A-Za-z0-9+/=_-]{0,1000}[0-9])"
+    r"|(?=[A-Za-z0-9+/=_-]{0,1000}[+=])"
+    r"(?:(?=[A-Za-z0-9+/=_-]{0,1000}[A-Z])(?=[A-Za-z0-9+/=_-]{0,1000}[a-z])"
+    r"|(?=[A-Za-z0-9+/=_-]{0,1000}[A-Z])(?=[A-Za-z0-9+/=_-]{0,1000}[0-9])"
+    r"|(?=[A-Za-z0-9+/=_-]{0,1000}[a-z])(?=[A-Za-z0-9+/=_-]{0,1000}[0-9])))"
+    r"[A-Za-z0-9+/=_-]{17,1000}(?=[\"'`])",
+}
+_SHAPE_MIN_DISTINCT = 8
+
 # Kinds whose value may be short or guessable: an unkeyed hash of one would let any reader test
 # guesses, so the placeholder carries none.
 _UNHASHED = {"custom": "[redacted custom]", "code": "[redacted code]"}
@@ -117,7 +161,7 @@ class SecretPatternsUnavailable(RuntimeError):
 # A placeholder this module wrote. Every pass matches it first and keeps it as it is, so a later
 # pass never rewrites an earlier one's work, and redaction is idempotent even when a configured
 # pattern would match its hex.
-_PLACEHOLDER = r"\[redacted (?:[a-z]+ sha256:[0-9a-f]{8}|custom|code|assignment)\]"
+_PLACEHOLDER = r"\[redacted (?:[a-z]+ sha256:[0-9a-f]{8}|custom|code|assignment|vault [a-z0-9-]+)\]"
 
 Pass = Tuple[re.Pattern, List[str]]
 
@@ -161,6 +205,30 @@ def _compile(extra: Tuple[str, ...]) -> List[Pass]:
     return [_pass(list(DEFAULT_PATTERNS.items()))] + [_pass([("custom", p)]) for p in extra]
 
 
+_SHAPE_PASS: Optional[Pass] = None
+
+
+def _shape_pass() -> Pass:
+    global _SHAPE_PASS
+    if _SHAPE_PASS is None:
+        _SHAPE_PASS = _pass(list(SHAPE_PATTERNS.items()))
+    return _SHAPE_PASS
+
+
+def _redact_shapes(text: str) -> str:
+    combined, kinds = _shape_pass()
+
+    def replace(m: re.Match) -> str:
+        if m.group("_mprkeep") is not None:
+            return m.group(0)
+        if len(set(m.group(0))) < _SHAPE_MIN_DISTINCT:
+            return m.group(0)
+        kind = next(k for i, k in enumerate(kinds) if m.group(f"_mpr{i}") is not None)
+        return _placeholder(kind, m.group(0))
+
+    return combined.sub(replace, text)
+
+
 _lock = threading.Lock()
 _cache: Dict[str, Any] = {"key": None, "patterns": None}
 
@@ -189,7 +257,55 @@ def _load() -> List[Tuple[str, re.Pattern]]:
     raw = config._file_config.get("secret_patterns", [])
     if not isinstance(raw, list) or not all(isinstance(p, str) and p for p in raw):
         raise SecretPatternsUnavailable("secret_patterns must be a list of non-empty strings")
-    return _compile(tuple(raw))
+    return _compile(tuple(raw)) + _vault_passes(config._file_config.get("secret_vault_items", []))
+
+
+_VAULT_LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
+
+
+def _vault_fetch(item_id: str) -> str:
+    """One vault item's password, fetched in this process (``bw --nointeraction``): never written to
+    disk, never on a command line (only the item id is). Raises when the vault cannot answer."""
+    import shutil
+    import subprocess
+
+    bw = shutil.which("bw") or os.path.expanduser("~/.local/bin/bw")
+    env = dict(os.environ)
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    try:
+        r = subprocess.run(
+            [bw, "--nointeraction", "get", "password", item_id],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SecretPatternsUnavailable(f"vault unreachable ({type(exc).__name__})") from exc
+    value = (r.stdout or "").strip()
+    if r.returncode != 0 or not value:
+        # rc 0 with empty stdout is a failure too (a locked vault can answer that way)
+        raise SecretPatternsUnavailable(f"vault answered rc {r.returncode}, {'empty' if not value else 'value'}")
+    return value
+
+
+def _vault_passes(items: Any) -> List[Pass]:
+    """One pass per configured vault item: its current value, on alphanumeric word boundaries, becomes
+    ``[redacted vault <label>]`` (no hash: the value may be guessable). The config holds item ids and
+    labels only. Any item that cannot be fetched fails closed, like an unreadable config."""
+    if not isinstance(items, list):
+        raise SecretPatternsUnavailable("secret_vault_items must be a list")
+    out: List[Pass] = []
+    for it in items:
+        if not (isinstance(it, dict) and isinstance(it.get("id"), str) and it["id"]
+                and isinstance(it.get("label"), str) and _VAULT_LABEL.fullmatch(it["label"])):
+            raise SecretPatternsUnavailable("secret_vault_items entries need an id and a label [a-z0-9-]")
+        try:
+            value = _vault_fetch(it["id"])
+        except SecretPatternsUnavailable as exc:
+            raise SecretPatternsUnavailable(f"vault item {it['label']}: {exc}") from exc
+        if len(value) < 6:
+            raise SecretPatternsUnavailable(f"vault item {it['label']}: value too short to match safely")
+        pattern = rf"(?<![A-Za-z0-9]){re.escape(value)}(?![A-Za-z0-9])"
+        out.append(_pass([(f"vault {it['label']}", pattern)]))
+    return out
 
 
 def patterns() -> List[Pass]:
@@ -203,6 +319,8 @@ def patterns() -> List[Pass]:
 
 
 def _placeholder(kind: str, value: str) -> str:
+    if kind.startswith("vault "):
+        return f"[redacted {kind}]"
     if kind in _UNHASHED:
         # A configured pattern may catch a guessable value (a password), and a one-time code is
         # six digits; an unkeyed hash of either would let any reader test guesses.
@@ -239,6 +357,7 @@ def redact(text: str) -> str:
         clean = again
     else:
         clean = _redact_assignments(clean, wide=True)
+    clean = _redact_shapes(clean)
     return text if clean == text else clean
 
 

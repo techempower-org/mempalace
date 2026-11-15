@@ -1110,3 +1110,149 @@ def test_adversarial_sk_runs_scan_in_linear_time(text):
     start = time.perf_counter()
     redact(text)
     assert time.perf_counter() - start < 2.0
+
+
+# --- #619 slice 1: shapes without a vendor prefix, and vault-item needles -------------------------
+# Synthetic values, built at run time (the issue's recipe); nothing here is a real credential.
+import random as _random
+import string as _string
+
+SHAPE_TOKEN = "".join(_random.Random(619).sample(_string.ascii_letters + _string.digits, 32))
+assert any(c.isupper() for c in SHAPE_TOKEN) and any(c.islower() for c in SHAPE_TOKEN) and any(c.isdigit() for c in SHAPE_TOKEN)
+
+
+def _ph(kind, value):
+    return f"[redacted {kind} sha256:{hashlib.sha256(value.encode()).hexdigest()[:8]}]"
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "why: the key {t} looks live",  # a judge's free-text why
+        "token={t}",
+        "bare on a line\n{t}\nnext",
+        '{{"type":"text","text":"x\\n{t}"}}',  # raw JSONL: right after a literal \n escape
+    ],
+)
+def test_619_bare_mixed_token_is_redacted(template):
+    out = redact(template.format(t=SHAPE_TOKEN))
+    assert SHAPE_TOKEN not in out
+    assert "[redacted" in out
+
+
+def test_619_hex_runs_of_32_or_more_but_not_a_git_sha():
+    rnd = _random.Random(32)
+    h32 = "".join(rnd.choice("0123456789abcdef") for _ in range(32))
+    h64 = "".join(rnd.choice("0123456789abcdef") for _ in range(64))
+    sha1 = "".join(rnd.choice("0123456789abcdef") for _ in range(40))
+    out = redact(f"k {h32} and {h64} and commit {sha1}")
+    assert h32 not in out and h64 not in out
+    assert _ph("hex", h32) in out and _ph("hex", h64) in out
+    assert sha1 in out  # exactly 40 hex: a git sha, kept for recall
+
+
+def test_619_quoted_secret_alphabet_is_redacted_but_paths_urls_times_are_not():
+    q = "Ab3dEf+hJkLmNoP/q9"  # 18 chars, base64 alphabet, 3 classes
+    out = redact(f'cfg "{q}" end')
+    assert q not in out
+    kept = [
+        '"/home/jp/Projects/memorypalace/mempalace"',
+        '"https://example.org/a/b/c/d/e"',
+        '"2026-11-15T13:21:02.179Z"',
+        '"mempalace.backends.postgres"',
+        '"2026-11-12-plan-design.md"',
+        '"just_a_long_snake_case_name"',
+    ]
+    for s in kept:
+        assert redact(f"x {s} y") == f"x {s} y", s
+
+
+def test_619_url_encoded_dsn_password_is_redacted():
+    pw = "Ab%2Bcd%2F" + "1234xyzQ" * 2
+    out = redact(f"DSN postgresql://palace:{pw}@localhost:5433/db")
+    assert pw not in out and "Ab%2B" not in out
+
+
+@pytest.mark.parametrize(
+    "plain",
+    [
+        "drawer_palace_nemotron_references_d6daffa975cc887fcae92963",
+        "see 2026-11-12-plan-design.md and /home/jp/Projects/memorypalace/tests",
+        "SecretPatternsUnavailableErrorHandler raised",  # CamelCase, no digit
+        "uuid 2ca17ab7-9efe-4c37-bc71-2a23568bc11c here",
+        "Ordinary prose stays exactly as it was written, with no tokens in it.",
+    ],
+)
+def test_619_negative_controls_unchanged(plain):
+    assert redact(plain) == plain
+
+
+def test_619_idempotent_on_new_kinds():
+    rnd = _random.Random(7)
+    hexrun = "".join(rnd.choice("0123456789abcdef") for _ in range(32))
+    once = redact(f"a {SHAPE_TOKEN} b {hexrun}")
+    assert SHAPE_TOKEN not in once and hexrun not in once
+    assert redact(once) == once
+
+
+# The vault needle: config names vault item ids; the values are fetched in process, never on disk.
+VAULT_VALUE = "hunt" + "erpass"  # lower case only: no shape rule can catch it
+
+
+@pytest.fixture
+def _vault(_config, monkeypatch):
+    import json as _json
+
+    import mempalace.redact as R
+
+    (_config / "config.json").write_text(
+        _json.dumps({"secret_vault_items": [{"id": "item-0001", "label": "homelab-shared"}]})
+    )
+    calls = []
+
+    def fake_fetch(item_id):
+        calls.append(item_id)
+        return VAULT_VALUE
+
+    monkeypatch.setattr(R, "_vault_fetch", fake_fetch)
+    R._cache["key"] = None
+    return calls
+
+
+def test_619_vault_needle_redacts_the_value_on_word_boundaries(_vault, _config):
+    out = redact(f"wifi pw {VAULT_VALUE}, and {VAULT_VALUE}1 and x{VAULT_VALUE}x")
+    assert out.startswith("wifi pw [redacted vault homelab-shared],")
+    assert f"x{VAULT_VALUE}x" in out  # inside a longer word: not this value
+    assert _vault == ["item-0001"]
+    assert VAULT_VALUE not in (_config / "config.json").read_text()
+
+
+def test_619_vault_needle_fails_closed(_config, monkeypatch):
+    import mempalace.redact as R
+
+    (_config / "config.json").write_text('{"secret_vault_items": [{"id": "item-0001", "label": "x"}]}')
+
+    def broken(item_id):
+        raise SecretPatternsUnavailable("vault locked")
+
+    monkeypatch.setattr(R, "_vault_fetch", broken)
+    R._cache["key"] = None
+    with pytest.raises(SecretPatternsUnavailable):
+        redact("anything")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"secret_vault_items": "x"}',
+        '{"secret_vault_items": [{"id": "a"}]}',
+        '{"secret_vault_items": [{"id": "a", "label": "Bad Label!"}]}',
+    ],
+)
+def test_619_vault_items_config_must_be_well_formed(_config, body):
+    import mempalace.redact as R
+
+    (_config / "config.json").write_text(body)
+    R._cache["key"] = None
+    with pytest.raises(SecretPatternsUnavailable):
+        redact("anything")
