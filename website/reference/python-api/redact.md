@@ -28,7 +28,19 @@ scan: a config that cannot be read, or a pattern that does not compile,
 raises :class:`SecretPatternsUnavailable` and the write fails rather than
 store text unscanned.
 
-Known limits. Shapes catch tokens with a recognisable prefix. A bare
+Prefix-free shapes (#619, 2026-11-15, after a judge's free-text output quoted a bare 32-character
+key): ``token`` (20+ of [A-Za-z0-9_-] with upper, lower and digit), ``hex`` (32+ hex digits EXCEPT
+exactly 40, which is a git sha: a 40-hex secret passes, and sha256 digests are redacted), and
+``quoted`` (a quoted 17+ run from the secret alphabet [A-Za-z0-9+/=_-] with three classes, or two
+plus "+" or "="; not starting "/"; quoted paths, URLs, dotted names and timestamps are left, so a
+quoted secret holding "." or ":" passes this rule). A bare lower-case password matches no shape:
+for that, ``secret_vault_items`` in the config lists vault item ids and labels (never values);
+each value is fetched in process at pattern load (``bw --nointeraction``) and replaced on word
+boundaries with ``[redacted vault &lt;label>]``. An item that cannot be fetched (a locked vault)
+fails every write closed, as an unreadable config does: a stale palace is visible and
+recoverable, a re-mined password is not.
+
+Known limits. Vendor shapes catch tokens with a recognisable prefix. A bare
 password or a provider token without one is caught only beside a secret-ish
 name (``NEXTAUTH_SECRET=…``, ``"password": "…"``) or as a URL's password
 (``postgres://user:…@``), by :func:`_redact_assignments`, which keeps the
@@ -69,15 +81,19 @@ store a credential they would have caught, so the write stops instead.
 def patterns() -> List[Pass]
 ```
 
-The compiled patterns, re-read only when the config file changes.
+The compiled patterns, re-read when the config file changes, and also every ``_VAULT_TTL``
+seconds while vault needles are configured, so a rotated value is picked up; a refresh that
+fails raises (fails closed) rather than keep matching a stale value.
 
 ### `redact`
 
 ```python
-def redact(text: str) -> str
+def redact(text: str, skip_hex: bool = False) -> str
 ```
 
-``text`` with every secret-shaped run replaced by its placeholder.
+``text`` with every secret-shaped run replaced by its placeholder. ``skip_hex=True`` skips
+only the #619 ``hex`` shape, and is used only for a whole-hex value under a metadata key that
+names a digest or an id (a content hash for dedup); every other rule still applies.
 
 ### `redact_documents`
 
