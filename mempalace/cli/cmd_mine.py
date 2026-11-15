@@ -5,6 +5,36 @@ if __name__ != "mempalace.cli":
 from typing import Optional
 
 
+def _retry_while_locked(run, wait_seconds, lock_error):
+    """Call ``run()``; while it raises ``lock_error`` (another mine holds the palace
+    lock), sleep about 15 s and retry until ``wait_seconds`` is spent, then re-raise
+    the last error unchanged. ``wait_seconds`` <= 0 is one attempt (fail fast).
+
+    The source-adapter, projects and convos paths take the palace lock before
+    their first write, so a retry there starts clean. The session and extract
+    modes lock per write and may be refused part-way; their drawer ids are
+    stable and every write is an upsert, so the retry re-files the same rows
+    instead of duplicating them.
+    """
+    import random
+    import time
+
+    deadline = time.monotonic() + max(0.0, float(wait_seconds or 0))
+    while True:
+        try:
+            return run()
+        except lock_error as exc:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            pause = min(remaining, 15.0 + random.uniform(0.0, 3.0))
+            print(
+                f"mempalace: {exc} (--wait-lock: retrying in {pause:.0f}s, {remaining:.0f}s left)",
+                file=sys.stderr,
+            )
+            time.sleep(pause)
+
+
 def cmd_mine(args):  # noqa: C901 — fork daemon/hub routing + upstream model/media guards on one entry point
     from ..backends.base import (
         DimensionMismatchError,
@@ -49,19 +79,23 @@ def cmd_mine(args):  # noqa: C901 — fork daemon/hub routing + upstream model/m
             os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
         )
         try:
-            drawers_written = mine_source_adapter(
-                source_name=source_adapter,
-                source_path=args.dir,
-                palace_path=palace_path,
-                dry_run=args.dry_run,
-                **(
-                    {
-                        "project": getattr(args, "wing", None),
-                        "related_drawer_id": getattr(args, "related_drawer_id", None),
-                    }
-                    if source_adapter == "media"
-                    else {}
+            drawers_written = _retry_while_locked(
+                lambda: mine_source_adapter(
+                    source_name=source_adapter,
+                    source_path=args.dir,
+                    palace_path=palace_path,
+                    dry_run=args.dry_run,
+                    **(
+                        {
+                            "project": getattr(args, "wing", None),
+                            "related_drawer_id": getattr(args, "related_drawer_id", None),
+                        }
+                        if source_adapter == "media"
+                        else {}
+                    ),
                 ),
+                getattr(args, "wait_lock", 0),
+                MineAlreadyRunning,
             )
         except (UnknownSourceAdapterError, UnsupportedSourceAdapterProtocolError) as exc:
             print(f"mempalace: {exc}", file=sys.stderr)
@@ -220,7 +254,7 @@ def cmd_mine(args):  # noqa: C901 — fork daemon/hub routing + upstream model/m
             llm_provider=None,
         )
 
-    try:
+    def _dispatch():
         if mode == "session":
             # hybrid-search-taxonomy follow-up: per-session manifest mode.
             # One addressable drawer per session file (vs convos mode's
@@ -277,6 +311,9 @@ def cmd_mine(args):  # noqa: C901 — fork daemon/hub routing + upstream model/m
                 workers=getattr(args, "workers", 1),
                 compute_derived=not getattr(args, "no_tunnels", False),
             )
+
+    try:
+        _retry_while_locked(_dispatch, getattr(args, "wait_lock", 0), MineAlreadyRunning)
     except MineAlreadyRunning as exc:
         # A live MCP server or another mine is already writing to this
         # palace. Surface the holder identity so the operator knows what
