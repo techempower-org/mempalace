@@ -66,6 +66,7 @@ mempalace mine <dir> --wing myapp
 | `--extract` | `exchange` | `exchange` or `general` (for convos mode) |
 | `--no-gitignore` | — | Don't respect .gitignore |
 | `--include-ignored` | — | Always scan these paths even if ignored |
+| `--wait-lock` | `0` | When another mine holds the palace lock, retry for up to this many seconds (about every 15 s) instead of exiting `1` at once |
 
 Exits `1` when one or more files could not be mined (a stale-drawer purge failed). The summary shows `Files failed: N`, and stderr reports the failed files. Those files keep their existing drawers and are retried by the next mine.
 

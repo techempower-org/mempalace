@@ -924,6 +924,18 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
     )
     p_mine.add_argument("--wing", default=None, help="Wing name (default: directory name)")
     p_mine.add_argument(
+        "--wait-lock",
+        type=float,
+        default=0,
+        metavar="SECONDS",
+        help=(
+            "When another mine holds this palace's lock, retry for up to SECONDS "
+            "(about every 15 s) instead of exiting 1 at once. 0 (default) keeps "
+            "the fail-fast behaviour. For scheduled mines that share a palace "
+            "with hook-spawned mines."
+        ),
+    )
+    p_mine.add_argument(
         "--related-drawer-id",
         default=None,
         help="Associate media assets with an existing drawer (--source media only)",
