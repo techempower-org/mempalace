@@ -1410,7 +1410,8 @@ def test_619_metadata_hash_and_id_fields_keep_their_value_but_text_fields_do_not
     meta = {"content_hash": h, "source_dir_ino": h, "drawer_id": SHAPE_TOKEN,
             "aaak_source": f"cfg {SHAPE_TOKEN} and {h}", "entities": [SHAPE_TOKEN]}
     out = redact_metadatas(meta)
-    assert out["content_hash"] == h and out["source_dir_ino"] == h and out["drawer_id"] == SHAPE_TOKEN
+    assert out["content_hash"] == h and out["source_dir_ino"] == h
+    assert SHAPE_TOKEN not in out["drawer_id"]  # a token-shaped value under an id key is still redacted
     assert SHAPE_TOKEN not in out["aaak_source"] and h not in out["aaak_source"]
     assert SHAPE_TOKEN not in out["entities"][0]  # an extracted entity is not an id field
 
@@ -1425,3 +1426,27 @@ def test_619_the_id_field_exemption_is_narrow():
     })
     for k in out:
         assert SHAPE_TOKEN not in str(out[k]), k
+
+
+
+def test_619_the_exemption_never_reaches_nested_values_or_lookalike_keys():
+    rnd = _random.Random(65)
+    h = "".join(rnd.choice("0123456789abcdef") for _ in range(64))
+    out = redact_metadatas({
+        "recipe": {"aaak_source": SHAPE_TOKEN, "entities": [SHAPE_TOKEN], "inner_hash": h},
+        "shadow": SHAPE_TOKEN,
+        "hashtags": h,
+        "drawer_id": SHAPE_TOKEN,
+    })
+    s = str(out)
+    assert SHAPE_TOKEN not in s
+    assert out["hashtags"] != h  # "hashtags" is not a digest field
+    assert out["recipe"]["inner_hash"] == h  # a whole-hex value under a digest key, at any depth
+
+
+
+def test_619_a_list_of_digests_under_a_digest_key_is_kept():
+    rnd = _random.Random(66)
+    hs = ",".join("".join(rnd.choice("0123456789abcdef") for _ in range(64)) for _ in range(3))
+    assert redact_metadatas({"content_hash": hs})["content_hash"] == hs
+    assert redact_metadatas({"content_hash": hs + "," + SHAPE_TOKEN})["content_hash"] != hs + "," + SHAPE_TOKEN

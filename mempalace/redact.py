@@ -219,7 +219,7 @@ def _shape_pass() -> Pass:
     return _SHAPE_PASS
 
 
-def _redact_shapes(text: str) -> str:
+def _redact_shapes(text: str, skip_hex: bool = False) -> str:
     combined, kinds = _shape_pass()
 
     def replace(m: re.Match) -> str:
@@ -228,6 +228,8 @@ def _redact_shapes(text: str) -> str:
         if len(set(m.group(0))) < _SHAPE_MIN_DISTINCT:
             return m.group(0)
         kind = next(k for i, k in enumerate(kinds) if m.group(f"_mpr{i}") is not None)
+        if skip_hex and kind == "hex":
+            return m.group(0)
         return _placeholder(kind, m.group(0))
 
     return combined.sub(replace, text)
@@ -375,10 +377,10 @@ def _placeholder(kind: str, value: str) -> str:
     return f"[redacted {kind} sha256:{hashlib.sha256(value.encode()).hexdigest()[:8]}]"
 
 
-def redact(text: str, shapes: bool = True) -> str:
-    """``text`` with every secret-shaped run replaced by its placeholder. ``shapes=False`` skips the
-    #619 prefix-free shapes (vendor shapes, assignments and vault needles still apply): used for a
-    metadata field whose NAME says it holds a hash or an id, which a hex or token shape would break."""
+def redact(text: str, skip_hex: bool = False) -> str:
+    """``text`` with every secret-shaped run replaced by its placeholder. ``skip_hex=True`` skips
+    only the #619 ``hex`` shape, and is used only for a whole-hex value under a metadata key that
+    names a digest or an id (a content hash for dedup); every other rule still applies."""
     passes = patterns()
     if not text:
         return text
@@ -406,8 +408,7 @@ def redact(text: str, shapes: bool = True) -> str:
         clean = again
     else:
         clean = _redact_assignments(clean, wide=True)
-    if shapes:
-        clean = _redact_shapes(clean)
+    clean = _redact_shapes(clean, skip_hex)
     return text if clean == text else clean
 
 
@@ -921,29 +922,29 @@ def redact_documents(documents):
     return [redact(d) if isinstance(d, str) else d for d in documents]
 
 
-# A metadata field named for a hash or an id holds one by design (a content hash for dedup, a drawer
-# id): the #619 hex/token shapes would replace it and break lookups (test_convo_miner dedup). The
-# vendor shapes, the assignment rule and vault needles still apply to these fields.
+# A metadata field named for a digest or an id holds one by design (a content hash for dedup): the
+# #619 hex shape would replace it and break lookups (test_convo_miner dedup). Only that: a direct value
+# that is ENTIRELY hex, under a key whose whole "_"-suffix names a digest or an id, skips the hex shape.
+# A token-shaped value there (mixed case: no digest is) is still redacted, and so is anything nested.
+_WHOLE_HEX = re.compile(r"[0-9a-fA-F]+(?:[,;][0-9a-fA-F]+)*")  # one digest, or a "," / ";" list of them
+# (a bundle's content_hash joins its conversations' digests with ",": convo_miner)
 _ID_FIELD = re.compile(r"(?i)(?:^|_)(?:hash|sha\d*|digest|ids?|ino|checksum|etag|fingerprint|recipe)$")
 
 
-def _redact_value(value, shapes: bool = True):
+def _redact_value(value, skip_hex: bool = False):
     """``value`` with its strings redacted, at any depth; the same object when nothing changed."""
     if isinstance(value, str):
-        clean = redact(value, shapes=shapes)
+        clean = redact(value, skip_hex=skip_hex)
         return value if clean == value else clean
     if isinstance(value, dict):
-        # The exemption covers only a direct, whitespace-free string under a key whose whole
-        # "_"-suffix names a hash or an id; nested values and free text get every shape.
         out = {
-            k: _redact_value(v, shapes and not (
-                isinstance(k, str) and _ID_FIELD.search(k) and isinstance(v, str) and not any(c.isspace() for c in v)
-            ))
+            k: _redact_value(v, isinstance(k, str) and bool(_ID_FIELD.search(k)) and isinstance(v, str)
+                             and bool(_WHOLE_HEX.fullmatch(v)))
             for k, v in value.items()
         }
         return value if all(out[k] is value[k] for k in value) else out
     if isinstance(value, (list, tuple)):
-        out = [_redact_value(v, shapes) for v in value]
+        out = [_redact_value(v) for v in value]
         if all(a is b for a, b in zip(out, value)):
             return value
         # A changed tuple comes back as a plain one: a subclass (a namedtuple) may not rebuild
