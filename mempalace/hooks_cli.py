@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from mempalace._proc import pid_alive as _pid_alive
 from mempalace.config import MempalaceConfig
 from mempalace.write_routing import (
     ResolvedWriteRoutingPolicy,
@@ -364,39 +365,6 @@ def _pid_file_for_cmd(cmd: list[str]) -> Path:
         key = " ".join(cmd)
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
     return _MINE_PID_DIR / f"mine_{digest}.pid"
-
-
-def _pid_alive(pid: int) -> bool:
-    """Cross-platform existence check for a PID.
-
-    On POSIX, ``os.kill(pid, 0)`` is the well-known no-op existence probe.
-    On Windows, ``os.kill`` maps to ``TerminateProcess(handle, sig)`` and
-    would *terminate* the target process with exit code ``sig`` — using
-    it here would kill our own mine child (or worse, the caller itself).
-    Use ``OpenProcess`` + ``GetExitCodeProcess`` via ctypes instead.
-    """
-    if sys.platform == "win32":
-        import ctypes
-        from ctypes import wintypes
-
-        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        STILL_ACTIVE = 259
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if not handle:
-            return False
-        try:
-            code = wintypes.DWORD()
-            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
-                return False
-            return code.value == STILL_ACTIVE
-        finally:
-            kernel32.CloseHandle(handle)
-    try:
-        os.kill(pid, 0)
-        return True
-    except (OSError, ValueError):
-        return False
 
 
 def _mine_already_running(cmd: list[str]) -> bool:
@@ -1428,6 +1396,21 @@ _ENCODED_PARENT_PREFIXES = (
     "Documents-",
 )
 
+# Git worktree parents that belong to the enclosing project, not to the
+# ephemeral worktree: Claude Code's own ``.claude/worktrees/`` plus the common
+# hand-rolled ``<project>/.worktrees/`` layout. Encoded forms are how the same
+# paths look once Claude Code flattens ``/`` and ``.`` to ``-``.
+_WORKTREE_CWD_MARKERS = ("/.claude/worktrees/", "/.worktrees/")
+_WORKTREE_ENCODED_MARKERS = ("-claude-worktrees-", "--worktrees-")
+
+
+def _before_first_marker(path: str, markers: tuple) -> str:
+    """``path`` cut at the EARLIEST worktree marker by position, whichever kind it is: a nested
+    ``/repo/.worktrees/a/.claude/worktrees/b`` belongs to ``/repo`` (fork, review of the upstream sync
+    2026-11-15: cutting at the first marker in tuple order kept ``/repo/.worktrees/a``)."""
+    hits = [i for i in (path.find(m) for m in markers) if i >= 0]
+    return path[: min(hits)] if hits else path
+
 
 def _safe_wing_slug(name: str) -> str:
     """Normalize a project directory name into a wing slug ``sanitize_name`` accepts.
@@ -1456,9 +1439,9 @@ def _cwd_from_jsonl(transcript_path: str) -> Optional[str]:
     types (tool_use, tool_result, user/assistant turns), but not all
     (e.g. queue-operation lines lack it). Scans up to 200 lines. Returns
     the path with forward slashes and no trailing slash, with a git
-    worktree under ``<project>/.claude/worktrees/`` collapsed to
-    ``<project>``, or ``None`` if the file is unreadable, empty, or
-    records no cwd.
+    worktree under ``<project>/.claude/worktrees/`` or
+    ``<project>/.worktrees/`` collapsed to ``<project>``, or ``None`` if
+    the file is unreadable, empty, or records no cwd.
     """
     try:
         path = Path(transcript_path).expanduser()
@@ -1481,12 +1464,11 @@ def _cwd_from_jsonl(transcript_path: str) -> Optional[str]:
                 cwd_norm = cwd.replace("\\", "/").rstrip("/")
                 if not cwd_norm:
                     continue
-                # A cwd inside "<project>/.claude/worktrees/<wt>" (a git
-                # worktree) belongs to <project>, not the ephemeral worktree
-                # directory -- otherwise every worktree spawns its own wing.
-                _wt_marker = "/.claude/worktrees/"
-                if _wt_marker in cwd_norm:
-                    cwd_norm = cwd_norm.split(_wt_marker, 1)[0]
+                # A cwd inside "<project>/.claude/worktrees/<wt>" or
+                # "<project>/.worktrees/<wt>" (a git worktree) belongs to
+                # <project>, not the ephemeral worktree directory --
+                # otherwise every worktree spawns its own wing.
+                cwd_norm = _before_first_marker(cwd_norm, _WORKTREE_CWD_MARKERS)
                 return cwd_norm
     except OSError:
         pass
@@ -1579,11 +1561,10 @@ def _wing_from_transcript_path(transcript_path: str) -> str:
     if match:
         encoded = match.group(1)
         # "<project>/.claude/worktrees/<wt>" flattens to "-<project>--claude-worktrees-<wt>"
-        # here; collapse it to <project> like _wing_from_jsonl_cwd already does for cwd,
-        # or every worktree spawns its own wing.
-        _wt_marker = "-claude-worktrees-"
-        if _wt_marker in encoded:
-            encoded = encoded.split(_wt_marker, 1)[0]
+        # and "<project>/.worktrees/<wt>" to "-<project>--worktrees-<wt>" here; collapse
+        # both to <project> like _wing_from_jsonl_cwd already does for cwd, or every
+        # worktree spawns its own wing.
+        encoded = _before_first_marker(encoded, _WORKTREE_ENCODED_MARKERS)
         # Strip platform user-home prefix so the wing isn't dominated by
         # /Users/<user>/ or /home/<user>/.
         m = re.match(r"(?:Users|home)-[^-]+-(.+)", encoded)

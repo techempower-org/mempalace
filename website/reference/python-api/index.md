@@ -9,6 +9,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 
 ### Top-level modules
 
+- [`mempalace._proc`](./_proc) — Process liveness.
 - [`mempalace.auto_query`](./auto_query) — Auto-query integration for MemPalace.
 - [`mempalace.auto_wake`](./auto_wake) — Wake-on-demand for a sleeping palace host.
 - [`mempalace.backends`](./backends) — Storage backend implementations for MemPalace (RFC 001).

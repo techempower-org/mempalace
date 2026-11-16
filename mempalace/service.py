@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import io
 import functools
+import json
 import os
 import sys
 from typing import Any
@@ -585,17 +586,81 @@ def run_diary_write(payload: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+_MCP_USAGE_ERROR_CODES = frozenset({-32600, -32601, -32602, -32700})
+
+
+def _daemon_result_from_mcp_response(response: Any) -> dict[str, Any]:
+    """Turn a tools/call JSON-RPC response into a daemon job result.
+
+    Tool payloads keep the handler's dict, including a bare ``{"error": ...}``
+    with no success flag, which is a failed job. A JSON-RPC error is a refusal
+    or a bad call and never a successful write.
+    """
+    if not isinstance(response, dict):
+        return {"success": False, "error": "empty MCP response", "exit_code": 1}
+    error = response.get("error")
+    if isinstance(error, dict) and "result" not in response:
+        code = error.get("code")
+        message = error.get("message") or "MCP tool call failed"
+        out: dict[str, Any] = {
+            "success": False,
+            "error": str(message),
+            "exit_code": 2 if code in _MCP_USAGE_ERROR_CODES else 1,
+        }
+        if isinstance(code, int):
+            out["jsonrpc_code"] = code
+        data = error.get("data")
+        if isinstance(data, dict) and data.get("tool"):
+            out["tool"] = data["tool"]
+        return out
+
+    result = response.get("result") or {}
+    content = (result.get("content") or []) if isinstance(result, dict) else []
+    # the first TEXT block: MCP allows other blocks (a resource, an image) before it
+    text = next(
+        (
+            b["text"]
+            for b in content
+            if isinstance(b, dict)
+            and b.get("type", "text") == "text"
+            and isinstance(b.get("text"), str)
+        ),
+        None,
+    )
+    # an MCP tool reports its own failure with isError: never a successful job, whatever the text says (fork,
+    # review of the upstream sync 2026-11-15)
+    if isinstance(result, dict) and result.get("isError") is True:
+        return {
+            "success": False,
+            "error": text if isinstance(text, str) and text else "MCP tool reported an error",
+            "exit_code": 1,
+        }
+    if not isinstance(text, str):
+        return {"success": True, "value": response.get("result"), "exit_code": 0}
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return {"success": True, "value": text, "exit_code": 0}
+    if isinstance(payload, dict):
+        if "success" not in payload:
+            payload["success"] = "error" not in payload
+        payload.setdefault("exit_code", 0 if payload.get("success") else 1)
+        return payload
+    return {"success": True, "value": payload, "exit_code": 0}
+
+
 @_restores_palace_env
 def run_mcp_tool(payload: dict[str, Any]) -> dict[str, Any]:
     """Execute an MCP tool by name over the daemon queue.
 
     The daemon is a durable, retried write surface — not a general MCP transport.
     Restrict ``mcp_tool`` to write-classified tools only: read tools would
-    exfiltrate verbatim palace content into the queue DB and the job result
-    (stored world-readable-by-default without the perms fix, and returned over
-    /jobs), and maintenance tools already have their own dedicated kinds
-    (mine/sync). No internal caller currently uses ``mcp_tool``; this allowlist
-    bounds the blast radius of the generic escape hatch.
+    exfiltrate verbatim palace content into the queue DB and the job result,
+    and maintenance tools already have their own dedicated kinds (mine/sync).
+
+    Dispatch goes through ``mcp_server.handle_request`` so the read-only,
+    sqlite-integrity, stale-library, diverged-index, and peer-writer gates run,
+    and so argument filtering and type coercion match a real tools/call.
     """
     name = payload.get("name")
     arguments = payload.get("arguments") or {}
@@ -619,17 +684,15 @@ def run_mcp_tool(payload: dict[str, Any]) -> dict[str, Any]:
 
     if name not in mcp_server.TOOLS:
         return {"success": False, "error": f"unknown MCP tool: {name}", "exit_code": 2}
-    result = mcp_server.TOOLS[name]["handler"](**arguments)
-    if isinstance(result, dict):
-        # Several write tools signal failure with a bare {"error": ...} and no
-        # explicit success flag (e.g. tool_create_tunnel / tool_delete_tunnel
-        # validation paths). Infer failure from the "error" key so the daemon
-        # does not persist a failed write as succeeded with exit_code 0.
-        if "success" not in result:
-            result["success"] = "error" not in result
-        result.setdefault("exit_code", 0 if result.get("success") else 1)
-        return result
-    return {"success": True, "value": result, "exit_code": 0}
+    response = mcp_server.handle_request(
+        {
+            "jsonrpc": "2.0",
+            "id": "daemon-mcp-tool",
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        }
+    )
+    return _daemon_result_from_mcp_response(response)
 
 
 def print_job_result(result: dict[str, Any]) -> int:
