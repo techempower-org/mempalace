@@ -2,7 +2,7 @@ seq: 206
 id: sync-c-review-fixes
 date: '2026-11-15'
 bucket: Fixed
-commit: HEAD
+commit: f7b742a
 area: Daemon
 summary: a daemon job whose MCP tool reported isError fails; nested worktree paths collapse to the outer project
 body: |

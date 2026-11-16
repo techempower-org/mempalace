@@ -39,6 +39,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stable ids on retry. Closes #623.
 
 
+### Fixed
+
+
+- **a daemon job whose MCP tool reported isError fails; nested worktree paths collapse to the outer project** ([`f7b742a`](https://github.com/techempower-org/mempalace/commit/f7b742a))
+  Two fixes found reviewing the 2026-11-15 upstream picks. A tools/call
+  response flagged isError was turned into a successful daemon job when
+  its text was not an error dict; it is now a failed job carrying the
+  tool's message. And the worktree collapse cut a path at the first marker
+  in its list rather than the earliest in the path, so a git worktree
+  inside a Claude Code worktree (or the reverse) kept the inner directory
+  as the project; it now cuts at the earliest marker by position.
+
+
 ## [2026-11-14]
 
 
