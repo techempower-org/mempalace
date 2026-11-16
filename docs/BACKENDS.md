@@ -68,3 +68,11 @@ Not palace backends, though they are sometimes listed as such: nomic embed
 via ollama-embed (no palace code path uses it), NVIDIA Nemotron (the
 `palace-nemotron` contest project), and Azure AI Foundry (`xreview`, the
 cross-model review).
+
+## Evaluated
+
+Candidates read or tried and not (yet) adopted. One row each, with where the evaluation lives.
+
+| Candidate | Kind | Status | Why, and what transfers |
+|---|---|---|---|
+| Memorilla (Stanford, arXiv 2610.21375; Apache-2.0) | recall model: a 194M memory module that reads a document store with the query and writes 16 latent tokens into a frozen Qwen3-8B | evaluated 2026-11-16, not adopted | Latent tokens cannot reach hosted models; the output is a lossy derivative; it is tied to one model pair; inference needs a ≥32 GB bf16 card. What transfers: query-dependent *selection* of verbatim text before injection, and its personal-memory benchmarks for measuring recall. A three-stage experiment (public data first; drawers only on a local card) is in [the read](research/2026-11-16-memorilla-read.md). |
