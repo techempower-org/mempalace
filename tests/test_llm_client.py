@@ -671,3 +671,71 @@ def test_served_models_withholds_env_key_from_external_endpoint_without_consent(
 def test_served_models_sends_env_key_once_external_use_is_accepted(monkeypatch):
     request = _served_models_request(monkeypatch, accepted=True)
     assert request.get_header("Authorization") == "Bearer env-key"
+
+
+def test_classify_does_not_contact_external_endpoint_with_env_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("contacted an external endpoint")
+
+    with patch("mempalace.llm_client.urlopen", side_effect=boom):
+        provider = OpenAICompatProvider(model="x", endpoint="https://api.openai.com/v1")
+        with pytest.raises(LLMError, match="non-local"):
+            provider.classify("system", "user text")
+
+
+def test_classify_sends_env_key_when_external_use_is_accepted(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    captured = {}
+
+    def fake_urlopen(req, *, timeout):
+        captured["auth"] = req.get_header("Authorization")
+        return _mock_openai_response('{"ok": true}')
+
+    with patch("mempalace.llm_client.urlopen", side_effect=fake_urlopen):
+        provider = OpenAICompatProvider(model="x", endpoint="https://api.openai.com/v1")
+        provider.external_use_accepted = True
+        assert provider.classify("s", "u").text == '{"ok": true}'
+    assert captured["auth"] == "Bearer sk-from-env"
+
+
+def test_classify_sends_explicit_key_to_external_endpoint():
+    captured = {}
+
+    def fake_urlopen(req, *, timeout):
+        captured["auth"] = req.get_header("Authorization")
+        return _mock_openai_response('{"ok": true}')
+
+    with patch("mempalace.llm_client.urlopen", side_effect=fake_urlopen):
+        provider = OpenAICompatProvider(
+            model="x", endpoint="https://api.openai.com/v1", api_key="sk-flag"
+        )
+        provider.classify("s", "u")
+    assert captured["auth"] == "Bearer sk-flag"
+
+
+def test_classify_sends_env_key_to_local_endpoint(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    captured = {}
+
+    def fake_urlopen(req, *, timeout):
+        captured["auth"] = req.get_header("Authorization")
+        return _mock_openai_response('{"ok": true}')
+
+    with patch("mempalace.llm_client.urlopen", side_effect=fake_urlopen):
+        provider = OpenAICompatProvider(model="x", endpoint="http://127.0.0.1:11434/v1")
+        provider.classify("s", "u")
+    assert captured["auth"] == "Bearer sk-from-env"
+
+
+def test_anthropic_classify_does_not_contact_with_env_key(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-env")
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("contacted Anthropic")
+
+    with patch("mempalace.llm_client.urlopen", side_effect=boom):
+        provider = AnthropicProvider(model="claude-haiku")
+        with pytest.raises(LLMError, match="non-local"):
+            provider.classify("s", "u")

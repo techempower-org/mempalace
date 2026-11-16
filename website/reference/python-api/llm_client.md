@@ -77,6 +77,25 @@ Subclasses that resolve their endpoint dynamically should override
 if needed; the default works for the three in-tree providers
 (Ollama / OpenAI-compat / Anthropic).
 
+#### `sends_api_key`
+
+```python
+def sends_api_key(self) -> bool
+```
+
+Whether the stored key may be attached to a request.
+
+An environment key is withheld from an external endpoint until the
+caller has accepted that use. An explicit key is sent.
+
+#### `block_silent_external_key`
+
+```python
+def block_silent_external_key(self) -> Optional[str]
+```
+
+Error when classify would send an env key off-machine, else None.
+
 ### `class OllamaProvider(LLMProvider)`
 
 #### `__init__`
@@ -167,6 +186,34 @@ def classify(self, system: str, user: str, json_mode: bool = True, think: Option
 ```
 
 ## Functions
+
+### `endpoint_is_local`
+
+```python
+def endpoint_is_local(url: Optional[str]) -> bool
+```
+
+Public name for :func:`_endpoint_is_local`.
+
+### `resolve_openai_url`
+
+```python
+def resolve_openai_url(endpoint: str, leaf: str) -> str
+```
+
+Join an OpenAI-compatible base URL with ``leaf`` (``chat/completions`` or ``embeddings``).
+
+### `require_external_consent`
+
+```python
+def require_external_consent(provider: LLMProvider, *, accept: bool = False, interactive: bool = False, prompt: Optional[str] = None) -> bool
+```
+
+Allow an external endpoint only with an explicit yes.
+
+Local endpoints are allowed. ``accept`` records consent without a prompt.
+``interactive`` asks on stdin. A yes sets ``external_use_accepted`` so an
+environment key may be sent.
 
 ### `get_provider`
 
