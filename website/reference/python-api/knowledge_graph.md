@@ -61,7 +61,7 @@ Close the database connection.
 def add_entity(self, name: str, entity_type: str = 'unknown', properties: dict = None)
 ```
 
-Add or update an entity node.
+Add an entity, or merge type and properties into the existing node.
 
 #### `add_triple`
 
@@ -220,11 +220,66 @@ converge on re-pull; rows are never deleted by replication.
 def stats(self)
 ```
 
+#### `report_entity_id_collisions`
+
+```python
+def report_entity_id_collisions(self) -> list
+```
+
+Report legacy ids that dropped punctuation. Stored ids stay as they are.
+
 #### `seed_from_entity_facts`
 
 ```python
 def seed_from_entity_facts(self, entity_facts: dict)
 ```
 
-Seed the knowledge graph from fact_checker.py ENTITY_FACTS.
-This bootstraps the graph with known ground truth.
+Seed entities and triples from the given fact records.
+
+Names, dates, and relationship targets are stored as given. A missing
+target is skipped. Each relationship is written once.
+
+## Functions
+
+### `canonical_entity_name`
+
+```python
+def canonical_entity_name(name: str) -> str
+```
+
+NFC, case-folded name with whitespace runs collapsed.
+
+### `entity_id_for_name`
+
+```python
+def entity_id_for_name(name: str) -> str
+```
+
+Reversible id: punctuation stays, so distinct names stay distinct.
+
+``decode_entity_id`` returns ``canonical_entity_name``. Whitespace is
+an underscore; an underscore that was part of the name is ``%5F``.
+
+### `decode_entity_id`
+
+```python
+def decode_entity_id(entity_id: str) -> str
+```
+
+Return the canonical name encoded in ``entity_id``.
+
+### `legacy_entity_id`
+
+```python
+def legacy_entity_id(name: str) -> str
+```
+
+Historical id. Apostrophes were stripped, so it can merge names.
+
+### `disambiguated_entity_id`
+
+```python
+def disambiguated_entity_id(name: str) -> str
+```
+
+Id used when the reversible id is already a different entity.
