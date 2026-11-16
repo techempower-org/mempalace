@@ -614,8 +614,17 @@ def _daemon_result_from_mcp_response(response: Any) -> dict[str, Any]:
             out["tool"] = data["tool"]
         return out
 
-    content = (response.get("result") or {}).get("content") or []
+    result = response.get("result") or {}
+    content = (result.get("content") or []) if isinstance(result, dict) else []
     text = content[0].get("text") if content and isinstance(content[0], dict) else None
+    # an MCP tool reports its own failure with isError: never a successful job, whatever the text says (fork,
+    # review of the upstream sync 2026-11-15)
+    if isinstance(result, dict) and result.get("isError") is True:
+        return {
+            "success": False,
+            "error": text if isinstance(text, str) and text else "MCP tool reported an error",
+            "exit_code": 1,
+        }
     if not isinstance(text, str):
         return {"success": True, "value": response.get("result"), "exit_code": 0}
     try:

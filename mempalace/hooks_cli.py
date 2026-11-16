@@ -1404,6 +1404,14 @@ _WORKTREE_CWD_MARKERS = ("/.claude/worktrees/", "/.worktrees/")
 _WORKTREE_ENCODED_MARKERS = ("-claude-worktrees-", "--worktrees-")
 
 
+def _before_first_marker(path: str, markers: tuple) -> str:
+    """``path`` cut at the EARLIEST worktree marker by position, whichever kind it is: a nested
+    ``/repo/.worktrees/a/.claude/worktrees/b`` belongs to ``/repo`` (fork, review of the upstream sync
+    2026-11-15: cutting at the first marker in tuple order kept ``/repo/.worktrees/a``)."""
+    hits = [i for i in (path.find(m) for m in markers) if i >= 0]
+    return path[: min(hits)] if hits else path
+
+
 def _safe_wing_slug(name: str) -> str:
     """Normalize a project directory name into a wing slug ``sanitize_name`` accepts.
 
@@ -1460,10 +1468,7 @@ def _cwd_from_jsonl(transcript_path: str) -> Optional[str]:
                 # "<project>/.worktrees/<wt>" (a git worktree) belongs to
                 # <project>, not the ephemeral worktree directory --
                 # otherwise every worktree spawns its own wing.
-                for _wt_marker in _WORKTREE_CWD_MARKERS:
-                    if _wt_marker in cwd_norm:
-                        cwd_norm = cwd_norm.split(_wt_marker, 1)[0]
-                        break
+                cwd_norm = _before_first_marker(cwd_norm, _WORKTREE_CWD_MARKERS)
                 return cwd_norm
     except OSError:
         pass
@@ -1559,10 +1564,7 @@ def _wing_from_transcript_path(transcript_path: str) -> str:
         # and "<project>/.worktrees/<wt>" to "-<project>--worktrees-<wt>" here; collapse
         # both to <project> like _wing_from_jsonl_cwd already does for cwd, or every
         # worktree spawns its own wing.
-        for _wt_marker in _WORKTREE_ENCODED_MARKERS:
-            if _wt_marker in encoded:
-                encoded = encoded.split(_wt_marker, 1)[0]
-                break
+        encoded = _before_first_marker(encoded, _WORKTREE_ENCODED_MARKERS)
         # Strip platform user-home prefix so the wing isn't dominated by
         # /Users/<user>/ or /home/<user>/.
         m = re.match(r"(?:Users|home)-[^-]+-(.+)", encoded)

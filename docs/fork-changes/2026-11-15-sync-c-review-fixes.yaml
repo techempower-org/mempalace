@@ -1,0 +1,15 @@
+seq: 206
+id: sync-c-review-fixes
+date: '2026-11-15'
+bucket: Fixed
+commit: HEAD
+area: Daemon
+summary: a daemon job whose MCP tool reported isError fails; nested worktree paths collapse to the outer project
+body: |
+  Two fixes found reviewing the 2026-11-15 upstream picks. A tools/call
+  response flagged isError was turned into a successful daemon job when
+  its text was not an error dict; it is now a failed job carrying the
+  tool's message. And the worktree collapse cut a path at the first marker
+  in its list rather than the earliest in the path, so a git worktree
+  inside a Claude Code worktree (or the reverse) kept the inner directory
+  as the project; it now cuts at the earliest marker by position.

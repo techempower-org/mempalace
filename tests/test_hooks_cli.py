@@ -3151,3 +3151,25 @@ def test_ingest_transcript_passes_the_project_wing_to_mine(tmp_path, monkeypatch
     )
     hooks_cli._ingest_transcript(path)
     assert jobs and jobs[0]["wing"] == "mempalace"
+
+
+def test_nested_worktree_markers_collapse_to_the_outermost_project():
+    from mempalace.hooks_cli import (
+        _before_first_marker,
+        _WORKTREE_CWD_MARKERS,
+        _WORKTREE_ENCODED_MARKERS,
+    )
+
+    assert (
+        _before_first_marker("/repo/.worktrees/a/.claude/worktrees/b", _WORKTREE_CWD_MARKERS)
+        == "/repo"
+    )
+    assert (
+        _before_first_marker("/repo/.claude/worktrees/a/.worktrees/b", _WORKTREE_CWD_MARKERS)
+        == "/repo"
+    )
+    assert (
+        _before_first_marker("-repo--worktrees-a-claude-worktrees-b", _WORKTREE_ENCODED_MARKERS)
+        == "-repo"
+    )
+    assert _before_first_marker("/repo/src", _WORKTREE_CWD_MARKERS) == "/repo/src"
