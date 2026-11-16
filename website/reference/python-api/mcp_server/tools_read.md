@@ -31,7 +31,7 @@ def tool_get_taxonomy()
 ### `tool_search`
 
 ```python
-def tool_search(query: str, limit: int = 15, wing: str = None, room: str = None, tags: list = None, source_file: str = None, since: str = None, before: str = None, max_distance: float = None, min_similarity: float = None, context: str = None, candidate_strategy: str = None, fusion_mode: str = 'convex', include_trace: bool = False, cli_compatible: bool = False, include_media: bool = False, query_task: str = 'search')
+def tool_search(query: str, limit: int = 15, wing: str = None, room: str = None, tags: list = None, source_file: str = None, since: str = None, before: str = None, max_distance: float = None, min_similarity: float = None, context: str = None, candidate_strategy: str = None, fusion_mode: str = 'convex', include_trace: bool = False, cli_compatible: bool = False, include_media: bool = False, query_task: str = 'search', all_classes: bool = False)
 ```
 
 ### `tool_check_duplicate`
