@@ -5,9 +5,11 @@ Covers: entity CRUD, triple CRUD, temporal queries, invalidation,
 timeline, stats, and edge cases (duplicate triples, ID collisions).
 """
 
+import json
+
 import pytest
 import sqlite3
-from mempalace.knowledge_graph import KnowledgeGraph
+from mempalace.knowledge_graph import KnowledgeGraph, decode_entity_id
 
 
 class TestEntityOperations:
@@ -22,9 +24,78 @@ class TestEntityOperations:
     def test_add_entity_upsert(self, kg):
         kg.add_entity("Alice", entity_type="person")
         kg.add_entity("Alice", entity_type="engineer")
-        # Should not raise — INSERT OR REPLACE
         stats = kg.stats()
         assert stats["entities"] == 1
+
+    def test_readd_entity_keeps_existing_properties(self, kg):
+        kg.add_entity("Alice", entity_type="person", properties={"birthday": "1990-01-01"})
+        eid = kg.add_entity("Alice", entity_type="pet")
+        assert eid == "alice"
+        kg.add_entity("Alice")
+        row = (
+            sqlite3.connect(kg.db_path)
+            .execute("SELECT name, type, properties FROM entities WHERE id = ?", ("alice",))
+            .fetchone()
+        )
+        assert row[0] == "Alice"
+        assert row[1] == "pet"
+        assert json.loads(row[2]) == {"birthday": "1990-01-01"}
+
+    def test_apostrophe_names_stay_distinct_and_roundtrip(self, kg):
+        obrien = kg.add_entity("O'Brien", entity_type="person", properties={"role": "editor"})
+        plain = kg.add_entity("OBrien", entity_type="person", properties={"role": "author"})
+        assert obrien == "o'brien"
+        assert plain == "obrien"
+        assert obrien != plain
+        assert decode_entity_id(obrien) == "o'brien"
+        assert decode_entity_id(plain) == "obrien"
+        assert decode_entity_id(kg.add_entity("Dr. Chen")) == "dr. chen"
+        assert kg.stats()["entities"] == 3
+
+    def test_legacy_id_is_kept_and_does_not_absorb_a_different_name(self, kg):
+        with kg._lock:
+            conn = kg._conn()
+            conn.execute(
+                "INSERT INTO entities (id, name, type, properties) VALUES (?, ?, ?, ?)",
+                ("obrien", "O'Brien", "person", '{"clan": "a"}'),
+            )
+            conn.commit()
+        kept = kg.add_entity("O'Brien", entity_type="person", properties={"role": "editor"})
+        other = kg.add_entity("OBrien", entity_type="person")
+        assert kept == "obrien"
+        assert other != kept
+        assert decode_entity_id(other) == "obrien"
+        row = (
+            sqlite3.connect(kg.db_path)
+            .execute("SELECT id, properties FROM entities WHERE name = ?", ("O'Brien",))
+            .fetchone()
+        )
+        assert row[0] == "obrien"
+        assert json.loads(row[1]) == {"clan": "a", "role": "editor"}
+        reports = kg.report_entity_id_collisions()
+        assert reports == [
+            {
+                "id": "obrien",
+                "name": "O'Brien",
+                "reversible_id": "o'brien",
+                "legacy_id": "obrien",
+                "detail": "stored id left unchanged",
+            }
+        ]
+
+    def test_new_triple_records_utc(self, kg, monkeypatch):
+        seen = {}
+        import mempalace.knowledge_graph as kg_mod
+
+        real = kg_mod.make_triple_id
+
+        def spy(sub_id, predicate, obj_id, valid_from, recorded_at):
+            seen["recorded_at"] = recorded_at
+            return real(sub_id, predicate, obj_id, valid_from, recorded_at)
+
+        monkeypatch.setattr(kg_mod, "make_triple_id", spy)
+        kg.add_triple("Alice", "knows", "Bob")
+        assert seen["recorded_at"].endswith("+00:00")
 
 
 class TestTripleOperations:

@@ -26,8 +26,7 @@ class TestSeedFromEntityFacts:
         assert stats["entities"] >= 1
         results = kg.query_entity("Alice Smith", direction="outgoing")
         predicates = {r["predicate"] for r in results}
-        assert "married_to" in predicates
-        assert "is_partner_of" in predicates
+        assert predicates == {"married_to"}
 
     def test_seed_child(self, kg):
         facts = {
@@ -42,8 +41,8 @@ class TestSeedFromEntityFacts:
         kg.seed_from_entity_facts(facts)
         results = kg.query_entity("Max", direction="outgoing")
         predicates = {r["predicate"] for r in results}
-        assert "child_of" in predicates
-        assert "is_child_of" in predicates
+        assert predicates == {"child_of"}
+        assert all(r["object"] == "alice" for r in results)
 
     def test_seed_sibling(self, kg):
         facts = {
@@ -83,9 +82,9 @@ class TestSeedFromEntityFacts:
         }
         kg.seed_from_entity_facts(facts)
         results = kg.query_entity("Max", direction="outgoing")
-        objects = {r["object"] for r in results if r["predicate"] == "loves"}
-        assert "Swimming" in objects
-        assert "Chess" in objects
+        loves = [r for r in results if r["predicate"] == "loves"]
+        assert {r["object"] for r in loves} == {"swimming", "chess"}
+        assert {r["valid_from"] for r in loves} == {None}
 
     def test_seed_minimal_facts(self, kg):
         """Facts with no relationships just create entities."""
@@ -93,6 +92,16 @@ class TestSeedFromEntityFacts:
         kg.seed_from_entity_facts(facts)
         stats = kg.stats()
         assert stats["entities"] >= 1
+
+    def test_seed_skips_missing_targets(self, kg):
+        kg.seed_from_entity_facts(
+            {
+                "ann": {"full_name": "Ann", "relationship": "daughter"},
+                "rex": {"full_name": "Rex", "relationship": "dog"},
+            }
+        )
+        assert kg.query_entity("Ann", direction="outgoing") == []
+        assert kg.query_entity("Rex", direction="outgoing") == []
 
 
 class TestQueryRelationshipWithTime:
