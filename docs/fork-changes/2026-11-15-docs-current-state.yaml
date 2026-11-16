@@ -1,0 +1,20 @@
+seq: 205
+id: docs-current-state
+date: '2026-11-15'
+bucket: Changed
+commit: HEAD
+area: Docs
+summary: README, ARCHITECTURE and BACKENDS brought to 2026-11-15 (redaction, judged classes, the judge backend)
+body: |
+  The README's current state and planned work, the architecture's new
+  safety-layers section and the backends list now describe redaction on
+  every write (shapes, prefix-free shapes, vault-item needles, fail
+  closed, and the check that watches it), the judged-drawer-classes design
+  (two of three, a strict majority of four on the disagreement set, a flag
+  and never a delete, the search exclusion and --all-classes from #635),
+  the batch judge
+  backend (open-weight judges on a rented GPU host, redacted inputs from
+  allowlisted wings, proposal-only ledgers with scrubbed reasons), the
+  status --json gap (#618) and the 2026-11-15 upstream triage. The
+  backends list names kinds of sources only: no host, path, person,
+  account or secret's name.

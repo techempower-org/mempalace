@@ -173,6 +173,26 @@ When the HNSW index is genuinely degraded (rare, post-fix), the same call return
 
 **Hybrid retrieval (2026-05-24).** `candidate_strategy="hybrid"` (vector ∪ tsvector BM25 ∪ AGE graph-expanded candidates, hybrid-reranked) is now the MCP default for all callers.
 
+**Redaction on every write (2026-11-15).** Every backend collection redacts documents and string metadata before
+they are stored: vendor and assignment shapes, prefix-free shapes (long mixed tokens, long hex, quoted secret
+runs), and vault-item needles that name items by id and label, never by value (#596, #604, #615, #621). Pattern
+matching cannot recognise every secret, so the needles cover known values that have no shape. A write whose
+patterns cannot load is refused rather than stored unscanned, and a check in palace-daemon detects and reports
+refused writes on the operator's status page. See [Safety layers](docs/ARCHITECTURE.md#safety-layers-2026-11-15).
+
+**Judged drawer classes (designed 2026-11-15, not applied).** Two open-weight models classified drawers as keep,
+chatter, stale or secret. Where their first passes agree, that class applies; where they disagree, a tie-break pass
+by each gives four verdicts, and a class applies only when at least three agree and none said secret. For
+chatter and stale it is a metadata flag that deletes nothing; a secret drawer is first re-redacted in place
+(irreversibly: removing the flag does not restore its text). Default search already leaves out drawers flagged
+chatter or stale, and `--all-classes` (`all_classes=True` in the API and the MCP tool) includes them (#635); the run
+that writes flags has not happened yet ([design](docs/designs/judged-drawer-classes.md), #622). The judges are documented as a batch backend in
+[BACKENDS.md](docs/BACKENDS.md).
+
+**Upstream sync (2026-11-15).** The 281 upstream commits since the last sync point are triaged commit by commit in
+[docs/UPSTREAM-SYNC-2026-11-15.md](docs/UPSTREAM-SYNC-2026-11-15.md) (now, later or skip, each with its reason); the
+"now" bucket is cherry-picked in topic PRs.
+
 ## What this fork ships
 
 Three bands of work, all instances of the [architectural principles](docs/ARCHITECTURE.md#design-principles). Detail rows in the [fork change inventory](#fork-change-inventory) and [`FORK_CHANGELOG.md`](FORK_CHANGELOG.md).
@@ -192,7 +212,7 @@ The complete current-state map of code divergence from `upstream/develop` (as of
 | **Postgres production backend** | `backends/postgres.py` (RFC 001, psycopg3, production at 411K drawers), `migrate_to_postgres.py`, install/cutover scripts, postgres fast paths in `tool_status` | Fork-only; upstream ships a parallel `backends/pgvector.py` — consolidation candidate |
 | **Knowledge graph on Apache AGE** | `knowledge_graph_age.py`, `palace_graph_age.py`, `backfill_age.py`, LLM triple-extraction pipeline (`kg_llm_extractor.py`, `kg_triple_worker.py`, write-through, canonical vocab + predicate normalization), systemd worker units | Fork-only; composes with upstream #1895 graph auto-population; upstream PR #1903 (`BaseKGStore`) would give it a proper plug point |
 | **Retrieval quality stack** | `rrf.py` (opt-in RRF fusion; convex default won our labeled A/B), `multi_encoder.py`, `cross_encoder_rerank.py`, `calibration.py` (isotonic scaffolding), `recency.py` (decay weighting), BM25 top-up warnings | Fork-only; rerank/calibration pending a labeled conversational probe set |
-| **Ingest & write quality** | `write_sanitizer.py`, `novelty.py` + wiring (novelty tagging on mine), `room_taxonomy.py` (canonical 7-room taxonomy + validation), `pending_queue.py`, verbatim mode (`hooks.verbatim_mode`), miner `--workers` parallel-prepare | Fork-only |
+| **Ingest & write quality** | `redact.py` (redacts matching secrets before storage; refuses writes when its patterns cannot load), `write_sanitizer.py`, `novelty.py` + wiring (novelty tagging on mine), `room_taxonomy.py` (canonical 7-room taxonomy + validation), `pending_queue.py`, verbatim mode (`hooks.verbatim_mode`), miner `--workers` parallel-prepare | Fork-only |
 | **Source adapters (RFC 002)** | `sources/` adapter contract + concrete adapters: opencode, aider, codex, gemini, warp, conversations, filesystem | RFC 002 + OpenCode adapter PR'd upstream ([#1484](https://github.com/MemPalace/mempalace/pull/1484) open); upstream detects session formats in `normalize.py` instead — architectural conversation |
 | **Feedback & ratings** | `ratings.py` + `mempalace_rate_memory` MCP tool (bounded rating signal into ranking) | Fork-only |
 | **Embedding** | `adaptmem_ft` SentenceTransformer encoder option, ORT intra-op thread cap + lazy-download fix for the capped session | Fork-only (thread-cap issue upstream #1068) |
@@ -200,7 +220,7 @@ The complete current-state map of code divergence from `upstream/develop` (as of
 | **Hooks** | Silent deterministic saves (`hook_silent_save`), PostCompact + SessionStart compact-recovery wiring, ms-scale timeouts, `hooks/palace-auto-query.sh` | Fork-only; upstream moved toward non-blocking saves in v3.3.0 — direction already aligned |
 | **Docs/CI machinery** | `docs/fork-changes/` + renderers, `check-docs.sh` drift gate, lint-docs workflow, ARCHITECTURE/ECOSYSTEM/BIBLIOGRAPHY, benchmark corpora + eval scripts (fusion A/B, rerank, chunk ablation) | Fork-specific (eval scripts upstreamable) |
 
-Not divergence: everything else — the fork tracks upstream verbatim and re-syncs regularly (last: 213 commits, [#369](https://github.com/techempower-org/mempalace/pull/369)).
+Not divergence: everything else — the fork tracks upstream verbatim and re-syncs regularly (last full sync: 213 commits, [#369](https://github.com/techempower-org/mempalace/pull/369); since then, cherry-picks per [docs/UPSTREAM-SYNC-2026-11-15.md](docs/UPSTREAM-SYNC-2026-11-15.md)).
 
 ## Planned work
 
@@ -214,7 +234,7 @@ Organized around the [verbatim-vs-derivative axis](docs/ARCHITECTURE.md#1-verbat
 | P3 | Feedback loops (rerank + rating MCP tool) | **Shipped** (`mempalace_rate_memory` + bounded rating signal); rerank tracked upstream | Fork-side; see [`FORK_CHANGELOG.md`](FORK_CHANGELOG.md) |
 | P4 | KG auto-population + entity resolution | **Shipped 2026-05-22** | [PR #101](https://github.com/techempower-org/mempalace/pull/101) |
 | P5 | Temporal fact validity (SPOC context slot) | Open, depends on P4 | — |
-| P6 | Input sanitization on writes | Low priority while local-only | — |
+| P6 | Input sanitization on writes | **Shipped**: redaction on every write, fail closed (2026-11-15) | #596, #604, #615, #621 |
 | P7 | Alternative storage modes | **Shipped** (pgvector+AGE) | [RFC 001 #743](https://github.com/MemPalace/mempalace/pull/743) |
 | P8 | Corpus partitioning by purpose | On hold | [Design doc](docs/designs/multi-palace-separation.md) |
 
