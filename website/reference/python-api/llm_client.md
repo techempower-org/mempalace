@@ -29,6 +29,15 @@ normalizes that away from the caller.
 
 Raised for any provider failure — transport, parse, auth, missing model.
 
+``status`` is the HTTP status when the endpoint answered with an error.
+The message is masked: an endpoint URL or reply may carry a key.
+
+#### `__init__`
+
+```python
+def __init__(self, message: str, status: Optional[int] = None)
+```
+
 ### `class LLMResponse`
 
 ### `class LLMProvider`
@@ -203,6 +212,16 @@ def resolve_openai_url(endpoint: str, leaf: str) -> str
 
 Join an OpenAI-compatible base URL with ``leaf`` (``chat/completions`` or ``embeddings``).
 
+### `redact_secrets`
+
+```python
+def redact_secrets(text: str) -> str
+```
+
+Mask credentials a URL or one of our own messages may carry: a second layer, not a filter for untrusted
+text (errors never repeat an endpoint's reply; see describe_failure). Patterns cannot find every secret: an
+escaped quote or a multi-line YAML value defeats the assignment mask, which is why replies are not echoed.
+
 ### `require_external_consent`
 
 ```python
@@ -214,6 +233,26 @@ Allow an external endpoint only with an explicit yes.
 Local endpoints are allowed. ``accept`` records consent without a prompt.
 ``interactive`` asks on stdin. A yes sets ``external_use_accepted`` so an
 environment key may be sent.
+
+### `endpoint_label`
+
+```python
+def endpoint_label(url: str) -> str
+```
+
+The endpoint as an error may name it: scheme, host, port and a plain path. Never userinfo, a query or a
+fragment, which can carry a key under any spelling (xreview 2026-11-15); a URL that does not parse cleanly
+is "the configured endpoint".
+
+### `describe_failure`
+
+```python
+def describe_failure(e: BaseException) -> str
+```
+
+What went wrong, in words that never come from the endpoint: the exception's type, and an OS error's own
+description. Never the exception's text, a reply, or an HTTP reason phrase, any of which can carry a key
+(xreview 2026-11-15: no pattern reliably finds an arbitrary credential in untrusted text).
 
 ### `get_provider`
 

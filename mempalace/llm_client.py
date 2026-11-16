@@ -23,10 +23,12 @@ normalizes that away from the caller.
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Optional
 from urllib.error import HTTPError, URLError
@@ -142,8 +144,47 @@ def resolve_openai_url(endpoint: str, leaf: str) -> str:
     return f"{url}/{leaf.strip('/')}"
 
 
+# Masks for keys an endpoint URL, a header or an echoed reply can carry into an error message (ported from
+# upstream 857fbec4, "mask endpoint credentials in embedding and LLM errors"; 2026-11-15 sync).
+_SECRET_NAME = r"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|pwd|auth(?:orization)?)"
+_SECRETS = (
+    (re.compile(r"\bsk-[A-Za-z0-9_\-]{6,}"), "sk-***"),
+    (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=\-]+"), r"\1 ***"),
+    # user:password@ in a URL's authority
+    (re.compile(r"(//)[^/@\s]*@"), r"\1***@"),
+    # ?key=… query parameters: the whole value
+    (re.compile(r"(?i)([?&](?:[a-z_-]*" + _SECRET_NAME + r")=)[^&\s#]+"), r"\1***"),
+    # "token": "…", password='…', secret: … (JSON, YAML, headers): the whole value, quoted or bare
+    (
+        re.compile(
+            r"(?i)([\"']?[a-z_-]*"
+            + _SECRET_NAME
+            + r"[\"']?\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;&}\]]+)"
+        ),
+        r"\1***",
+    ),
+)
+
+
+def redact_secrets(text: str) -> str:
+    """Mask credentials a URL or one of our own messages may carry: a second layer, not a filter for untrusted
+    text (errors never repeat an endpoint's reply; see describe_failure). Patterns cannot find every secret: an
+    escaped quote or a multi-line YAML value defeats the assignment mask, which is why replies are not echoed."""
+    for pattern, replacement in _SECRETS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 class LLMError(RuntimeError):
-    """Raised for any provider failure — transport, parse, auth, missing model."""
+    """Raised for any provider failure — transport, parse, auth, missing model.
+
+    ``status`` is the HTTP status when the endpoint answered with an error.
+    The message is masked: an endpoint URL or reply may carry a key.
+    """
+
+    def __init__(self, message: str, status: Optional[int] = None):
+        super().__init__(redact_secrets(str(message)))
+        self.status = status
 
 
 @dataclass
@@ -275,27 +316,69 @@ def require_external_consent(
     return False
 
 
-def _http_post_json(url: str, body: dict, headers: dict, timeout: int) -> dict:
-    """POST JSON and return the parsed response. Raises LLMError on any failure."""
-    req = Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json", **headers},
-    )
+_PLAIN_PATH = re.compile(r"[A-Za-z0-9/_.\-]{0,64}")
+
+
+def endpoint_label(url: str) -> str:
+    """The endpoint as an error may name it: scheme, host, port and a plain path. Never userinfo, a query or a
+    fragment, which can carry a key under any spelling (xreview 2026-11-15); a URL that does not parse cleanly
+    is "the configured endpoint"."""
+    vague = "the configured endpoint"
+    if not isinstance(url, str) or any(c.isspace() for c in url) or url.count("@") > 1:
+        return vague
     try:
+        u = urlparse(url)
+        port = u.port
+    except ValueError:
+        return vague
+    if not u.scheme or not u.hostname:
+        return vague
+    path = u.path if _PLAIN_PATH.fullmatch(u.path or "") else ""
+    return f"{u.scheme}://{u.hostname}{f':{port}' if port else ''}{path}"
+
+
+def describe_failure(e: BaseException) -> str:
+    """What went wrong, in words that never come from the endpoint: the exception's type, and an OS error's own
+    description. Never the exception's text, a reply, or an HTTP reason phrase, any of which can carry a key
+    (xreview 2026-11-15: no pattern reliably finds an arbitrary credential in untrusted text)."""
+    if isinstance(e, HTTPError):
+        return f"HTTP {e.code}" + (" (authentication failed)" if e.code in (401, 403) else "")
+    if isinstance(e, json.JSONDecodeError):
+        return f"malformed JSON at line {e.lineno} column {e.colno}"
+    reason = getattr(e, "reason", None)
+    inner = reason if isinstance(reason, BaseException) else e
+    # the OS's own words for an errno (os.strerror), never the exception's stored strerror text
+    errno_ = getattr(inner, "errno", None)
+    desc = os.strerror(errno_) if isinstance(errno_, int) and errno_ > 0 else ""
+    return type(inner).__name__ + (f" ({desc})" if desc else "")
+
+
+def _http_post_json(url: str, body: dict, headers: dict, timeout: int) -> dict:
+    """POST JSON and return the parsed response. Raises LLMError on any failure.
+
+    The error names the (masked) endpoint and describes the failure in fixed words; it never repeats the reply.
+    Every wrap is ``from None``: the original exception, whose text can hold the URL's credentials or the reply,
+    is neither the cause nor the context a traceback prints.
+    """
+    try:
+        # inside the guard: Request itself raises ValueError on a bad URL, with the URL in its text
+        req = Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json", **headers},
+        )
         with urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
     except HTTPError as e:
-        detail = ""
-        try:
-            detail = e.read().decode("utf-8", errors="replace")[:500]
-        except Exception:
-            pass
-        raise LLMError(f"HTTP {e.code} from {url}: {detail or e.reason}") from e
-    except (URLError, OSError) as e:
-        raise LLMError(f"Cannot reach {url}: {e}") from e
+        raise LLMError(f"{describe_failure(e)} from {endpoint_label(url)}", status=e.code) from None
     except json.JSONDecodeError as e:
-        raise LLMError(f"Malformed response from {url}: {e}") from e
+        raise LLMError(
+            f"Malformed response from {endpoint_label(url)}: {describe_failure(e)}"
+        ) from None
+    except ValueError:  # an invalid or missing URL scheme
+        raise LLMError(f"Cannot reach {endpoint_label(url)}: invalid URL") from None
+    except (URLError, OSError, http.client.HTTPException) as e:
+        raise LLMError(f"Cannot reach {endpoint_label(url)}: {describe_failure(e)}") from None
 
 
 # ==================== OLLAMA ====================
