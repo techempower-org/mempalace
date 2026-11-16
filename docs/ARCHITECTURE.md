@@ -136,9 +136,11 @@ re-redacted in place under the rules above (its text changes and its embedding i
 Removing the keys does not undo that redaction, by design; the pre-redaction text is not kept, and the run backs up
 the metadata of every row before it writes.
 
-Default search will exclude chatter and stale, with an include flag in the CLI and the daemon API so that a flagged
-drawer is never unreachable. That reader is a separate change that ships before any flag is written; as of
-2026-11-15 the design is approved and no drawer carries `judged_class`.
+Default search leaves out drawers flagged chatter or stale and says how many it left out (`judged_excluded`, with a
+warning naming the flag); `mempalace search --all-classes`, `all_classes=True` on `search_memories` and the
+`mempalace_search` tool include them, so a flagged drawer is never unreachable (#635). Anything it cannot prove is
+flagged stays visible. As of 2026-11-15 that reader has shipped, the design is approved, and no drawer carries
+`judged_class` yet.
 
 ### Proposals, not consolidation
 

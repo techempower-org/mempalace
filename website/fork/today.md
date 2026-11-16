@@ -36,8 +36,9 @@ The rule for acting on a proposal is strict:
 - if they disagree, each gets a second look that shows both earlier answers, and a class applies only when at
   least three of the four answers agree and none of them said *secret*.
 
-Acting means a metadata flag, never a delete. Chatter and stale drawers will drop out of default search, and an
-include flag will bring them back. That search change ships before a single flag is written; as of today none is.
+Acting means a metadata flag, never a delete. Flagged chatter and stale drawers drop out of default search, and
+`mempalace search --all-classes` brings them back. That search change shipped first, on purpose; no flag has been
+written yet.
 A *secret* drawer is re-redacted in place first, which can't be undone, on purpose.
 The full design is [in the repo](https://github.com/techempower-org/mempalace/blob/main/docs/designs/judged-drawer-classes.md).
 
@@ -52,7 +53,7 @@ The bug and safety fixes on our path come in first, in small reviewed pull reque
 
 - A machine-readable `mempalace status --json` (wings, rooms, drawer counts, last mine):
   [#618](https://github.com/techempower-org/mempalace/issues/618).
-- The search change that makes judged classes take effect.
+- The run that writes the judged flags, under the strict rule above.
 
 More detail: [Architecture](https://github.com/techempower-org/mempalace/blob/main/docs/ARCHITECTURE.md#safety-layers-2026-11-15),
 [Backends](https://github.com/techempower-org/mempalace/blob/main/docs/BACKENDS.md),

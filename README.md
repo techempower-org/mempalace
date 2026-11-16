@@ -184,9 +184,9 @@ refused writes on the operator's status page. See [Safety layers](docs/ARCHITECT
 chatter, stale or secret. Where their first passes agree, that class applies; where they disagree, a tie-break pass
 by each gives four verdicts, and a class applies only when at least three agree and none said secret. For
 chatter and stale it is a metadata flag that deletes nothing; a secret drawer is first re-redacted in place
-(irreversibly: removing the flag does not restore its text); default search will leave out chatter and stale, with
-an include flag, and that reader ships before any flag is written
-([design](docs/designs/judged-drawer-classes.md), #622). The judges are documented as a batch backend in
+(irreversibly: removing the flag does not restore its text). Default search already leaves out drawers flagged
+chatter or stale, and `--all-classes` (`all_classes=True` in the API and the MCP tool) includes them (#635); the run
+that writes flags has not happened yet ([design](docs/designs/judged-drawer-classes.md), #622). The judges are documented as a batch backend in
 [BACKENDS.md](docs/BACKENDS.md).
 
 **Upstream sync (2026-11-15).** The 281 upstream commits since the last sync point are triaged commit by commit in

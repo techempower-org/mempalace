@@ -11,7 +11,8 @@ body: |
   every write (shapes, prefix-free shapes, vault-item needles, fail
   closed, and the check that watches it), the judged-drawer-classes design
   (two of three, a strict majority of four on the disagreement set, a flag
-  and never a delete, the include flag still to ship), the batch judge
+  and never a delete, the search exclusion and --all-classes from #635),
+  the batch judge
   backend (open-weight judges on a rented GPU host, redacted inputs from
   allowlisted wings, proposal-only ledgers with scrubbed reasons), the
   status --json gap (#618) and the 2026-11-15 upstream triage. The
