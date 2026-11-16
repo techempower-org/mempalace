@@ -4,6 +4,10 @@
     "collapsed": true,
     "items": [
       {
+        "text": "mempalace._proc",
+        "link": "/reference/python-api/_proc"
+      },
+      {
         "text": "mempalace.auto_query",
         "link": "/reference/python-api/auto_query"
       },
