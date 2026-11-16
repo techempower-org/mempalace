@@ -61,6 +61,19 @@ def load_gitignore_matcher(dir_path: Path, cache: dict)
 
 Load and cache one directory's .gitignore matcher.
 
+### `load_repo_exclude_matcher`
+
+```python
+def load_repo_exclude_matcher(project_path: Path, cache: dict)
+```
+
+Cache common Git excludes, anchored at the checkout's project root.
+
+Linked worktrees point to their administration directory through a
+``.git`` file, then to the shared Git directory through ``commondir``.
+Its exclude patterns have lower precedence than per-directory gitignores.
+The tuple cache key keeps these rules separate from directory matchers.
+
 ### `is_gitignored`
 
 ```python
@@ -72,10 +85,20 @@ Apply active .gitignore matchers in ancestor order; last match wins.
 ### `should_skip_dir`
 
 ```python
-def should_skip_dir(dirname: str) -> bool
+def should_skip_dir(dir_path: Path) -> bool
 ```
 
 Skip known generated/cache directories before gitignore matching.
+
+Takes the full directory path so layout-dependent cases can be detected:
+
+- Any directory whose basename is in ``SKIP_DIRS`` (e.g. ``.worktrees``),
+  or ends in ``.egg-info``, is skipped outright.
+- A ``worktrees`` directory is skipped ONLY when it sits directly under a
+  ``.claude`` directory (``&lt;project>/.claude/worktrees/``). That is the
+  Claude Code worktree layout containing duplicate checkouts. A
+  genuine ``src/worktrees`` Python package is NOT under ``.claude`` and
+  still mines.
 
 ### `normalize_include_paths`
 
@@ -314,6 +337,16 @@ Return list of all readable file paths under ``project_dir``.
 Skips symlinks and oversized files. Each skipped symlink is logged to
 ``sys.stderr`` with a ``  SKIP: &lt;relative-path> (symlink)`` line so the
 caller can tell why a directory looks empty after walking.
+
+When ``respect_gitignore`` is set, both per-directory ``.gitignore``
+files AND the repository-level ``&lt;project>/.git/info/exclude`` are
+honoured (see :func:`load_repo_exclude_matcher`). The repo-level file is
+anchored at the project root so its patterns prune the entire tree —
+this is what keeps a git-worktree that a user excluded locally from being
+double-mined as a duplicate wing (MemPalace/mempalace#2599).
+In addition to gitignore, known build/cache directories and Claude Code
+worktree locations (``.worktrees/``, ``.claude/worktrees/``) are always
+pruned via :func:`should_skip_dir`, independent of ``respect_gitignore``.
 
 ### `resolve_project_root`
 

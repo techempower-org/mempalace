@@ -60,6 +60,17 @@ to '|' for codebase-wide consistency and to remove the Windows-path
 
 Hash input is ``f"&#123;source_file}|&#123;extract_mode}|&#123;chunk_index}"``.
 
+### `make_format_sentinel_id`
+
+```python
+def make_format_sentinel_id(wing: str, source_file: str) -> str
+```
+
+Sentinel id for a format-miner file that produced no drawers.
+
+Hash input is ``wing``, ``source_file`` and ``format``, so two wings
+filing the same path do not overwrite each other's marker.
+
 ### `make_convo_sentinel_id`
 
 ```python
