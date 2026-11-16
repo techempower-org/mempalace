@@ -14,7 +14,7 @@ Requested 2026-11-15: sync the fork with upstream. The fork's maintainers review
 - **skip:** upstream-only backends (chroma, sqlite_exact, rust_exact, milvus, qdrant, the remote/sidecar layer) because production is postgres + pgvector; upstream's own CI, site, changelog and docs (the fork keeps its own); integrations and benchmarks we do not run.
 - **later:** everything else, each with its reason: fixes that need a port because the fork changed the same code, features and refactors, test-only commits, Windows-only behaviour, the upstream HTTP hub (`mempalace serve`) whose auth work we port as one topic, and the security ports too large to do safely today (each with an owner and a date).
 
-Totals: **now 20**, **skip 45**, **later 216**.
+Totals: **now 15**, **skip 45**, **later 221** (after the picks: five commits moved from now to later, each with its reason; first count was now 20, later 216).
 
 ## now
 
@@ -28,25 +28,25 @@ Picked in topic PRs, one topic each (`git cherry-pick -x`, so every commit names
 | B mcp tools | `7bad1ecd` | 2026-10-15 |  | fix(mcp): record tunnel follows only while the writer lock is held | fix, applies cleanly |
 | C daemon/hooks | `5528b8ac` | 2026-10-15 |  | fix(proc): one pid_alive with daemon semantics | fix, applies cleanly |
 | C daemon/hooks | `f3dfae89` | 2026-10-15 |  | fix(service): route mcp_tool jobs through dispatcher gates | fix, applies cleanly |
-| C daemon/hooks | `15d9c28f` | 2026-10-17 |  | fix(hooks): report a checkpoint queued behind a running mine as queued, not failed | fix, applies cleanly |
 | C daemon/hooks | `abe196f9` | 2026-10-31 | #2586 | fix(hooks): collapse &lt;project&gt;/.worktrees/&lt;wt&gt; into the project wing (#2586) | fix, applies cleanly |
-| D search | `0a41b363` | 2026-10-15 |  | fix(search): return closet hits as their own drawers | fix, applies cleanly |
 | E miners | `9e013e9e` | 2026-10-15 |  | fix(format_miner): hold the palace lock and keep failed rewrites recoverable | fix, applies cleanly |
-| E miners | `9bbcebcc` | 2026-10-15 |  | fix(split): keep preamble, short sessions, and colliding names | fix, applies cleanly |
 | E miners | `6981b124` | 2026-10-15 |  | fix(general_extractor): keep paragraphs that match no keyword | fix, applies cleanly |
 | E miners | `466968ce` | 2026-10-30 | #2794 | fix(mine): honour .git/info/exclude and skip .worktrees/.claude worktrees (#2599) (#2794) | fix, applies cleanly |
 | E miners | `34b742f3` | 2026-10-31 | #518 | fix(entity): add generic code terms to English stopwords (#476) (#518) | fix, applies cleanly |
 | F kg | `e704a212` | 2026-10-15 |  | fix(kg): keep entity identity and merge properties | fix, applies cleanly |
-| G backends | `45074ca6` | 2026-10-15 |  | fix(backends): keep serializable metadata and publish markers atomically | fix, applies cleanly |
 | G backends | `722e8fac` | 2026-10-15 |  | perf(pgvector): look up ids with the primary key | perf, applies cleanly |
 | H safety | `50c1f959` | 2026-10-15 |  | fix(llm): refuse silent external calls | fix, applies cleanly |
-| H safety | `ef94cd14` | 2026-10-17 |  | fix(update): publish the release cache through fsio so a reader can't drop it | fix, applies cleanly |
 | I credentials | `857fbec4` | 2026-10-18 |  | fix(security): mask endpoint credentials in embedding and LLM errors | security: mask endpoint credentials in embedding and LLM errors (a small port: conflicts) |
 
 ## later
 
 | upstream | date | PR | subject | why |
 |---|---|---|---|---|
+| `15d9c28f` | 2026-10-17 |  | fix(hooks): report a checkpoint queued behind a running mine as queued, not failed | moved from now: its test needs `_queue_diary_checkpoint`, an earlier upstream helper the fork does not have; port with it |
+| `0a41b363` | 2026-10-15 |  | fix(search): return closet hits as their own drawers | moved from now: returning closet hits as their own drawers conflicts with the fork reporting a chunked entry as one logical result; needs a port |
+| `9bbcebcc` | 2026-10-15 |  | fix(split): keep preamble, short sessions, and colliding names | moved from now: it writes another file name where the fork's non-regular-file guard skips (a FIFO or dangling symlink at the output name); a guard change needs its own decision |
+| `45074ca6` | 2026-10-15 |  | fix(backends): keep serializable metadata and publish markers atomically | moved from now: it imports `mempalace.fsio`, an upstream module the fork does not have; port with fsio |
+| `ef94cd14` | 2026-10-17 |  | fix(update): publish the release cache through fsio so a reader can't drop it | moved from now: it publishes through `mempalace.fsio`, which the fork does not have; port with fsio |
 | `cd92dd8a` | 2026-10-15 |  | fix(fsio): publish config through one Windows-safe atomic writer | Windows-only behaviour; Linux hosts unaffected |
 | `501e8d71` | 2026-10-16 |  | fix(proc): bound the Windows pid probe and share the kernel32 setup | Windows-only behaviour; Linux hosts unaffected |
 | `43d42bbd` | 2026-10-17 |  | fix(mine): keep stray bytes in UTF-8 files and map every windows-1252 byte | Windows-only behaviour; Linux hosts unaffected |
@@ -316,5 +316,17 @@ Picked in topic PRs, one topic each (`git cherry-pick -x`, so every commit names
 
 ## Status of the picks
 
-(filled in as each PR merges)
+| topic | PR | merged | what |
+|---|---|---|---|
+| A pql | #627 | `2c0e8ceb` | 6450bc0c, 45bff470 |
+| B mcp tools | #629 | `bd272759` | d4038612, 7bad1ecd |
+| C daemon/hooks | #630 | `f7b742af` | 5528b8ac, f3dfae89, abe196f9 (tests ported to the `wing_` prefix); fork fixes from its review: an `isError` tool result fails the job, the first text block is read, nested worktrees collapse at the earliest marker |
+| E miners | #631 | `0578bfce` | 9e013e9e, 6981b124, 466968ce, 34b742f3 |
+| F kg | #632 | `2885dc2b` | e704a212 (SQLite knowledge graph ids only; the AGE graph keeps its own) |
+| G pgvector | #633 | `f7813341` | 722e8fac |
+| H llm consent | #634 | `ee49af2f` | 50c1f959: a non-local LLM endpoint needs `--accept-external-llm` or `MEMPALACE_ACCEPT_EXTERNAL_LLM=1` |
+| I credentials | #636 | `51c96db9` | a port of 857fbec4: LLM and embedding errors never repeat an endpoint's text |
 
+No daemon, hook or service was deployed by these merges; that is a separate step after review (the palace lane
+deploys after the AMD close-out). The docs site is the exception: picks that re-rendered the API reference under
+`website/` triggered deploy-docs on merge, which republished the site's API pages.
