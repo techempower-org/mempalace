@@ -67,11 +67,12 @@ Execute an MCP tool by name over the daemon queue.
 
 The daemon is a durable, retried write surface — not a general MCP transport.
 Restrict ``mcp_tool`` to write-classified tools only: read tools would
-exfiltrate verbatim palace content into the queue DB and the job result
-(stored world-readable-by-default without the perms fix, and returned over
-/jobs), and maintenance tools already have their own dedicated kinds
-(mine/sync). No internal caller currently uses ``mcp_tool``; this allowlist
-bounds the blast radius of the generic escape hatch.
+exfiltrate verbatim palace content into the queue DB and the job result,
+and maintenance tools already have their own dedicated kinds (mine/sync).
+
+Dispatch goes through ``mcp_server.handle_request`` so the read-only,
+sqlite-integrity, stale-library, diverged-index, and peer-writer gates run,
+and so argument filtering and type coercion match a real tools/call.
 
 ### `print_job_result`
 
