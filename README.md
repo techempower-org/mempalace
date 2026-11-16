@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| LLM and embedding errors never repeat an endpoint's reply or reason, mask the URL, and keep no original exception | — | [`51c96db`](https://github.com/techempower-org/mempalace/commit/51c96db) |
 | default search leaves out drawers flagged judged_class chatter or stale; --all-classes (all_classes=True) returns every drawer | — | [`b309a4e`](https://github.com/techempower-org/mempalace/commit/b309a4e) |
 | a daemon job whose MCP tool reported isError fails; nested worktree paths collapse to the outer project | — | [`f7b742a`](https://github.com/techempower-org/mempalace/commit/f7b742a) |
 | mempalace mine --wait-lock SECONDS — a scheduled mine waits a bounded time for the palace lock instead of failing at once | — | [`2c0cdd4`](https://github.com/techempower-org/mempalace/commit/2c0cdd4) |
