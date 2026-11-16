@@ -925,8 +925,26 @@ def _warn_if_external_embedding(url: str) -> None:
     logger.warning(
         "Embedding endpoint %s is outside the local network. "
         "Document text sent there leaves this machine.",
-        url,
+        _label(url),  # never the raw URL: it can carry credentials
     )
+
+
+def _label(url: str) -> str:
+    """The endpoint as an error may name it (llm_client.endpoint_label): no userinfo, query or fragment."""
+    from mempalace.llm_client import endpoint_label
+
+    return endpoint_label(url)
+
+
+def _describe(e: BaseException) -> str:
+    """The failure in fixed words, never the endpoint's text (llm_client.describe_failure)."""
+    import json as _json
+
+    from mempalace.llm_client import describe_failure
+
+    if isinstance(e, ValueError) and not isinstance(e, _json.JSONDecodeError):
+        return "invalid URL or response"
+    return describe_failure(e)
 
 
 class EmbeddingAPIError(RuntimeError):
@@ -934,8 +952,14 @@ class EmbeddingAPIError(RuntimeError):
 
     Module-specific subclass mirroring ``llm_client.LLMError`` so callers can
     distinguish embedding-endpoint failures; subclasses ``RuntimeError`` so
-    existing ``except RuntimeError`` paths still catch it.
+    existing ``except RuntimeError`` paths still catch it. Like ``LLMError``,
+    its message is masked: the endpoint URL or its reply may carry a key.
     """
+
+    def __init__(self, message: str):
+        from mempalace.llm_client import redact_secrets
+
+        super().__init__(redact_secrets(str(message)))
 
 
 class OpenAICompatEmbeddingFunction:
@@ -1001,19 +1025,21 @@ class OpenAICompatEmbeddingFunction:
             # encoding_format=float is explicit so a server that defaults to
             # base64 doesn't hand back strings we'd mis-parse as vectors.
             payload = {"model": self._model, "input": batch, "encoding_format": "float"}
-            req = Request(self._url, data=json.dumps(payload).encode("utf-8"), headers=headers)
             try:
+                # inside the guard: Request raises ValueError on a bad URL, with the URL in its text
+                req = Request(self._url, data=json.dumps(payload).encode("utf-8"), headers=headers)
                 with urlopen(req, timeout=_EF_API_TIMEOUT) as resp:
                     data = json.loads(resp.read())
             # ValueError covers an invalid/missing URL scheme and json.JSONDecodeError;
             # http.client.HTTPException covers low-level protocol faults (BadStatusLine,
             # IncompleteRead) common with local/overloaded servers.
             except (HTTPError, URLError, OSError, http.client.HTTPException, ValueError) as e:
+                # "from None": the original exception's text can hold the URL's credentials or the reply
                 raise EmbeddingAPIError(
-                    f"Embedding API request to {self._url} failed: {e}. Check that the "
+                    f"Embedding API request to {_label(self._url)} failed: {_describe(e)}. Check that the "
                     f"server is reachable and MEMPALACE_EMBEDDING_API_URL / embedding_api_url "
                     f"is correct."
-                ) from e
+                ) from None
             out.extend(self._vectors_from_response(data, len(batch)))
         return out
 
@@ -1032,16 +1058,17 @@ class OpenAICompatEmbeddingFunction:
 
         if not isinstance(data, dict):
             raise EmbeddingAPIError(
-                f"Embedding API at {self._url} returned a non-object response: {data}"
+                f"Embedding API at {_label(self._url)} returned a non-object response ({type(data).__name__})"
             )
         rows = data.get("data")
         if not isinstance(rows, list):
             raise EmbeddingAPIError(
-                f"Embedding API at {self._url} returned no 'data' array: {data.get('error', data)}"
+                f"Embedding API at {_label(self._url)} returned no 'data' array"
+                + (" (the reply has an 'error' field)" if "error" in data else "")
             )
         if len(rows) != n:
             raise EmbeddingAPIError(
-                f"Embedding API at {self._url} returned {len(rows)} embeddings for {n} inputs"
+                f"Embedding API at {_label(self._url)} returned {len(rows)} embeddings for {n} inputs"
             )
         # The endpoint may return rows out of order — sort by index, then
         # require the indices to be exactly 0..n-1 so positional alignment is
@@ -1050,24 +1077,26 @@ class OpenAICompatEmbeddingFunction:
         try:
             rows = sorted(rows, key=lambda d: d.get("index", -1))
             indices = [r.get("index") for r in rows]
-        except AttributeError as e:
+        except AttributeError:
+            # fixed words and "from None": the exception's text is built from the reply (xreview 2026-11-15)
             raise EmbeddingAPIError(
-                f"Embedding API at {self._url} returned non-object rows: {e}"
-            ) from e
+                f"Embedding API at {_label(self._url)} returned non-object rows"
+            ) from None
         if indices != list(range(n)):
             raise EmbeddingAPIError(
-                f"Embedding API at {self._url} returned non-contiguous or duplicate "
+                f"Embedding API at {_label(self._url)} returned non-contiguous or duplicate "
                 f"'index' values; cannot align embeddings with inputs"
             )
         try:
             arr = np.asarray([r["embedding"] for r in rows], dtype=np.float32)
         except (KeyError, TypeError, ValueError) as e:
+            # the type only: a numpy ValueError quotes the offending value from the reply
             raise EmbeddingAPIError(
-                f"Embedding API at {self._url} returned malformed embeddings: {e}"
-            ) from e
+                f"Embedding API at {_label(self._url)} returned malformed embeddings ({type(e).__name__})"
+            ) from None
         if arr.ndim != 2:
             raise EmbeddingAPIError(
-                f"Embedding API at {self._url} returned non-vector embeddings (shape {arr.shape})"
+                f"Embedding API at {_label(self._url)} returned non-vector embeddings (shape {arr.shape})"
             )
         # L2-normalize so cosine == dot product (collection uses
         # hnsw:space=cosine), matching EmbeddinggemmaONNX above.

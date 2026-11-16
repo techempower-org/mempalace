@@ -332,15 +332,18 @@ def test_raises_on_non_object_response(monkeypatch):
         ef(["a"])
 
 
-def test_raises_and_surfaces_server_error_body(monkeypatch):
-    # HTTP 200 with an OpenAI-style error envelope (no "data") — surface it.
+def test_raises_on_server_error_body_without_echoing_it(monkeypatch):
+    # HTTP 200 with an OpenAI-style error envelope (no "data") — say so, without its text.
     def err(req, timeout=None):
         return _FakeResp(json.dumps({"error": {"message": "model not found"}}).encode())
 
     monkeypatch.setattr("urllib.request.urlopen", err)
     ef = embedding.OpenAICompatEmbeddingFunction("http://h", "m")
-    with pytest.raises(embedding.EmbeddingAPIError, match="model not found"):
+    # the error says the reply carried an error, but never repeats the endpoint's text (it can hold a key:
+    # 2026-11-15 review); query the endpoint directly to read its message
+    with pytest.raises(embedding.EmbeddingAPIError, match="has an 'error' field") as ei:
         ef(["a"])
+    assert "model not found" not in str(ei.value)
 
 
 def test_get_embedding_function_caches_instance(monkeypatch):
