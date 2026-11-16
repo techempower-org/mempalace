@@ -141,43 +141,8 @@ def mine_formats(format_dir: str, palace_path: str, wing: Optional[str] = None, 
 
 Mine a directory of binary office-format files into the palace.
 
-Walks ``format_dir`` via ``scan_formats``, converts each supported file
-to text via ``extract_text`` (which routes to MarkItDown or striprtf
-per format), chunks the result with the same chunker miner.py uses, and
-files the chunks as drawers under the given wing.
-
-Source files on disk are never modified — conversion is in-memory only.
-
-Parameters
-----------
-format_dir :
-    Directory to walk recursively. Hidden / build dirs are skipped
-    (see ``palace.SKIP_DIRS``). Symlinks are skipped (consistency with
-    ``miner.py`` and ``convo_miner.py``). Only files matching
-    ``SUPPORTED_FORMATS`` are processed.
-palace_path :
-    Path to the ChromaDB palace (the destination of the drawers).
-wing :
-    Wing name. Defaults to the basename of ``format_dir`` (normalized).
-agent :
-    Identifier recorded in each drawer's ``added_by`` metadata.
-limit :
-    If > 0, process at most this many files. Useful for sampling.
-dry_run :
-    If True, walk + extract + chunk but do NOT open the collection or
-    upsert any drawers. Just prints what would have been filed.
-
-Notes
------
-- Loads ``MempalaceConfig`` once at the start. The current chunker
-  (``miner.chunk_text``) uses module-level CHUNK_SIZE constants and
-  doesn't accept overrides, so the loaded config values aren't yet
-  threaded into chunking; the load is wired so future ``chunk_text``
-  refactors that accept per-call sizing pick this up automatically.
-- Each per-file step is wrapped so one malformed file can't crash the
-  whole mine; the loop continues with the next file and logs the
-  offender.
-- ``KeyboardInterrupt`` is caught at the orchestrator level so the
-  summary still prints on Ctrl-C; partial progress is safe to leave
-  in place because drawer IDs are deterministic (re-mining
-  upserts to the same rows).
+A non-dry-run holds the per-palace write lock for the whole mine, the
+same lock ``miner.mine`` and ``convo_miner.mine_convos`` hold. Dry-run
+does not write, so it does not take the lock. ``KeyboardInterrupt``
+propagates after the summary. A file that fails to file raises
+``MineFileErrors`` after the summary.

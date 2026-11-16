@@ -30,11 +30,15 @@ def extract_memories(text: str, min_confidence: float = 0.3, chunk_size: int = D
 
 Extract memories from a text string.
 
+Paragraphs that match no marker are stored as ``memory_type="general"``
+with their text unchanged. ``min_confidence`` is accepted for callers
+and does not discard text.
+
 Args:
     text: The text to extract from (any format).
-    min_confidence: Minimum confidence threshold (0.0-1.0).
+    min_confidence: Retained for callers. Not used to drop paragraphs.
     chunk_size: Per-memory character cap. Segments exceeding this
-        size are sliced verbatim into multiple memories that share
+        size are sliced on whitespace into multiple memories that share
         the same ``memory_type``. Caller (typically ``mine_convos``)
         should pass ``MempalaceConfig.chunk_size`` so config-driven
         sizing reaches this path; the default matches the

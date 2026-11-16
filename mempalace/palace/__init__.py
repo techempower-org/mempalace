@@ -69,6 +69,7 @@ SKIP_DIRS = {
     ".eggs",
     "htmlcov",
     "target",
+    ".worktrees",
 }
 
 _DEFAULT_BACKEND = get_backend("chroma")

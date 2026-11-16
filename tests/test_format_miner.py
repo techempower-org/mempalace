@@ -995,9 +995,10 @@ def test_mine_formats_records_hall_in_drawer_metadata(_mine_formats_mocks):
 
 
 def test_mine_formats_continues_after_per_file_error(_mine_formats_mocks):
-    """One bad file must not crash the whole mine — the loop continues."""
+    """One bad file must not stop the loop. The run still fails at the end."""
     from unittest.mock import patch
     from mempalace.format_miner import mine_formats
+    from mempalace.palace import MineFileErrors
 
     tmp = _mine_formats_mocks["tmp_path"]
     bad = tmp / "broken.pdf"
@@ -1023,8 +1024,9 @@ def test_mine_formats_continues_after_per_file_error(_mine_formats_mocks):
         # format_miner now binds chunk_text at its own module scope.
         patch("mempalace.format_miner.chunk_text", side_effect=chunk_text_first_fails),
     ):
-        # Must not raise
-        mine_formats(format_dir=str(tmp), palace_path=str(tmp / "palace"))
+        with pytest.raises(MineFileErrors) as exc_info:
+            mine_formats(format_dir=str(tmp), palace_path=str(tmp / "palace"))
+    assert str(bad) in exc_info.value.failed_files
 
     # The second file should still have produced an upsert
     upsert_calls = _mine_formats_mocks["collection"].upsert.call_args_list
@@ -1366,7 +1368,7 @@ def test_mine_formats_does_not_write_sentinel_for_skip_no_markitdown(monkeypatch
 
     register_calls: list = []
 
-    def fake_register(collection, source_file, wing, agent):
+    def fake_register(collection, source_file, wing, agent, source_mtime=None):
         register_calls.append(source_file)
 
     monkeypatch.setattr(format_miner, "_register_file", fake_register)
@@ -1412,7 +1414,7 @@ def test_mine_formats_does_not_write_sentinel_for_skip_missing_format_deps(
 
     register_calls: list = []
 
-    def fake_register(collection, source_file, wing, agent):
+    def fake_register(collection, source_file, wing, agent, source_mtime=None):
         register_calls.append(source_file)
 
     monkeypatch.setattr(format_miner, "_register_file", fake_register)
@@ -1453,13 +1455,9 @@ def test_mine_formats_does_not_write_sentinel_for_skip_missing_format_deps(
 def test_mine_formats_catches_unexpected_exception_and_prints_summary(
     monkeypatch, tmp_path: Path, capsys
 ):
-    """If an unexpected error happens during mining (something the
-    per-file try/except doesn't catch — e.g., the topic-tunnel block
-    blowing up in a way the inner handler misses), mine_formats must
-    catch it at the outer level, print a partial-progress summary, and
-    clean up the PID file. Not crash with a traceback to the user.
+    """An error outside the per-file handler prints the summary, then propagates.
 
-    Per PR #1555 review (Gemini #5).
+    The summary has to be visible, and the process must not exit 0.
     """
     from mempalace.format_miner import mine_formats
 
@@ -1484,8 +1482,10 @@ def test_mine_formats_catches_unexpected_exception_and_prints_summary(
         patch("mempalace.format_miner.scan_formats", side_effect=angry_enumerate),
         patch("mempalace.format_miner.load_config", return_value=fake_config),
     ):
-        # Must NOT raise — outer except Exception should catch.
-        mine_formats(format_dir=str(tmp), palace_path=str(tmp / "palace"), wing="wing_test")
+        with pytest.raises(RuntimeError, match="simulated outer-loop explosion"):
+            mine_formats(format_dir=str(tmp), palace_path=str(tmp / "palace"), wing="wing_test")
+    captured = capsys.readouterr()
+    assert "Summary" in captured.out
 
 
 def test_mine_formats_threads_chunk_size_from_user_config(monkeypatch, tmp_path: Path):
@@ -1636,3 +1636,275 @@ def test_mine_formats_passes_the_directory_it_read_from(tmp_path, monkeypatch):
     format_miner.mine_formats(str(docs), str(tmp_path / "palace"))
 
     assert seen.get("source_dir_ino") == si.directory_identity(docs)
+
+
+class _RowStore:
+    """Small collection double that keeps rows addressable by id."""
+
+    def __init__(self, fail_delete_on=None, fail_upsert_on=None):
+        self.rows: dict = {}
+        self.deletes = 0
+        self.upserts = 0
+        self.fail_delete_on = fail_delete_on
+        self.fail_upsert_on = fail_upsert_on
+
+    def get(self, where=None, ids=None, limit=1000, offset=0, include=None):
+        items = list(self.rows.items())
+        if isinstance(where, dict) and "source_file" in where:
+            source = where["source_file"]
+            items = [
+                (drawer_id, row) for drawer_id, row in items if row[1].get("source_file") == source
+            ]
+        if ids is not None:
+            items = [
+                (drawer_id, self.rows[drawer_id]) for drawer_id in ids if drawer_id in self.rows
+            ]
+        page = items[offset : offset + limit]
+        return {
+            "ids": [drawer_id for drawer_id, _row in page],
+            "documents": [row[0] for _drawer_id, row in page],
+            "metadatas": [row[1] for _drawer_id, row in page],
+        }
+
+    def upsert(self, documents, ids, metadatas):
+        self.upserts += 1
+        if self.fail_upsert_on is not None and self.upserts == self.fail_upsert_on:
+            raise RuntimeError("simulated upsert failure")
+        for drawer_id, doc, meta in zip(ids, documents, metadatas):
+            self.rows[drawer_id] = (doc, dict(meta))
+
+    def delete(self, ids=None, where=None):
+        self.deletes += 1
+        if self.fail_delete_on is not None and self.deletes == self.fail_delete_on:
+            raise RuntimeError("simulated transient backend error")
+        for drawer_id in ids or []:
+            self.rows.pop(drawer_id, None)
+
+
+def _patch_format_write_helpers(monkeypatch):
+    import contextlib
+
+    from mempalace import format_miner
+
+    monkeypatch.setattr(format_miner, "mine_lock", lambda source_file: contextlib.nullcontext())
+    monkeypatch.setattr(format_miner, "file_already_mined", lambda *args, **kwargs: False)
+    monkeypatch.setattr("mempalace.miner.detect_hall", lambda content: "general")
+    monkeypatch.setattr("mempalace.miner._extract_entities_for_metadata", lambda content: "")
+    monkeypatch.setattr(
+        "mempalace.miner._extract_content_date_with_source",
+        lambda source_file, content: (None, None),
+    )
+
+
+def test_failed_purge_restores_previous_drawers(monkeypatch):
+    """A failed stale delete must not leave new drawers mixed with old ones."""
+    from mempalace import format_miner
+
+    _patch_format_write_helpers(monkeypatch)
+    source = "/docs/report.pdf"
+    store = _RowStore(fail_delete_on=1)
+    store.rows["old-format"] = (
+        "previous verbatim drawer",
+        {"source_file": source, "extract_mode": "format", "chunk_index": 9},
+    )
+    store.rows["project-drawer"] = (
+        "project miner text",
+        {"source_file": source, "extract_mode": "exchange", "chunk_index": 0},
+    )
+    chunks = [{"content": "brand new extracted text", "chunk_index": 0}]
+
+    added, skipped = format_miner._file_chunks_locked(
+        store,
+        source,
+        chunks,
+        "wing",
+        "documents",
+        "agent",
+        source_mtime=10.0,
+    )
+
+    assert skipped == format_miner.PURGE_FAILED
+    assert added == 0
+    assert store.rows["old-format"][0] == "previous verbatim drawer"
+    assert store.rows["project-drawer"][0] == "project miner text"
+    assert all(doc != "brand new extracted text" for doc, _meta in store.rows.values())
+
+
+def test_partial_upsert_restores_previous_drawers(monkeypatch):
+    """A crash mid-upsert rolls the file back to the drawers it had before."""
+    from mempalace import format_miner
+
+    _patch_format_write_helpers(monkeypatch)
+    monkeypatch.setattr(format_miner, "DRAWER_UPSERT_BATCH_SIZE", 1)
+    source = "/docs/report.pdf"
+    store = _RowStore(fail_upsert_on=2)
+    store.rows["old-format"] = (
+        "previous verbatim drawer",
+        {"source_file": source, "extract_mode": "format", "chunk_index": 9},
+    )
+    chunks = [
+        {"content": "new chunk zero", "chunk_index": 0},
+        {"content": "new chunk one", "chunk_index": 1},
+    ]
+
+    with pytest.raises(RuntimeError, match="simulated upsert failure"):
+        format_miner._file_chunks_locked(
+            store,
+            source,
+            chunks,
+            "wing",
+            "documents",
+            "agent",
+            source_mtime=10.0,
+        )
+
+    assert list(store.rows) == ["old-format"]
+    assert store.rows["old-format"][0] == "previous verbatim drawer"
+
+
+def test_rewrite_commits_chunk_total_and_leaves_other_modes(monkeypatch):
+    """A finished rewrite is complete, and it does not delete another miner's rows."""
+    from mempalace import format_miner
+
+    _patch_format_write_helpers(monkeypatch)
+    source = "/docs/report.pdf"
+    store = _RowStore()
+    store.rows["stale-format"] = (
+        "stale format text",
+        {"source_file": source, "extract_mode": "format", "chunk_index": 9},
+    )
+    store.rows["project-drawer"] = (
+        "project miner text",
+        {"source_file": source, "extract_mode": "exchange", "chunk_index": 0},
+    )
+    chunks = [
+        {"content": "kept chunk zero", "chunk_index": 0},
+        {"content": "kept chunk one", "chunk_index": 1},
+    ]
+
+    added, skipped = format_miner._file_chunks_locked(
+        store,
+        source,
+        chunks,
+        "wing",
+        "documents",
+        "agent",
+        source_mtime=42.0,
+    )
+
+    assert skipped is False
+    assert added == 2
+    assert "stale-format" not in store.rows
+    assert store.rows["project-drawer"][0] == "project miner text"
+    format_rows = [
+        (doc, meta) for doc, meta in store.rows.values() if meta.get("extract_mode") == "format"
+    ]
+    assert sorted(doc for doc, _meta in format_rows) == ["kept chunk one", "kept chunk zero"]
+    assert {meta["chunk_total"] for _doc, meta in format_rows} == {2}
+    assert {meta["source_mtime"] for _doc, meta in format_rows} == {42.0}
+
+
+def test_skip_sentinel_matches_file_already_mined_and_is_not_reextracted(tmp_path, monkeypatch):
+    """A durable skip writes a marker the mtime check accepts, once."""
+    from mempalace import format_miner
+    from mempalace.palace import file_already_mined, get_collection
+
+    src = tmp_path / "docs"
+    src.mkdir()
+    target = src / "notes.pdf"
+    target.write_bytes(b"%PDF-1.4 stub")
+    calls = {"n": 0}
+
+    def extract(path, max_file_size=format_miner.DEFAULT_MAX_FILE_SIZE):
+        calls["n"] += 1
+        return None, format_miner.ExtractionStatus.SKIP_EMPTY
+
+    monkeypatch.setattr(format_miner, "extract_text", extract)
+    palace = str(tmp_path / "palace")
+    format_miner.mine_formats(str(src), palace, wing="wing_docs")
+    format_miner.mine_formats(str(src), palace, wing="wing_docs")
+
+    assert calls["n"] == 1
+    collection = get_collection(palace)
+    stored = collection.get(where={"source_file": str(target)}, include=["metadatas"])
+    if not (stored.get("ids") or []):
+        stored = collection.get(include=["metadatas"])
+        source_files = [
+            meta.get("source_file")
+            for meta in (stored.get("metadatas") or [])
+            if meta and meta.get("extract_mode") == "format"
+        ]
+        assert source_files
+        source_file = source_files[0]
+    else:
+        source_file = str(target)
+    assert file_already_mined(collection, source_file, check_mtime=True, extract_mode="format")
+
+
+def test_mine_formats_holds_the_palace_lock(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from mempalace import format_miner
+
+    entered = []
+
+    @contextmanager
+    def fake_lock(path):
+        entered.append(path)
+        yield
+
+    monkeypatch.setattr(format_miner, "mine_palace_lock", fake_lock)
+    monkeypatch.setattr(format_miner, "scan_formats", lambda *args, **kwargs: [])
+    palace = str(tmp_path / "palace")
+    format_miner.mine_formats(str(tmp_path), palace, wing="w")
+    assert entered == [palace]
+
+
+def test_mine_formats_dry_run_does_not_hold_the_palace_lock(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from mempalace import format_miner
+
+    entered = []
+
+    @contextmanager
+    def fake_lock(path):
+        entered.append(path)
+        yield
+
+    monkeypatch.setattr(format_miner, "mine_palace_lock", fake_lock)
+    monkeypatch.setattr(format_miner, "scan_formats", lambda *args, **kwargs: [])
+    format_miner.mine_formats(str(tmp_path), str(tmp_path / "palace"), wing="w", dry_run=True)
+    assert entered == []
+
+
+def test_partial_chunk_total_is_not_already_mined(tmp_path):
+    """Rows short of chunk_total must not make the next mine skip the file."""
+    from mempalace.palace import NORMALIZE_VERSION, file_already_mined
+
+    source = tmp_path / "notes.pdf"
+    source.write_bytes(b"%PDF")
+    mtime = source.stat().st_mtime
+    store = _RowStore()
+    for index in range(2):
+        store.rows[f"d{index}"] = (
+            f"partial {index}",
+            {
+                "source_file": str(source),
+                "extract_mode": "format",
+                "source_mtime": mtime,
+                "chunk_total": 3,
+                "normalize_version": NORMALIZE_VERSION,
+            },
+        )
+
+    assert file_already_mined(store, str(source), check_mtime=True, extract_mode="format") is False
+
+
+def test_keyboard_interrupt_propagates(tmp_path, monkeypatch):
+    from mempalace import format_miner
+
+    def interrupt(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(format_miner, "scan_formats", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        format_miner.mine_formats(str(tmp_path), str(tmp_path / "palace"), wing="w")
