@@ -17,16 +17,18 @@ chooses. Core memory operations remain API-free by design (see CLAUDE.md,
 
 The endpoint is any OpenAI-compatible Chat Completions URL:
 
-    LLM_ENDPOINT=http://localhost:11434/v1   # Ollama
-    LLM_ENDPOINT=http://localhost:8000/v1    # vLLM, llama.cpp
-    LLM_ENDPOINT=https://api.openai.com/v1
-    LLM_ENDPOINT=https://openrouter.ai/api/v1
-    LLM_ENDPOINT=https://api.anthropic.com/v1  # when proxied through a compat layer
+    MEMPALACE_LLM_ENDPOINT=http://localhost:11434/v1   # Ollama
+    MEMPALACE_LLM_ENDPOINT=http://localhost:8000/v1    # vLLM, llama.cpp
+    MEMPALACE_LLM_ENDPOINT=https://api.openai.com/v1
 
 Set:
-    LLM_ENDPOINT — base URL (required)
-    LLM_KEY      — bearer token (optional; local inference usually doesn't need it)
-    LLM_MODEL    — model name (required), e.g. "gpt-4o-mini", "llama3:8b", "qwen2.5:7b"
+    MEMPALACE_LLM_ENDPOINT — base URL (required)
+    MEMPALACE_LLM_KEY      — bearer token (optional; local inference usually doesn't need it)
+    MEMPALACE_LLM_MODEL    — model name (required), e.g. "llama3:8b", "qwen2.5:7b"
+
+A non-local endpoint also needs ``--accept-external-llm`` or
+``MEMPALACE_ACCEPT_EXTERNAL_LLM=1``. Generic ``LLM_ENDPOINT`` / ``LLM_KEY`` /
+``LLM_MODEL`` variables are ignored.
 
 Or pass flags on the CLI (flags win over env):
 
@@ -47,7 +49,7 @@ Resolved LLM connection config. CLI flags > env vars.
 #### `__init__`
 
 ```python
-def __init__(self, endpoint: Optional[str] = None, key: Optional[str] = None, model: Optional[str] = None)
+def __init__(self, endpoint: Optional[str] = None, key: Optional[str] = None, model: Optional[str] = None, accept_external: Optional[bool] = None)
 ```
 
 #### `missing`
@@ -55,6 +57,14 @@ def __init__(self, endpoint: Optional[str] = None, key: Optional[str] = None, mo
 ```python
 def missing(self) -> list
 ```
+
+#### `egress_error`
+
+```python
+def egress_error(self) -> Optional[str]
+```
+
+Why this config must not receive drawer content, or None when it may.
 
 ## Functions
 
