@@ -25,3 +25,19 @@ def test_a_plain_success_is_still_a_success():
 def test_a_non_dict_result_does_not_raise():
     r = _daemon_result_from_mcp_response({"result": "odd"})
     assert r["success"] is True
+
+
+def test_the_first_text_block_counts_not_the_first_block():
+    resp = {
+        "result": {
+            "content": [
+                {"type": "resource", "resource": {"uri": "example://item", "text": "details"}},
+                {"type": "text", "text": '{"error": "write failed"}'},
+            ]
+        }
+    }
+    r = _daemon_result_from_mcp_response(resp)
+    assert r["success"] is False and r["exit_code"] == 1
+    resp["result"]["isError"] = True
+    resp["result"]["content"][1]["text"] = "write refused"
+    assert _daemon_result_from_mcp_response(resp)["error"] == "write refused"

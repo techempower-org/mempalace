@@ -616,7 +616,17 @@ def _daemon_result_from_mcp_response(response: Any) -> dict[str, Any]:
 
     result = response.get("result") or {}
     content = (result.get("content") or []) if isinstance(result, dict) else []
-    text = content[0].get("text") if content and isinstance(content[0], dict) else None
+    # the first TEXT block: MCP allows other blocks (a resource, an image) before it
+    text = next(
+        (
+            b["text"]
+            for b in content
+            if isinstance(b, dict)
+            and b.get("type", "text") == "text"
+            and isinstance(b.get("text"), str)
+        ),
+        None,
+    )
     # an MCP tool reports its own failure with isError: never a successful job, whatever the text says (fork,
     # review of the upstream sync 2026-11-15)
     if isinstance(result, dict) and result.get("isError") is True:
