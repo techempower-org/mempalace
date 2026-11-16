@@ -1094,6 +1094,15 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
     p_search.add_argument("--wing", default=None, help="Limit to one project")
     p_search.add_argument("--room", default=None, help="Limit to one room")
     p_search.add_argument(
+        "--all-classes",
+        action="store_true",
+        default=False,
+        help=(
+            "Include drawers a triage run flagged judged_class chatter or stale "
+            "(left out by default; the result counts them as judged_excluded)"
+        ),
+    )
+    p_search.add_argument(
         "--tag",
         action="append",
         dest="tags",

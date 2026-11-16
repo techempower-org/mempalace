@@ -86,6 +86,7 @@ mempalace search "query" --results 10
 | `"query"` | — | What to search for |
 | `--wing` | all | Filter by wing |
 | `--room` | all | Filter by room |
+| `--all-classes` | — | Include drawers a triage run flagged `judged_class` chatter or stale (left out by default) |
 | `--results` | `5` | Number of results |
 
 ## `mempalace list`

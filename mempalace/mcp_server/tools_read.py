@@ -692,6 +692,7 @@ def tool_search(
     cli_compatible: bool = False,
     include_media: bool = False,
     query_task: str = "search",
+    all_classes: bool = False,
 ):
     limit = max(1, min(limit, _MAX_RESULTS))
     try:
@@ -716,10 +717,14 @@ def tool_search(
         return {"error": "candidate_strategy must be one of ('vector', 'union', 'hybrid')"}
     if (
         not isinstance(include_media, bool)
+        or not isinstance(all_classes, bool)
         or not isinstance(query_task, str)
         or query_task not in {"search", "code"}
     ):
-        return {"error": "include_media must be boolean and query_task must be 'search' or 'code'"}
+        return {
+            "error": "include_media and all_classes must be boolean and query_task must be "
+            "'search' or 'code'"
+        }
     if cli_compatible and (include_media or query_task != "search"):
         return {"error": "cli_compatible cannot be combined with media/code task search"}
     experimental = {
@@ -787,6 +792,7 @@ def tool_search(
                         since=since,
                         before=before,
                         collection=collection,
+                        all_classes=all_classes,
                     )
                 )
         except SearchError as exc:
@@ -823,6 +829,7 @@ def tool_search(
         candidate_strategy=candidate_strategy,
         collection_name=_config.collection_name,
         fusion_mode=fusion_mode,
+        all_classes=all_classes,
         **experimental,
     )
     # Attach per-source trace if requested (Phase 4 hybrid retrieval).
@@ -858,6 +865,7 @@ def tool_search(
             vector_disabled=_vector_disabled,
             candidate_strategy=candidate_strategy,
             collection_name=_config.collection_name,
+            all_classes=all_classes,
             **experimental,
         )
         if not _is_transient_index_error(result):

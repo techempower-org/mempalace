@@ -1,0 +1,26 @@
+seq: 206
+id: search-all-classes
+date: '2026-11-15'
+bucket: Added
+commit: HEAD
+area: Search
+summary: default search leaves out drawers flagged judged_class chatter or stale; --all-classes (all_classes=True) returns every drawer
+body: |
+  docs/designs/judged-drawer-classes.md, condition 2: the search exclusion
+  ships, with an include flag and a red test, before the judged-class run
+  writes any flag, so a flagged drawer is never unreachable.
+
+  ``search_memories`` leaves out drawers whose stored metadata says
+  ``judged_class`` chatter or stale and counts them in ``judged_excluded``,
+  with a warning that names the flag; the pool is widened (bounded, three
+  rounds) so the page still fills. ``all_classes=True`` (the
+  ``mempalace_search`` tool argument, CLI ``mempalace search --all-classes``)
+  returns every drawer. ``secret`` is not a search exclusion: those drawers
+  are re-redacted instead.
+
+  The filter sits on ``search_memories`` itself, after every candidate source
+  (vector, BM25 union, graph, sqlite fallback), and fails open: a hit whose
+  stored row cannot be read is kept. The CLI's hub forwarder does not carry the
+  flag, so an --all-classes search runs locally; under daemon-strict the flag
+  rides on the ``mempalace_search`` tool call. palace-daemon filters its own
+  SQL routes in the companion PR.

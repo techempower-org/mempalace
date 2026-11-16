@@ -241,7 +241,7 @@ def _copies_left_results_short(hits, n_results, candidates_fetched, pool_size) -
     )
 
 
-def search_memories(  # noqa: C901 — fork-only fallback orchestration; complexity above ceiling is the cost of the BM25-top-up + warnings + closet-boost branches
+def _search_memories_impl(  # noqa: C901 — fork-only fallback orchestration; complexity above ceiling is the cost of the BM25-top-up + warnings + closet-boost branches
     query: str,
     palace_path: str,
     wing: str = None,
@@ -261,77 +261,8 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     include_media: bool = False,
     query_task: str = "search",
 ) -> dict:
-    """Programmatic search — returns a dict instead of printing.
+    """The search itself; :func:`search_memories` wraps it (judged-class filter). Arguments as there."""
 
-    Used by the MCP server and other callers that need data.
-
-    Hybrid search: BM25 keyword matching + vector semantic similarity.
-    The drawer query is the floor — always runs — and closet hits add a
-    rank-based boost when they agree.
-
-    Each hit exposes ``filed_at`` (also retained as ``created_at``), plus
-    the legacy ``authored_at`` value and ``authored_at_source`` indicating
-    whether it came from stored ``authored_at``, the ``filed_at`` fallback,
-    or is ``unknown``. ``content_date`` is a separate inferred date with
-    ``content_date_source`` (filename/frontmatter/body/mtime when recorded,
-    otherwise ``unknown``). Neither inference nor filing proves authorship.
-
-    Args:
-        query: Natural language search query.
-        palace_path: Path to the ChromaDB palace directory.
-        wing: Optional wing filter.
-        room: Optional room filter.
-        source_file: Optional exact source_file filter. Matches the full
-            stored source_file value verbatim (#1815).
-        since: Optional inclusive ISO date/datetime lower bound on a
-            drawer's ``filed_at`` (ingest time, the ``created_at`` shown in
-            results) — ``[since, before)`` window semantics shared with
-            ``list_drawers`` (#1128): wall-clock naive comparison, drawers
-            with missing/unparseable ``filed_at`` excluded while a bound is
-            active. Filtering happens after retrieval (ChromaDB rejects
-            string operands for ``$gte``/``$lt``), so the candidate pool is
-            widened via ``_candidate_pool_size`` — see
-            ``date_filter_pool_truncated`` in the response.
-        before: Optional exclusive ISO upper bound; see ``since``.
-        n_results: Max results to return.
-        max_distance: Max cosine distance threshold. The palace collection uses
-            cosine distance (hnsw:space=cosine) — 0 = identical, 2 = opposite.
-            Results with distance > this value are filtered out. A value of
-            0.0 disables filtering. Typical useful range: 0.3–1.0.
-        vector_disabled: When True, route to the sqlite-only BM25 fallback
-            (#1222). Set by the MCP server when the HNSW capacity probe
-            detects a divergence that would segfault chromadb on segment
-            load.
-        candidate_strategy: How candidates for the hybrid re-rank are gathered.
-
-            * ``"vector"`` (default) — preserves historical behavior: top
-              ``n_results * 4`` rows from the vector index are the rerank pool.
-              Cheap; works well when query and target docs agree in the
-              embedding space.
-            * ``"union"`` — also pull top ``n_results * 3`` lexical candidates
-              through the backend's ``lexical_search`` capability and merge
-              them into the rerank pool (deduped by source_file). Catches docs
-              with strong BM25 signal that are vector-distant from the query.
-              Perf depends on the selected backend; opt in until the cost is
-              characterized.
-
-              When ``max_distance > 0.0`` is also set, BM25-only candidates
-              are admitted only if their stored embeddings can be loaded and
-              their computed vector distance satisfies that threshold.
-        lang: Locale code for BM25 stop-word filtering (opt-in). When
-            omitted, reads ``MempalaceConfig().lang_explicit`` — returns an
-            empty set unless the user has set ``MEMPALACE_LANG`` /
-            ``MEMPAL_LANG`` or ``config.json["lang"]``. Palaces without an
-            explicit language skip filtering entirely, preserving pre-PR
-            byte-identical scoring.
-        fusion_mode: How the final candidate pool is ranked.
-
-            * ``"convex"`` (default) — historical behavior: a weighted blend
-              of normalized vector similarity and BM25 (``_hybrid_rank``).
-            * ``"rrf"`` — Reciprocal Rank Fusion of the vector ordering and
-              the BM25 ordering (``_rrf_rank``). Score-scale agnostic; only
-              the rank orderings matter. Selectable for the #162 A/B study.
-    """
     # Validate the strategy eagerly so invalid values fail the same way
     # regardless of whether the call routes through the vector path or
     # the BM25-only fallback below.
@@ -631,7 +562,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     candidates_fetched = len(_first_or_empty(drawer_results, "documents"))
     copies_left_short = _copies_left_results_short(hits, n_results, candidates_fetched, pool_size)
     if copies_left_short and _pool_scale < _MAX_POOL_SCALE and pool_size < _MAX_FOLD_POOL:
-        return search_memories(
+        return _search_memories_impl(
             query,
             palace_path,
             wing=wing,
@@ -733,6 +664,266 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     result["warnings"] = warnings
     if copies_left_short:  # could not widen any further
         result["distinct_results_truncated"] = True
+    return result
+
+
+# Judged drawer classes (docs/designs/judged-drawer-classes.md): a drawer the judged-class
+# run flagged ``judged_class`` chatter or stale stays in the palace and is left out of default
+# search. ``all_classes=True`` (CLI ``--all-classes``) returns every drawer, so a flagged drawer
+# is never unreachable. ``secret`` is not a search exclusion: those drawers are re-redacted.
+JUDGED_SEARCH_EXCLUDED = frozenset({"chatter", "stale"})
+_JUDGED_WIDEN_ROUNDS = (
+    2  # extra searches at most, each only when flagged drawers left the page short
+)
+_JUDGED_WIDEN_MAX_FACTOR = 3  # never ask for more than 3 x n_results
+_JUDGED_WIDEN_SLOW_S = 1.0  # a first search slower than this is not repeated to refill the page
+_PARENT_ID_KEYS = ("parent_drawer_id", "parent_entry_id")
+_JUDGED_PARENT_ROW_LIMIT = (
+    256  # chunk rows read per parent key; more means "cannot prove", keep visible
+)
+_JUDGED_LOOKUP_BUDGET_S = 0.5  # past this, logical parent ids are not resolved (kept visible)
+
+
+def _judged_excluded_class(meta) -> bool:
+    value = meta.get("judged_class") if isinstance(meta, dict) else None
+    return isinstance(value, str) and value in JUDGED_SEARCH_EXCLUDED
+
+
+def _judged_hidden_ids(palace_path: str, collection_name, ids: list) -> set:
+    """The subset of ``ids`` proven to be judged chatter/stale.
+
+    An id is hidden only when every stored row behind it carries an excluded class:
+    the row itself, or, for a logical id a hit reports (``parent_drawer_id`` /
+    ``parent_entry_id``), every chunk row that names it as parent. Anything that cannot
+    be read, decoded or resolved stays visible (fail open), so the filter can only
+    narrow results it can prove are flagged.
+    """
+    import time
+
+    ids = sorted({i for i in ids if isinstance(i, str) and i})
+    if not ids:
+        return set()
+    started = time.monotonic()
+    try:
+        col, err = _open_search_collection(palace_path, collection_name)
+        if col is None or err:
+            return set()
+        got = col.get(ids=ids, include=["metadatas"])
+        found = {}
+        for drawer_id, meta in zip(got.get("ids") or [], got.get("metadatas") or []):
+            if isinstance(drawer_id, str):
+                found[drawer_id] = _judged_excluded_class(meta)
+        hidden = {i for i, flagged in found.items() if flagged}
+        missing = [i for i in ids if i not in found]
+        if missing:
+            children: dict = {}
+            for key in _PARENT_ID_KEYS:
+                if time.monotonic() - started > _JUDGED_LOOKUP_BUDGET_S:
+                    return hidden  # out of budget: logical ids stay visible
+                rows = col.get(
+                    where={key: {"$in": missing}},
+                    include=["metadatas"],
+                    limit=_JUDGED_PARENT_ROW_LIMIT,
+                )
+                metas = rows.get("metadatas") or []
+                if len(metas) >= _JUDGED_PARENT_ROW_LIMIT:
+                    # Cannot prove every chunk was read, for any parent on either key: hide no
+                    # logical id at all (a partial read on one key must not let the other decide).
+                    return hidden
+                for meta in metas:
+                    parent = meta.get(key) if isinstance(meta, dict) else None
+                    if isinstance(parent, str):
+                        children.setdefault(parent, []).append(_judged_excluded_class(meta))
+            hidden |= {p for p, flags in children.items() if flags and all(flags)}
+        return hidden
+    except Exception:  # noqa: BLE001 -- fail open: never hide what we cannot prove is flagged
+        logger.debug("judged-class lookup failed; not filtering", exc_info=True)
+        return set()
+
+
+def _hit_ids(hit: dict) -> list:
+    """Every drawer id a hit stands for: its own and each folded copy's (``also_in``)."""
+    ids = [hit.get("drawer_id")]
+    for ref in hit.get("also_in") or ():
+        if isinstance(ref, dict):
+            ids.append(ref.get("drawer_id"))
+    return [i for i in ids if isinstance(i, str) and i]
+
+
+def _drop_judged_hits(hits: list, hidden: set) -> list:
+    """Keep a hit unless it and every folded copy are proven flagged; a hit with no id stays."""
+    kept = []
+    for hit in hits:
+        ids = _hit_ids(hit)
+        if ids and all(i in hidden for i in ids):
+            continue
+        kept.append(hit)
+    return kept
+
+
+def search_memories(
+    query: str,
+    palace_path: str,
+    wing: str = None,
+    room: str = None,
+    tags: list = None,
+    source_file: str = None,
+    since: str = None,
+    before: str = None,
+    n_results: int = 5,
+    max_distance: float = 0.0,
+    vector_disabled: bool = False,
+    candidate_strategy: str = "vector",
+    fusion_mode: str = "convex",
+    collection_name: str = None,
+    lang: Optional[str] = None,
+    _pool_scale: int = 1,
+    include_media: bool = False,
+    query_task: str = "search",
+    all_classes: bool = False,
+) -> dict:
+    """Programmatic search — returns a dict instead of printing.
+
+    Used by the MCP server and other callers that need data.
+
+    Hybrid search: BM25 keyword matching + vector semantic similarity.
+    The drawer query is the floor — always runs — and closet hits add a
+    rank-based boost when they agree.
+
+    Each hit exposes ``filed_at`` (also retained as ``created_at``), plus
+    the legacy ``authored_at`` value and ``authored_at_source`` indicating
+    whether it came from stored ``authored_at``, the ``filed_at`` fallback,
+    or is ``unknown``. ``content_date`` is a separate inferred date with
+    ``content_date_source`` (filename/frontmatter/body/mtime when recorded,
+    otherwise ``unknown``). Neither inference nor filing proves authorship.
+
+    Args:
+        query: Natural language search query.
+        palace_path: Path to the ChromaDB palace directory.
+        wing: Optional wing filter.
+        room: Optional room filter.
+        source_file: Optional exact source_file filter. Matches the full
+            stored source_file value verbatim (#1815).
+        since: Optional inclusive ISO date/datetime lower bound on a
+            drawer's ``filed_at`` (ingest time, the ``created_at`` shown in
+            results) — ``[since, before)`` window semantics shared with
+            ``list_drawers`` (#1128): wall-clock naive comparison, drawers
+            with missing/unparseable ``filed_at`` excluded while a bound is
+            active. Filtering happens after retrieval (ChromaDB rejects
+            string operands for ``$gte``/``$lt``), so the candidate pool is
+            widened via ``_candidate_pool_size`` — see
+            ``date_filter_pool_truncated`` in the response.
+        before: Optional exclusive ISO upper bound; see ``since``.
+        n_results: Max results to return.
+        max_distance: Max cosine distance threshold. The palace collection uses
+            cosine distance (hnsw:space=cosine) — 0 = identical, 2 = opposite.
+            Results with distance > this value are filtered out. A value of
+            0.0 disables filtering. Typical useful range: 0.3–1.0.
+        vector_disabled: When True, route to the sqlite-only BM25 fallback
+            (#1222). Set by the MCP server when the HNSW capacity probe
+            detects a divergence that would segfault chromadb on segment
+            load.
+        candidate_strategy: How candidates for the hybrid re-rank are gathered.
+
+            * ``"vector"`` (default) — preserves historical behavior: top
+              ``n_results * 4`` rows from the vector index are the rerank pool.
+              Cheap; works well when query and target docs agree in the
+              embedding space.
+            * ``"union"`` — also pull top ``n_results * 3`` lexical candidates
+              through the backend's ``lexical_search`` capability and merge
+              them into the rerank pool (deduped by source_file). Catches docs
+              with strong BM25 signal that are vector-distant from the query.
+              Perf depends on the selected backend; opt in until the cost is
+              characterized.
+
+              When ``max_distance > 0.0`` is also set, BM25-only candidates
+              are admitted only if their stored embeddings can be loaded and
+              their computed vector distance satisfies that threshold.
+        lang: Locale code for BM25 stop-word filtering (opt-in). When
+            omitted, reads ``MempalaceConfig().lang_explicit`` — returns an
+            empty set unless the user has set ``MEMPALACE_LANG`` /
+            ``MEMPAL_LANG`` or ``config.json["lang"]``. Palaces without an
+            explicit language skip filtering entirely, preserving pre-PR
+            byte-identical scoring.
+        fusion_mode: How the final candidate pool is ranked.
+
+            * ``"convex"`` (default) — historical behavior: a weighted blend
+              of normalized vector similarity and BM25 (``_hybrid_rank``).
+            * ``"rrf"`` — Reciprocal Rank Fusion of the vector ordering and
+              the BM25 ordering (``_rrf_rank``). Score-scale agnostic; only
+              the rank orderings matter. Selectable for the #162 A/B study.
+        all_classes: when False (default), hits proven to be drawers flagged ``judged_class``
+            chatter or stale are left out. ``judged_excluded`` counts the hits left out of the
+            final candidate set (the last search run), and a warning names the include flag.
+            When flagged hits leave the page short the search is repeated with a larger
+            ``n_results``, at most ``_JUDGED_WIDEN_ROUNDS`` times, never past
+            ``_JUDGED_WIDEN_MAX_FACTOR`` x ``n_results``, and not at all when the first search
+            took longer than ``_JUDGED_WIDEN_SLOW_S``. True returns every drawer.
+            Media assets carry no drawer row, so they are never hidden.
+    """
+
+    import time
+
+    def run(n):
+        return _search_memories_impl(
+            query,
+            palace_path,
+            wing=wing,
+            room=room,
+            tags=tags,
+            source_file=source_file,
+            since=since,
+            before=before,
+            n_results=n,
+            max_distance=max_distance,
+            vector_disabled=vector_disabled,
+            candidate_strategy=candidate_strategy,
+            fusion_mode=fusion_mode,
+            collection_name=collection_name,
+            lang=lang,
+            _pool_scale=_pool_scale,
+            include_media=include_media,
+            query_task=query_task,
+        )
+
+    started = time.monotonic()
+    result = run(n_results)
+    if all_classes or not isinstance(result, dict) or not result.get("results"):
+        return result
+    first_run_s = time.monotonic() - started
+    want = n_results
+    cap = max(n_results, n_results * _JUDGED_WIDEN_MAX_FACTOR)
+    rounds = 0
+    while True:
+        hits = result.get("results") or []
+        hidden = _judged_hidden_ids(
+            palace_path, collection_name, [i for h in hits for i in _hit_ids(h)]
+        )
+        kept = _drop_judged_hits(hits, hidden)
+        # Stop when the page is full, nothing was hidden, the search already returned all it
+        # had, the widening budget is spent, or the first search was too slow to repeat.
+        if (
+            len(kept) >= n_results
+            or len(kept) == len(hits)
+            or len(hits) < want
+            or rounds >= _JUDGED_WIDEN_ROUNDS
+            or want >= cap
+            or first_run_s > _JUDGED_WIDEN_SLOW_S
+        ):
+            break
+        want = min(cap, want + 2 * (len(hits) - len(kept)))
+        wider = run(want)
+        rounds += 1
+        if not isinstance(wider, dict) or not wider.get("results"):
+            break
+        result = wider
+    result["results"] = kept[:n_results]
+    result["judged_excluded"] = len(hits) - len(kept)
+    if result["judged_excluded"]:
+        result.setdefault("warnings", []).append(
+            f"{result['judged_excluded']} hit(s) judged chatter/stale were left out; "
+            "search with all_classes (CLI --all-classes) to include them"
+        )
     return result
 
 

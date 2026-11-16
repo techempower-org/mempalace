@@ -18,10 +18,15 @@ def cmd_search(args):
             arguments["room"] = args.room
         if tags:
             arguments["tags"] = tags
+        all_classes = bool(getattr(args, "all_classes", False))
+        if all_classes:
+            arguments["all_classes"] = True
         try:
             data = None
 
-            if search_mode == "hybrid":
+            if all_classes:
+                pass  # only the mempalace_search tool route carries all_classes
+            elif search_mode == "hybrid":
                 data = _daemon_search_hybrid(args.query, n_results, wing=args.wing, room=args.room)
             elif search_mode == "fast":
                 data = _daemon_search_fast(args.query, n_results, wing=args.wing)
@@ -70,6 +75,7 @@ def cmd_search(args):
             tags=tags,
             n_results=n_results,
             search_memories=search_memories,
+            all_classes=bool(getattr(args, "all_classes", False)),
         )
         return
 
@@ -85,6 +91,7 @@ def cmd_search(args):
             room=args.room,
             tags=tags,
             n_results=n_results,
+            **({"all_classes": True} if getattr(args, "all_classes", False) else {}),
         )
         _print_daemon_search(
             args.query, result, wing=args.wing, room=args.room, fmt=fmt, quiet=quiet
@@ -94,6 +101,8 @@ def cmd_search(args):
         sys.exit(0 if (result.get("results") or []) else 1)
 
     experimental = {}
+    if getattr(args, "all_classes", False):
+        experimental["all_classes"] = True
     if getattr(args, "include_media", False):
         experimental["include_media"] = True
     if getattr(args, "query_task", "search") != "search":
@@ -123,6 +132,7 @@ def _emit_local_search_json(
     n_results: int,
     search_memories,
     tags: list = None,
+    all_classes: bool = False,
 ) -> None:
     """JSON search against a local palace — mirrors the MCP
     ``tool_search`` response shape. ``search_memories`` is injected so
@@ -153,7 +163,13 @@ def _emit_local_search_json(
         sys.exit(2)
 
     result = search_memories(
-        query, palace_path, wing=wing, room=room, tags=tags, n_results=n_results
+        query,
+        palace_path,
+        wing=wing,
+        room=room,
+        tags=tags,
+        n_results=n_results,
+        **({"all_classes": True} if all_classes else {}),
     )
     result.setdefault("query", query)
     _emit_json(result)

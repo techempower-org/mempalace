@@ -203,6 +203,7 @@ def _search_delegating(  # noqa: C901 — fork delegation + upstream window fenc
     collection=None,
     include_media: bool = False,
     query_task: str = "search",
+    all_classes: bool = False,
 ):
     """
     Search the palace. Returns verbatim drawer content.
@@ -334,6 +335,7 @@ def _search_delegating(  # noqa: C901 — fork delegation + upstream window fenc
         n_results=n_results,
         since=since,
         before=before,
+        all_classes=all_classes,
     )
     if "error" in result and not result.get("results"):
         if result.get("error_class"):

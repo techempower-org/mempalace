@@ -417,6 +417,10 @@ TOOLS = {
                     "enum": ["search", "code"],
                     "description": "EmbeddingGemma 2 task prompt: general search (default) or native code retrieval.",
                 },
+                "all_classes": {
+                    "type": "boolean",
+                    "description": "Include drawers a triage run flagged judged_class chatter or stale (left out by default, counted in judged_excluded).",
+                },
                 "context": {
                     "type": "string",
                     "description": "Background context for the search (optional). NOT used for embedding — only for future re-ranking.",
