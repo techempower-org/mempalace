@@ -113,7 +113,14 @@ Raised when the embedding API is unreachable or returns an invalid body.
 
 Module-specific subclass mirroring ``llm_client.LLMError`` so callers can
 distinguish embedding-endpoint failures; subclasses ``RuntimeError`` so
-existing ``except RuntimeError`` paths still catch it.
+existing ``except RuntimeError`` paths still catch it. Like ``LLMError``,
+its message is masked: the endpoint URL or its reply may carry a key.
+
+#### `__init__`
+
+```python
+def __init__(self, message: str)
+```
 
 ### `class OpenAICompatEmbeddingFunction`
 
