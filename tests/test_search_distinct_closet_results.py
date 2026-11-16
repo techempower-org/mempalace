@@ -260,7 +260,11 @@ def test_search_promotes_distinct_results_from_wider_pool_and_fetches_source_onc
     assert len(rendered_keys) == 5
     assert hits[0]["drawer_id"] == "same-0"
     assert drawers_col.query.call_args.kwargs["n_results"] == 20
-    assert drawers_col.get.call_count == 1
+    # The source is fetched once for enrichment; the judged-class filter (judged-drawer-classes.md)
+    # adds one id-keyed metadata lookup of the page, never a per-hit fetch.
+    gets = drawers_col.get.call_args_list
+    assert sum(1 for c in gets if "ids" not in c.kwargs) == 1
+    assert sum(1 for c in gets if "ids" in c.kwargs) <= 1
     assert sum(hit["source_path"] == repeated_source for hit in hits) == 1
 
 

@@ -49,9 +49,9 @@ The first two judges agreed on 96.3% of drawers overall, but much less on the th
    - `judges`: a short list, for example `["qwen2.5-72b", "tulu3-70b", "tiebreak"]`.
 
    The write is a metadata merge (`metadata || {...}`) in batches. It changes no document text, embedding or id. No drawer carries `judged_class` today; this was counted on 2026-11-15.
-2. **Search.** Default search excludes `judged_class` in (chatter, stale). A flag includes them: `include_judged=True` in the API, `--include-judged` on the CLI.
+2. **Search.** Default search excludes `judged_class` in (chatter, stale). A flag includes them: `all_classes=True` in the API (`mempalace_search` tool, `search_memories`), `--all-classes` on the CLI, and `all_classes` on the daemon's `/search`, `/search/fast`, `/search/hybrid`, `/search/keyword`, `/search/age-fused` and `/context`. A result that left drawers out says so in `judged_excluded` and a warning naming the flag.
    - This is a separate code change in mempalace and palace-daemon, with its own PR and tests.
-   - Until it ships, the flag is inert: it is stored but filters nothing.
+   - The exclusion shipped before any flag was written (condition 2). It fails open: a drawer is left out only when its stored row is read and proven flagged.
    - `secret` is not a search exclusion; see the next step.
 3. **Secret.** Each `secret` drawer is first re-redacted in place under the #619 rules: the prefix-free shapes, plus the vault-item needles. The redacted text replaces the document, and its embedding is recomputed by the backend's own embedder.
    - Then the drawer is flagged `judged_class=secret`, so a later report can list secret-flagged drawers that still match a rule.
