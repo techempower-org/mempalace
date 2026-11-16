@@ -13,9 +13,17 @@ into normalized action dictionaries for palace_query, palace_exec, and palace_co
 
 Raised when a PQL DSL string cannot be parsed.
 
-### `class QuotedToken(str)`
+### `class Token(str)`
+
+DSL token that remembers its span in the stripped source.
+
+### `class QuotedToken(Token)`
 
 A DSL token that was written in quotes; never treated as a keyword flag.
+
+The string value keeps historical escape expansion for filter values.
+``literal`` unescapes only quotes and backslashes, which is the form
+stored as document text.
 
 ## Functions
 
