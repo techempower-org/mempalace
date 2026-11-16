@@ -24,6 +24,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **default search leaves out drawers flagged judged_class chatter or stale; --all-classes (all_classes=True) returns every drawer** ([`b309a4e`](https://github.com/techempower-org/mempalace/commit/b309a4e))
+  docs/designs/judged-drawer-classes.md, condition 2: the search exclusion
+  ships, with an include flag and a red test, before the judged-class run
+  writes any flag, so a flagged drawer is never unreachable.
+
+  ``search_memories`` leaves out drawers whose stored metadata says
+  ``judged_class`` chatter or stale and counts them in ``judged_excluded``,
+  with a warning that names the flag; the pool is widened (bounded, three
+  rounds) so the page still fills. ``all_classes=True`` (the
+  ``mempalace_search`` tool argument, CLI ``mempalace search --all-classes``)
+  returns every drawer. ``secret`` is not a search exclusion: those drawers
+  are re-redacted instead.
+
+  The filter sits on ``search_memories`` itself, after every candidate source
+  (vector, BM25 union, graph, sqlite fallback), and fails open: a hit whose
+  stored row cannot be read is kept. The CLI's hub forwarder does not carry the
+  flag, so an --all-classes search runs locally; under daemon-strict the flag
+  rides on the ``mempalace_search`` tool call. palace-daemon filters its own
+  SQL routes in the companion PR.
+
+
 - **mempalace mine --wait-lock SECONDS — a scheduled mine waits a bounded time for the palace lock instead of failing at once** ([`2c0cdd4`](https://github.com/techempower-org/mempalace/commit/2c0cdd4))
   ``mine_palace_lock`` is non-blocking on purpose: hook-spawned mines must not
   pile up as waiting workers. A scheduled mine that shares the palace with them
