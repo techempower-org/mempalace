@@ -722,32 +722,90 @@ _QUERY_TARGET_TO_TOOL = {
     "stats": "mempalace_graph_stats",
 }
 
+# palace_exec / palace_coordinate actions the production rewrite may dispatch.
+# Anything absent is an unknown target (-32602), never ``mempalace_<action>``.
+_EXEC_ACTION_TO_TOOL = {
+    "add_drawer": "mempalace_add_drawer",
+    "update_drawer": "mempalace_update_drawer",
+    "delete_drawer": "mempalace_delete_drawer",
+    "delete_by_source": "mempalace_delete_by_source",
+    "checkpoint": "mempalace_checkpoint",
+    "mine": "mempalace_mine",
+    "sync": "mempalace_sync",
+    "kg_add": "mempalace_kg_add",
+    "kg_invalidate": "mempalace_kg_invalidate",
+    "kg_supersede": "mempalace_kg_supersede",
+    "create_tunnel": "mempalace_create_tunnel",
+    "delete_tunnel": "mempalace_delete_tunnel",
+    "delete_hallway": "mempalace_delete_hallway",
+    "diary_write": "mempalace_diary_write",
+    "reconnect": "mempalace_reconnect",
+    "hook_settings": "mempalace_hook_settings",
+}
 
-def _classify_underlying_tool(tool_name: str, arguments: Any) -> str:
-    """Map a consolidated lightweight tool call to its underlying legacy tool name for preflight gates."""
+_COORD_ACTION_TO_TOOL = {
+    "task_create": "mempalace_task_create",
+    "event_append": "mempalace_event_append",
+    "event_list": "mempalace_event_list",
+    "event_wait": "mempalace_event_wait",
+    "event_ack": "mempalace_event_ack",
+    "artifact_put": "mempalace_artifact_put",
+    "artifact_get": "mempalace_artifact_get",
+    "patch_submit": "mempalace_patch_submit",
+    "mesh_peers": "mempalace_mesh_peers",
+    # Structured ``{"action": "peers"}`` is not rewritten by the PQL parser.
+    "peers": "mempalace_mesh_peers",
+}
+
+
+def _allowlisted_tool(mapping: Dict[str, str], key: str) -> Optional[str]:
+    """Return the mempalace_* name for an allowlisted key, else None."""
+    name = mapping.get(key)
+    if isinstance(name, str) and name in mcp_server.TOOLS:
+        return name
+    return None
+
+
+def _classify_underlying_tool(tool_name: str, arguments: Any) -> Optional[str]:
+    """Map a palace_* call to an allowlisted mempalace_* tool.
+
+    Unknown targets are None. They are not invented as ``mempalace_<target>``.
+    A parse failure still names a real mutating tool so preflight keeps
+    treating an unreadable exec or coordinate call as a write.
+    """
     unwrapped = _unwrap_wrapper_input(arguments)
     if tool_name == "palace_exec":
         try:
             action, _ = parse_exec_input(unwrapped)
-            return f"mempalace_{action}"
         except Exception:
             return "mempalace_add_drawer"
+        return _allowlisted_tool(_EXEC_ACTION_TO_TOOL, action)
 
     if tool_name == "palace_coordinate":
         try:
             action, _ = parse_coordinate_input(unwrapped)
-            return f"mempalace_{action}"
         except Exception:
             return "mempalace_event_append"
+        return _allowlisted_tool(_COORD_ACTION_TO_TOOL, action)
 
     if tool_name == "palace_query":
         try:
             target, _ = parse_query_input(unwrapped)
-            return _QUERY_TARGET_TO_TOOL.get(target, f"mempalace_{target}")
         except Exception:
             return "mempalace_search"
+        return _allowlisted_tool(_QUERY_TARGET_TO_TOOL, target)
 
-    return tool_name
+    if isinstance(tool_name, str) and tool_name in mcp_server.TOOLS:
+        return tool_name
+    return None
+
+
+def _unknown_target_error(req_id) -> Dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "error": {"code": -32602, "message": "unknown target"},
+    }
 
 
 def handle_light_request(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -820,8 +878,12 @@ def handle_light_request(request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         arguments = params.get("arguments") or {}
 
-        # Classify underlying tool for preflight gates (read-only, peer-writer, stale-library, diverged-index)
+        # Same allowlist the production rewrite uses. An unknown palace_*
+        # target is -32602 here too, so this path cannot dispatch a write
+        # the rewrite would refuse.
         underlying_name = _classify_underlying_tool(tool_name, arguments)
+        if not underlying_name:
+            return _unknown_target_error(req_id)
         refusal = mcp_server._mcp_tool_preflight_refusal(req_id, underlying_name)
         if refusal is not None:
             return refusal
@@ -920,6 +982,8 @@ def _rewrite_tools_call_for_hub(request: Dict[str, Any]):
             taxonomy_wing = parsed.get("wing")
 
     underlying = _classify_underlying_tool(tool_name, arguments)
+    if not underlying:
+        return {"_unknown_target": True}
     tool_def = mcp_server.TOOLS.get(underlying) or {}
     handler = tool_def.get("handler")
     if handler is not None:
@@ -975,6 +1039,8 @@ def dispatch_light_stdio_request(request: Dict[str, Any]) -> Optional[Dict[str, 
     method = request.get("method") if isinstance(request, dict) else None
     if method == "tools/call":
         rewritten = _rewrite_tools_call_for_hub(request)
+        if isinstance(rewritten, dict) and rewritten.get("_unknown_target"):
+            return _unknown_target_error(request.get("id"))
         if isinstance(rewritten, dict) and rewritten.get("_parse_error"):
             req_id = request.get("id")
             payload = {"success": False, "error": f"PQL parse error: {rewritten['message']}"}
@@ -1007,6 +1073,30 @@ def dispatch_light_stdio_request(request: Dict[str, Any]) -> Optional[Dict[str, 
                 return mcp_server._internal_tool_error(request.get("id"), underlying, exc)
             return _postprocess_light_response(rewritten, resp)
     return handle_light_request(request)
+
+
+def _light_stdio_payload(line: str) -> Optional[str]:
+    """JSON-RPC text to write for one stdio line, or None when no reply is owed.
+
+    A line that will not parse is -32700 with a null id. A dispatch exception
+    on a request that has an id is -32603. Notifications stay unanswered.
+    """
+    try:
+        req = json.loads(line)
+    except Exception as exc:
+        logger.error("Server error: %s: %s", type(exc).__name__, exc)
+        return json.dumps(mcp_server._json_rpc_parse_error(), ensure_ascii=False)
+    try:
+        resp = dispatch_light_stdio_request(req)
+    except Exception:
+        logger.exception("Server error")
+        req_id = req.get("id") if isinstance(req, dict) else None
+        if req_id is None:
+            return None
+        return json.dumps(mcp_server._json_rpc_internal_error(req_id), ensure_ascii=False)
+    if resp is None:
+        return None
+    return json.dumps(resp, ensure_ascii=False)
 
 
 def main():
@@ -1053,25 +1143,14 @@ def main():
         line = line.strip()
         if not line:
             continue
-        try:
-            req = json.loads(line)
-        except Exception as exc:
-            # A line json.loads rejects is skipped, as invalid JSON always was. An
-            # integer past the digit limit or nesting too deep to parse raises
-            # something else, and used to end the server.
-            logger.error("Skipped a line json.loads rejected: %s: %s", type(exc).__name__, exc)
+        payload = _light_stdio_payload(line)
+        if payload is None:
             continue
         try:
-            resp = dispatch_light_stdio_request(req)
-        except Exception as exc:
-            logger.error("Server error: %s", exc)
-            continue
-        if resp is not None:
-            try:
-                sys.stdout.write(json.dumps(resp, ensure_ascii=False) + "\n")
-                sys.stdout.flush()
-            except (BrokenPipeError, OSError):
-                break
+            sys.stdout.write(payload + "\n")
+            sys.stdout.flush()
+        except (BrokenPipeError, OSError):
+            break
 
 
 if __name__ == "__main__":
