@@ -630,6 +630,10 @@
       {
         "text": "mempalace.dream.nightly",
         "link": "/reference/python-api/dream/nightly"
+      },
+      {
+        "text": "mempalace.dream.route",
+        "link": "/reference/python-api/dream/route"
       }
     ]
   },

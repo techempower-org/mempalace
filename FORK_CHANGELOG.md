@@ -18,6 +18,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-11-17]
+
+
+### Added
+
+
+- **the nightly dream can route each proposal that names a project to that project's inbox** (`HEAD` — pending resolution)
+  `python -m mempalace.dream nightly --route` appends one line per proposal
+  (lane, proposal id, the first sentence of the ask) to
+  `scratch/dream-inbox.md` in each project folder the proposal's sources name,
+  under `--projects-root` (a symlinked project counts as its real folder,
+  owned by this user; a memory-folder name two folders share names neither).
+  A folder is written only when it is outside every git work tree or git
+  ignores the inbox path; the write goes through descriptors opened without
+  following links, to a 0600 regular single-link file, and an id already in
+  the inbox is never appended again. The routing is kept in `judged.json`
+  under `_routing` (a reserved key the judge's pruning skips). A routed
+  proposal counts as acted once it is decided on the review page, or once a
+  night whose producer for its kind ran complete no longer proposes it (a
+  night without the judge never closes a contradiction; one that comes back
+  is open again). `python -m mempalace.dream routed --out DIR` prints
+  `dreams: N proposals routed, M acted` for a lead's daily pass.
+
+  *Tests:* 33 (tests/test_dream_route.py)
+  *Files:* `mempalace/dream/route.py`, `mempalace/dream/nightly.py`, `mempalace/dream/__main__.py`, `tests/test_dream_route.py`
+
+
 ## [2026-11-15]
 
 

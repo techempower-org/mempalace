@@ -79,14 +79,16 @@ Every other accepted id waits, with its reason, for a lane; a rejected id needs 
 ### `run`
 
 ```python
-def run(memory_root: Path, claude_md: Sequence[Path], embed: inventory.Embedder, judge: Optional[contradictions.Judge], decisions: Dict[str, dict], guard: Optional[Callable[[], Optional[str]]] = None, day: Optional[str] = None, seen: Optional[Dict[str, str]] = None, applied: Optional[List[dict]] = None, global_dirs: Sequence[Path] = (), known: Optional[Dict[str, dict]] = None, verdicts: Optional[Dict[str, dict]] = None, checkpoint: Optional[Callable[[], None]] = None)
+def run(memory_root: Path, claude_md: Sequence[Path], embed: inventory.Embedder, judge: Optional[contradictions.Judge], decisions: Dict[str, dict], guard: Optional[Callable[[], Optional[str]]] = None, day: Optional[str] = None, seen: Optional[Dict[str, str]] = None, applied: Optional[List[dict]] = None, global_dirs: Sequence[Path] = (), known: Optional[Dict[str, dict]] = None, verdicts: Optional[Dict[str, dict]] = None, checkpoint: Optional[Callable[[], None]] = None, route_roots: Sequence[Path] = (), lanes: Optional[Dict[str, str]] = None)
 ```
 
 (the night's document, the updated first-seen ledger). ``judge`` None skips the model
 pass (recorded in ``run``). ``seen`` maps each id to the night it first appeared.
 ``verdicts``, the judge's ledger, is updated in place: new verdicts are added and those of
 pairs this night no longer has are dropped (left alone when the model pass is skipped).
-``checkpoint`` runs after each new verdict (see :func:`save_verdicts`).
+``checkpoint`` runs after each new verdict (see :func:`save_verdicts`). With
+``route_roots``, each proposal that names a project under them is routed to its inbox and
+the routing is kept in ``verdicts`` under :data:`route.KEY` (see :mod:`.route`).
 
 ### `fit`
 

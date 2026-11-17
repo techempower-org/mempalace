@@ -26,7 +26,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
-from . import contradictions, inventory
+from . import contradictions, inventory, route
 
 SCHEMA = "dreams/v1"
 MIN_AVAILABLE_MB = 6144
@@ -44,6 +44,8 @@ LOCK = ".nightly.lock"
 APPLIED = "applied.json"
 # The judge's verdicts by pair_key: kept so a night with the judge off still has them.
 JUDGED = "judged.json"
+# Keys in judged.json that are records kept beside the verdicts, never pruned as pairs.
+RESERVED = frozenset({route.KEY})
 _DAY_FILE = re.compile(r"^\d{4}-\d{2}-\d{2}\.json$")
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 _LINE = re.compile(r":\d+$")
@@ -220,12 +222,16 @@ def run(
     known: Optional[Dict[str, dict]] = None,
     verdicts: Optional[Dict[str, dict]] = None,
     checkpoint: Optional[Callable[[], None]] = None,
+    route_roots: Sequence[Path] = (),
+    lanes: Optional[Dict[str, str]] = None,
 ):
     """(the night's document, the updated first-seen ledger). ``judge`` None skips the model
     pass (recorded in ``run``). ``seen`` maps each id to the night it first appeared.
     ``verdicts``, the judge's ledger, is updated in place: new verdicts are added and those of
     pairs this night no longer has are dropped (left alone when the model pass is skipped).
-    ``checkpoint`` runs after each new verdict (see :func:`save_verdicts`)."""
+    ``checkpoint`` runs after each new verdict (see :func:`save_verdicts`). With
+    ``route_roots``, each proposal that names a project under them is routed to its inbox and
+    the routing is kept in ``verdicts`` under :data:`route.KEY` (see :mod:`.route`)."""
     steps: Dict[str, dict] = {}
     proposals: List[inventory.Proposal] = inventory.run(memory_root, claude_md, embed)
     steps["inventory"] = {"ok": True, "proposals": len(proposals)}
@@ -243,7 +249,8 @@ def run(
             on_verdict=checkpoint,
         )
         if verdicts is not None:
-            for key in [k for k in verdicts if k not in used]:
+            # the routing record sits beside the verdicts; pair keys are hex digests
+            for key in [k for k in verdicts if k not in used and k not in RESERVED]:
                 del verdicts[key]
         proposals += found
         steps["contradictions"] = stats
@@ -260,6 +267,22 @@ def run(
         seen.setdefault(pid, day)
         out.append(fit({"id": pid, **p.as_dict(), "first_seen": seen[pid]}))
     out.sort(key=lambda d: KIND_PRIORITY.index(d["kind"]) if d["kind"] in KIND_PRIORITY else 99)
+    if route_roots:
+        # Every proposal, before the page's size cut, so a cut one is not counted as acted; and
+        # only a kind whose producer ran complete tonight can be "no longer proposed".
+        con = steps["contradictions"]
+        complete = {"no-mechanism", "near-duplicate", "oversized-index"}
+        if not con.get("skipped") and not con.get("error") and con.get("judge") != "off":
+            complete.add("contradiction")
+        steps["routing"] = route.route(
+            out,
+            route_roots,
+            verdicts if verdicts is not None else {},
+            day,
+            lanes=lanes,
+            decisions=decisions,
+            complete_kinds=complete,
+        )
     ledger, waiting = apply_decisions(decisions, applied or [], known or {})
     run_info = {"mempalace": _version(), "steps": steps, "decided_and_dropped": dropped}
     if waiting:
