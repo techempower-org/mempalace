@@ -1430,9 +1430,9 @@ def test_619_metadata_hash_and_id_fields_keep_their_value_but_text_fields_do_not
     }
     out = redact_metadatas(meta)
     assert out["content_hash"] == h and out["source_dir_ino"] == h
-    assert (
-        SHAPE_TOKEN not in out["drawer_id"]
-    )  # a token-shaped value under an id key is still redacted
+    # an identifier under an id key keeps its value against the broad shapes (2026-11-17: identity
+    # fields are judged by the strong passes only)
+    assert out["drawer_id"] == SHAPE_TOKEN
     assert SHAPE_TOKEN not in out["aaak_source"] and h not in out["aaak_source"]
     assert SHAPE_TOKEN not in out["entities"][0]  # an extracted entity is not an id field
 
@@ -1461,7 +1461,8 @@ def test_619_the_exemption_never_reaches_nested_values_or_lookalike_keys():
             "drawer_id": SHAPE_TOKEN,
         }
     )
-    s = str(out)
+    assert out["drawer_id"] == SHAPE_TOKEN  # an identity field: strong passes only (2026-11-17)
+    s = str({k: v for k, v in out.items() if k != "drawer_id"})
     assert SHAPE_TOKEN not in s
     assert out["hashtags"] != h  # "hashtags" is not a digest field
     assert out["recipe"]["inner_hash"] == h  # a whole-hex value under a digest key, at any depth
@@ -1724,3 +1725,31 @@ def test_a_digitalocean_key_is_named_and_never_left_raw(body):
             "api_key=" not in text
         ):  # a named query value goes whole to the assignment rule, which is redacted too
             assert _placeholder("digitalocean", value) in out
+
+
+def test_identity_fields_are_never_rewritten_but_content_fields_still_are():
+    # 2026-11-17: the broad token shape rewrote a project directory segment inside source_file; a re-mine
+    # then looked for the real path, saw none of the file's drawers, and collided with them.
+    from mempalace.redact import redact_metadatas
+
+    path = "/home/user/.claude/projects/-home-user-Projects-box0/0a1b2c3d-chat.jsonl"
+    token = "-home-user-Projects-box0"
+    assert redact(token) != token, "precondition: the broad shape takes this segment"
+    meta = {
+        "source_file": path,
+        "source_path": path,
+        "drawer_id": "drawer_" + token,
+        "id": token,
+        "topic": token,
+    }
+    out = redact_metadatas([meta])[0]
+    for key in ("source_file", "source_path", "drawer_id", "id"):
+        assert out[key] == meta[key], key
+    assert out["topic"] != token, "a content field is still redacted"
+
+
+def test_a_strong_secret_in_an_identity_field_is_still_redacted():
+    key = "AKIA" + "".join(_random.Random(7).choice(_string.ascii_uppercase + _string.digits) for _ in range(16))
+    assert redact(key) != key, "precondition: the aws shape takes it"
+    out = redact_metadatas({"source_file": f"/x/{key}/chat.jsonl"})
+    assert key not in out["source_file"]

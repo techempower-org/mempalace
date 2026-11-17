@@ -1303,6 +1303,45 @@ class TestIncrementalReMine:
         assert not (set(col.deleted_ids) & before), "a drawer filed before the pass was deleted"
         assert before <= set(col.records)
 
+    def test_a_failed_write_never_deletes_a_drawer_stored_under_another_source_file(self):
+        # 2026-11-17 11:32: ubox0's drawers were stored with a source_file the redactor had rewritten; the
+        # prefetch by the real path saw none of them, the write collided with them, and the cleanup deleted
+        # all 17,574 as "created by this pass". Existence is asked by id, never by source_file.
+        col = _IncrementalFakeCol()
+        self._mine(col, _chunks(3))
+        before = set(col.records)
+        for rec in col.records.values():
+            rec["metadata"]["source_file"] = "/elsewhere/[redacted]/chat.jsonl"
+
+        # the pre-write collision scan sees the same ids under another source_file and stops the pass
+        from mempalace.collision_scan import CollisionError
+
+        with pytest.raises(CollisionError):
+            self._mine(col, _chunks(3))
+
+        assert not (set(col.deleted_ids) & before), "a drawer filed before the pass was deleted"
+        assert set(col.records) == before
+
+    def test_a_failed_existing_id_lookup_stops_the_file_and_deletes_nothing(self):
+        col = _IncrementalFakeCol()
+        self._mine(col, _chunks(3))
+        before = {i: dict(r) for i, r in col.records.items()}
+        col.upserted_ids.clear()
+        real_get = col.get
+
+        def get(ids=None, **kw):
+            if ids is not None:
+                raise RuntimeError("simulated id lookup failure")
+            return real_get(ids=ids, **kw)
+
+        col.get = get
+        drawers, _rooms, skipped = self._mine(col, _chunks(5))
+
+        assert skipped == "purge_failed"
+        assert drawers == 0
+        assert col.deleted_ids == [] and col.upserted_ids == []
+        assert set(col.records) == set(before)
+
     def test_update_failure_refiles_unchanged_chunks_in_full(self):
         col = _IncrementalFakeCol()
         self._mine(col, _chunks(3))

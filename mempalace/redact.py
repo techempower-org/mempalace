@@ -451,6 +451,23 @@ def _placeholder(kind: str, value: str) -> str:
     return f"[redacted {kind} sha256:{hashlib.sha256(value.encode()).hexdigest()[:8]}]"
 
 
+def _redact_strong(text: str) -> str:
+    """Only the strong passes (provider shapes, configured patterns, vault needles): no codes,
+    assignments or broad shapes. For identity fields, which those would rewrite into placeholders."""
+    passes = patterns()
+    clean = text
+    for combined, kinds in passes:
+
+        def replace(m: re.Match, kinds=kinds) -> str:
+            if m.group("_mprkeep") is not None:
+                return m.group(0)
+            kind = next(k for i, k in enumerate(kinds) if m.group(f"_mpr{i}") is not None)
+            return _placeholder(kind, m.group(0))
+
+        clean = combined.sub(replace, clean)
+    return clean
+
+
 def redact(text: str, skip_hex: bool = False) -> str:
     """``text`` with every secret-shaped run replaced by its placeholder. ``skip_hex=True`` skips
     only the #619 ``hex`` shape, and is used only for a whole-hex value under a metadata key that
@@ -1036,8 +1053,33 @@ def _redact_value(value, skip_hex: bool = False):
     return value
 
 
+# Identity fields (2026-11-17): a drawer is found again by its source file and its ids. The broad
+# token shape rewrote a project directory segment ("-home-<user>-Projects-<name>") inside source_file,
+# so a re-mine looked for the real path, saw none of the file's stored drawers, and its failed write
+# deleted them. A top-level identity field holding one identifier (no whitespace) is judged by the
+# strong passes only: a provider key, a configured pattern or a vault value is still replaced (a real
+# secret there is a leak, and identity loses to it), the broad shapes, codes and assignments never.
+# Free text under an id-named key is redacted in full. CHECK palace-secrets scans every value.
+_IDENTITY_FIELD = re.compile(r"source_file|source_path|ids?|.+_ids?")
+_ONE_IDENTIFIER = re.compile(r"\S+")
+
+
 def _redact_metadata(meta):
-    return _redact_value(meta) if isinstance(meta, dict) else meta
+    if not isinstance(meta, dict):
+        return meta
+    out = {}
+    for k, v in meta.items():
+        if (
+            isinstance(k, str)
+            and _IDENTITY_FIELD.fullmatch(k)
+            and isinstance(v, str)
+            and _ONE_IDENTIFIER.fullmatch(v)
+        ):
+            clean = _redact_strong(v)
+            out[k] = v if clean == v else clean
+        else:
+            out[k] = _redact_value({k: v})[k]
+    return meta if all(out[k] is meta[k] for k in meta) else out
 
 
 def redact_metadatas(metadatas):
