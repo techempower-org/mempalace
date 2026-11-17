@@ -24,6 +24,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **docs/specs/dream-inbox.md: the dream inbox's format, who may tick a line, and what acted means** (`HEAD` — pending resolution)
+  The contract for `scratch/dream-inbox.md` (routed by `nightly --route`,
+  #641): the line format, that the dream only appends while a project's lane
+  only ticks boxes and the owner decides on the review page, when to tick,
+  and that a routed proposal counts as acted once it is decided on the review
+  page or no longer proposed after a complete night.
+
+  *Files:* `docs/specs/dream-inbox.md`
+
+
 - **the nightly dream can route each proposal that names a project to that project's inbox** ([`5831c33`](https://github.com/techempower-org/mempalace/commit/5831c33))
   `python -m mempalace.dream nightly --route` appends one line per proposal
   (lane, proposal id, the first sentence of the ask) to
