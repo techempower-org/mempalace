@@ -135,6 +135,16 @@ def ask(proposal: Mapping) -> str:
     return text.replace("·", "-")
 
 
+# git's own "searched and found none" answers. A repository past a filesystem boundary is one
+# git never uses (GIT_DISCOVERY_ACROSS_FILESYSTEM is dropped with every GIT_* variable), so it
+# can never track the inbox either. Anything else, such as "not a git repository: <gitdir>"
+# from a broken pointer, is not an answer.
+_GIT_OUTSIDE = (
+    "not a git repository (or any of the parent directories)",
+    "not a git repository (or any parent up to mount point ",
+)
+
+
 def _git_env() -> Dict[str, str]:
     """The environment for git: no inherited variable that picks a repository or work tree."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
@@ -153,8 +163,8 @@ def _writable(pfd: int) -> Optional[str]:
     try:
         inside = subprocess.run(["git", "-C", here, "rev-parse", "--is-inside-work-tree"], **run)
         if inside.returncode != 0:
-            if "not a git repository" in inside.stderr:
-                return None  # positively outside every work tree
+            if any(m in inside.stderr for m in _GIT_OUTSIDE):
+                return None  # git searched every parent it would use and found no repository
             return "git could not tell whether it is in a work tree"
         if inside.stdout.strip() != "true":
             return "inside a git directory"
@@ -230,9 +240,9 @@ def _open_inbox(project: Path) -> int:
             raise Unsafe(why)
         try:
             os.mkdir("scratch", 0o700, dir_fd=pfd)
-            os.fsync(pfd)  # the new scratch/ entry is durable
         except FileExistsError:
             pass
+        os.fsync(pfd)  # the scratch/ entry is durable, also when a stopped run made it
         sfd = os.open("scratch", dflags, dir_fd=pfd)
     finally:
         os.close(pfd)

@@ -7,6 +7,8 @@ import os
 import re
 import subprocess
 
+import pytest
+
 from mempalace.dream import nightly, route
 from mempalace.dream.__main__ import main
 
@@ -463,3 +465,53 @@ def test_a_group_shared_by_another_account_is_not_private(monkeypatch):
     monkeypatch.setattr(grp, "getgrgid", lambda g: type("G", (), {"gr_mem": ["someone"]})())
     monkeypatch.setattr(pwd, "getpwall", lambda: [me])
     assert route._private_group(gid) is False
+
+
+def test_a_git_pointer_to_a_missing_gitdir_is_refused(tmp_path):
+    root, _mem, alpha, _beta = _projects(tmp_path)
+    (alpha / ".git").write_text(f"gitdir: {tmp_path / 'missing'}\n")
+    stats = route.route(
+        [_prop("f7", "no-mechanism", [str(alpha / "CLAUDE.md:1")])], [root], {}, day="2026-11-17"
+    )
+    assert not (alpha / "scratch").exists() and stats["routed"] == 0
+    assert stats["skipped"] == ["alpha.site: git could not tell whether it is in a work tree"]
+
+
+def test_an_existing_scratch_is_still_synced_before_delivery(tmp_path, monkeypatch):
+    root, _mem, alpha, _beta = _projects(tmp_path)
+    (alpha / "scratch").mkdir(mode=0o700)  # a stopped run made it
+    synced = []
+    real = os.fsync
+    monkeypatch.setattr(
+        route.os, "fsync", lambda fd: (synced.append(os.readlink(f"/proc/self/fd/{fd}")), real(fd))
+    )
+    route.route(
+        [_prop("f8", "no-mechanism", [str(alpha / "CLAUDE.md:1")])], [root], {}, day="2026-11-17"
+    )
+    assert synced[0] == str(alpha)
+
+
+@pytest.mark.parametrize(
+    "stderr, outside",
+    [
+        ("fatal: not a git repository (or any of the parent directories): .git\n", True),
+        (
+            "fatal: not a git repository (or any parent up to mount point /m)\n"
+            "Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n",
+            True,
+        ),
+        ("fatal: not a git repository: /missing/path\n", False),
+        ("fatal: detected dubious ownership in repository at '/x'\n", False),
+    ],
+)
+def test_only_gits_searched_and_found_none_answers_mean_outside(
+    tmp_path, monkeypatch, stderr, outside
+):
+    done = type("R", (), {"returncode": 128, "stdout": "", "stderr": stderr})()
+    monkeypatch.setattr(route.subprocess, "run", lambda *a, **k: done)
+    fd = os.open(str(tmp_path), os.O_RDONLY)
+    try:
+        why = route._writable(fd)
+    finally:
+        os.close(fd)
+    assert (why is None) is outside
