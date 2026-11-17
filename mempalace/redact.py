@@ -115,6 +115,13 @@ DEFAULT_PATTERNS: Dict[str, str] = {
     "blob": r"(?:(?<![A-Za-z0-9+])|(?<=\\[nrt]))e[wy][A-Za-z0-9+/]{98,}={0,2}",
     # A TOTP or HOTP provisioning URI: its secret= is the second factor's seed.
     "otpauth": r"otpauth://[A-Za-z]{4}/[^\s\"'\\<>]+",
+    # A PEM private key (OpenSSH, RSA, EC, DSA, PKCS#8), body and END line taken with the header,
+    # its line breaks raw, CRLF, or JSON-escaped once or twice (2026-11-17: four OpenSSH private keys
+    # sat in drawers, no rule took them). The header alone, as prose, stays: it needs 40 base64
+    # characters right after it. A key cut off before its END line is still taken, up to the first
+    # character outside base64 and line breaks.
+    "pem": r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----(?:\s|\\{1,3}[nr])*(?=[A-Za-z0-9+/]{40})"
+    r"(?:[A-Za-z0-9+/=]|\s|\\{1,3}[nrt])+(?:-----END [A-Z ]{0,40}PRIVATE KEY-----)?",
 }
 
 # #619 prefix-free shapes. They run as their OWN pass after the assignment rule, so a value beside a

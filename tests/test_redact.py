@@ -1478,3 +1478,41 @@ def test_619_a_list_of_digests_under_a_digest_key_is_kept():
 def test_619_a_key_with_a_trailing_newline_is_not_a_digest_field():
     h = "0123456789abcdef" * 4
     assert redact_metadatas({"content_hash\n": h})["content_hash\n"] != h
+
+
+# --- PEM private keys (2026-11-17: 4 distinct OpenSSH private keys found in drawers; no rule took them)
+
+_HEAD = "-----" + "BEGIN OPENSSH " + "PRIVATE KEY-----"
+_END = "-----" + "END OPENSSH " + "PRIVATE KEY-----"
+
+
+def _pem_lines(seed=7, n=6):
+    rnd = _random.Random(seed)
+    alpha = _string.ascii_letters + _string.digits + "+/"
+    return ["".join(rnd.choice(alpha) for _ in range(70)) for _ in range(n)]
+
+
+@pytest.mark.parametrize(
+    "sep",
+    ["\n", "\\n", "\\\\n", "\r\n"],
+    ids=["newlines", "json-escaped", "json-escaped-twice", "crlf"],
+)
+def test_a_pem_private_key_block_becomes_one_placeholder(sep):
+    lines = _pem_lines()
+    block = sep.join([_HEAD, *lines, _END])
+    out = redact(f"cat key{sep}{block}{sep}next")
+    assert all(ln not in out for ln in lines) and "BEGIN OPENSSH" not in out
+    assert out.startswith(f"cat key{sep}[redacted pem sha256:") and out.endswith(f"]{sep}next")
+    assert redact(out) == out
+
+
+def test_a_pem_key_without_its_end_line_is_still_taken():
+    lines = _pem_lines(seed=8)
+    out = redact("\n".join([_HEAD, *lines]) + "\n... (truncated)")
+    assert all(ln[:20] not in out for ln in lines)
+    assert out.startswith("[redacted pem sha256:")
+
+
+def test_a_mention_of_the_header_alone_is_left_as_it_is():
+    text = f"The file starts with {_HEAD} and then the key body."
+    assert redact(text) == text
