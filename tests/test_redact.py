@@ -21,6 +21,8 @@ FAKE = {
     "notion": "nt" + "n_" + "N0" * 23,
     # A LiteLLM virtual key: "sk-" and token_urlsafe(16), 22 characters.
     "litellm": "sk-" + "Xq7" * 7 + "B",
+    # A DigitalOcean GenAI key ("sk-do-"); one-case letters, which the litellm shape alone leaves raw.
+    "digitalocean": "sk-" + "do-" + "qz" * 24,
 }
 
 
@@ -1699,3 +1701,26 @@ def test_a_header_line_of_any_length_does_not_hide_the_key(nl):
     lines = _pem_lines(seed=23, n=3)
     out = redact(nl.join([head, "Comment: " + "x" * 5000, "", *lines, end]))
     assert all(ln not in out for ln in lines) and out.startswith("[redacted pem sha256:")
+
+
+@pytest.mark.parametrize("body", ["qz" * 24, "Ab3_" * 12, "0f" * 32])
+def test_a_digitalocean_key_is_named_and_never_left_raw(body):
+    """2026-11-17: a DigitalOcean GenAI key was printed into a session by jq. Every body shape is caught as its own
+    kind, in the contexts a transcript holds. Before this kind the one-case body leaked raw; the other two were
+    caught under the litellm label."""
+    value = "sk-" + "do-" + body
+    for text in (
+        f"key {value} end",
+        '{"api_key": "' + value + '"}',
+        f"Authorization: Bearer {value}",
+        "line one\\n" + value + "\\nline two",  # a raw JSONL escape right before and after the key
+        f"DO_KEY={value}",
+        f"token: {value}",
+        f"https://example.invalid/v1?api_key={value}&next=1",
+    ):
+        out = redact(text)
+        assert value not in out
+        if (
+            "api_key=" not in text
+        ):  # a named query value goes whole to the assignment rule, which is redacted too
+            assert _placeholder("digitalocean", value) in out
