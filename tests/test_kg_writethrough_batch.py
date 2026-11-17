@@ -512,3 +512,19 @@ def test_inserts_go_in_statements_of_bounded_size(collection):
     assert len(inserts) == 3, (
         f"expected 3 bounded INSERT statements for {n} rows, got {len(inserts)}"
     )
+
+
+def test_each_committed_slice_gets_its_own_hook_call(collection):
+    """xreview r1 finding 3: a write split into statements calls the batch hook once per committed slice, so a
+    write that dies part way has delivered the hook for every slice it committed."""
+    n = collection.INSERT_STATEMENT_ROWS * 2 + 7
+    calls = []
+    collection.set_kg_writethrough_batch(lambda drawers: calls.append(len(list(drawers))))
+    collection.add(
+        documents=[f"doc {i}" for i in range(n)],
+        ids=[f"id{i}" for i in range(n)],
+        metadatas=[{"wing": "w"}] * n,
+        embeddings=[[0.0] * 384] * n,
+    )
+    step = collection.INSERT_STATEMENT_ROWS
+    assert calls == [step, step, 7]

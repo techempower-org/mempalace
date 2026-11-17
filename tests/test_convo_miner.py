@@ -1546,3 +1546,104 @@ def test_mine_convos_failed_prefetch_leaves_stored_drawers(capsys, monkeypatch):
         )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _two_exchange_file(tmpdir, extra=""):
+    p = Path(tmpdir) / "session.txt"
+    p.write_text(
+        "> What is the plan?\nUNIQUE_FIRST_EXCHANGE_MARKER here.\n\n"
+        "> Any risks?\nUNIQUE_SECOND_EXCHANGE_MARKER here.\n" + extra
+    )
+    return p
+
+
+def _bump(p):
+    future = time.time() + 60
+    os.utime(p, (future, future))
+
+
+def _docs(palace_path):
+    client = chromadb.PersistentClient(path=palace_path)
+    return client.get_collection("mempalace_drawers").get(include=["documents"])["documents"]
+
+
+def test_failed_write_never_deletes_drawers_that_existed_before_the_pass(capsys, monkeypatch):
+    """xreview r1 finding 1: when the refresh of unchanged drawers fails, every planned chunk becomes "changed"; a
+    write failure after that must not delete the drawers that were there before the pass (it used to delete every
+    "changed" id: the whole transcript)."""
+    from mempalace import convo_miner
+    from mempalace.palace import MineFileErrors
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        p = _two_exchange_file(tmpdir)
+        palace_path = os.path.join(tmpdir, "palace")
+        mine_convos(tmpdir, palace_path, wing="test")
+        capsys.readouterr()
+
+        _two_exchange_file(tmpdir, "\n> And then?\nUNIQUE_THIRD_EXCHANGE_MARKER here.\n")
+        _bump(p)
+        monkeypatch.setattr(convo_miner, "_refresh_unchanged_drawers", lambda *a, **k: False)
+
+        def boom(*_a, **_k):
+            raise RuntimeError("canceling statement due to statement timeout")
+
+        monkeypatch.setattr(convo_miner, "assert_no_collisions", boom)
+        with pytest.raises((MineFileErrors, RuntimeError)):
+            mine_convos(tmpdir, palace_path, wing="test")
+
+        docs = _docs(palace_path)
+        assert any("UNIQUE_FIRST_EXCHANGE_MARKER" in d for d in docs), (
+            "an existing drawer was deleted"
+        )
+        assert any("UNIQUE_SECOND_EXCHANGE_MARKER" in d for d in docs), (
+            "an existing drawer was deleted"
+        )
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_stale_drawers_are_deleted_only_after_the_new_rows_are_written(capsys, monkeypatch):
+    """xreview r1 finding 2: when every stored id is stale (a room change re-keys every chunk), the stale drawers
+    must survive a pass whose write fails, and go once a pass writes its rows."""
+    from mempalace import convo_miner
+    from mempalace.palace import MineFileErrors
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        p = _two_exchange_file(tmpdir)
+        palace_path = os.path.join(tmpdir, "palace")
+        mine_convos(tmpdir, palace_path, wing="test")
+        capsys.readouterr()
+        before = len(_docs(palace_path))
+
+        real_id = convo_miner.make_convo_drawer_id
+        monkeypatch.setattr(
+            convo_miner, "make_convo_drawer_id", lambda *a, **k: real_id(*a, **k) + "_rekeyed"
+        )
+        _two_exchange_file(tmpdir, "\n> And then?\nUNIQUE_THIRD_EXCHANGE_MARKER here.\n")
+        _bump(p)
+        real_check = convo_miner.assert_no_collisions
+
+        def boom(*_a, **_k):
+            raise RuntimeError("canceling statement due to statement timeout")
+
+        monkeypatch.setattr(convo_miner, "assert_no_collisions", boom)
+        with pytest.raises((MineFileErrors, RuntimeError)):
+            mine_convos(tmpdir, palace_path, wing="test")
+        docs = _docs(palace_path)
+        assert sum(1 for d in docs if "UNIQUE_FIRST_EXCHANGE_MARKER" in d) == 1, (
+            "stale drawers purged before the write"
+        )
+
+        monkeypatch.setattr(convo_miner, "assert_no_collisions", real_check)
+        _bump(p)
+        mine_convos(tmpdir, palace_path, wing="test")
+        docs = _docs(palace_path)
+        assert sum(1 for d in docs if "UNIQUE_FIRST_EXCHANGE_MARKER" in d) == 1, (
+            "stale drawers kept after a good pass"
+        )
+        assert any("UNIQUE_THIRD_EXCHANGE_MARKER" in d for d in docs)
+        assert len(docs) >= before
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)

@@ -538,8 +538,9 @@ class PostgresCollection(BaseCollection):
 
     # Rows per INSERT statement. Each row updates the HNSW and GIN indexes, so a 1000-row statement on a loaded
     # palace (an autovacuum in its index phase) ran past the 30 s statement timeout and failed the whole mine
-    # (2026-11-17). The connection is autocommit: each statement commits on its own, and a mine that dies part way
-    # stays short of chunk_total, so the next mine finishes the file.
+    # (2026-11-17). Larger writes go in slices, each a full _insert_rows call of its own: its own statement (the
+    # connection is autocommit, so each commits on its own), and its own KG write-through call, so a write that
+    # dies part way has delivered the hook for every slice it committed.
     INSERT_STATEMENT_ROWS = 100
 
     def _insert_rows(
@@ -551,6 +552,19 @@ class PostgresCollection(BaseCollection):
         embeddings: list[list[float]],
         update_on_conflict: bool,
     ) -> None:
+        step = max(1, int(self.INSERT_STATEMENT_ROWS))
+        if len(ids) > step:
+            # A duplicate id in two slices keeps the single-statement result: DO NOTHING keeps the first, DO UPDATE
+            # leaves the last.
+            for lo in range(0, len(ids), step):
+                self._insert_rows(
+                    documents=documents[lo : lo + step],
+                    ids=ids[lo : lo + step],
+                    metadatas=metadatas[lo : lo + step] if metadatas else metadatas,
+                    embeddings=embeddings[lo : lo + step],
+                    update_on_conflict=update_on_conflict,
+                )
+            return
         if update_on_conflict:
             conflict_clause = self._sql.SQL(
                 "ON CONFLICT (id) DO UPDATE SET "
@@ -613,47 +627,30 @@ class PostgresCollection(BaseCollection):
         row_metadatas = [row[5] for row in rows]
 
         cur = self._cursor()
-        step = max(1, int(self.INSERT_STATEMENT_ROWS))
-        for lo in range(0, len(rows), step):
-            sl = slice(lo, lo + step)
-            if self._table_am == "sorted_heap":
-                cur.execute(
-                    self._sql.SQL(
-                        "INSERT INTO {} (wing, room, id, document, embedding, metadata) "
-                        "SELECT wing, room, id, document, embedding_text::{}, metadata_text::jsonb "
-                        "FROM unnest("
-                        "%s::text[], %s::text[], %s::text[], %s::text[], %s::text[], %s::text[]"
-                        ") AS rows(wing, room, id, document, embedding_text, metadata_text) "
-                        "{}"
-                    ).format(self._table_id, self._vec_type_sql, conflict_clause),
-                    (
-                        wings[sl],
-                        rooms[sl],
-                        doc_ids[sl],
-                        row_documents[sl],
-                        row_embeddings[sl],
-                        row_metadatas[sl],
-                    ),
-                )
-            else:
-                cur.execute(
-                    self._sql.SQL(
-                        "INSERT INTO {} (id, wing, room, document, embedding, metadata) "
-                        "SELECT id, wing, room, document, embedding_text::{}, metadata_text::jsonb "
-                        "FROM unnest("
-                        "%s::text[], %s::text[], %s::text[], %s::text[], %s::text[], %s::text[]"
-                        ") AS rows(id, wing, room, document, embedding_text, metadata_text) "
-                        "{}"
-                    ).format(self._table_id, self._vec_type_sql, conflict_clause),
-                    (
-                        doc_ids[sl],
-                        wings[sl],
-                        rooms[sl],
-                        row_documents[sl],
-                        row_embeddings[sl],
-                        row_metadatas[sl],
-                    ),
-                )
+        if self._table_am == "sorted_heap":
+            cur.execute(
+                self._sql.SQL(
+                    "INSERT INTO {} (wing, room, id, document, embedding, metadata) "
+                    "SELECT wing, room, id, document, embedding_text::{}, metadata_text::jsonb "
+                    "FROM unnest("
+                    "%s::text[], %s::text[], %s::text[], %s::text[], %s::text[], %s::text[]"
+                    ") AS rows(wing, room, id, document, embedding_text, metadata_text) "
+                    "{}"
+                ).format(self._table_id, self._vec_type_sql, conflict_clause),
+                (wings, rooms, doc_ids, row_documents, row_embeddings, row_metadatas),
+            )
+        else:
+            cur.execute(
+                self._sql.SQL(
+                    "INSERT INTO {} (id, wing, room, document, embedding, metadata) "
+                    "SELECT id, wing, room, document, embedding_text::{}, metadata_text::jsonb "
+                    "FROM unnest("
+                    "%s::text[], %s::text[], %s::text[], %s::text[], %s::text[], %s::text[]"
+                    ") AS rows(id, wing, room, document, embedding_text, metadata_text) "
+                    "{}"
+                ).format(self._table_id, self._vec_type_sql, conflict_clause),
+                (doc_ids, wings, rooms, row_documents, row_embeddings, row_metadatas),
+            )
 
         self._maybe_create_vector_index(inserted_rows=len(rows))
 

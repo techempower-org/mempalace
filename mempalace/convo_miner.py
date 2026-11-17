@@ -955,31 +955,13 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             logger.debug("Stored-document prefetch failed for %s", source_file, exc_info=True)
             return 0, room_counts_delta, PURGE_FAILED
 
-        # Purge stale drawers: only the ids this pass will not rewrite.
-        # Also fires on a normalize-schema bump, where file_already_mined()
-        # returned False for pre-v2 drawers.
-        #
-        # A failed purge must abort this file's mine attempt rather than
-        # fall through to upsert: proceeding on top of an unpurged (or
-        # partially purged) set produces duplicate/stale drawers under
-        # mixed schema versions, with no operator-visible signal beyond a
-        # debug log (#105 — convo_miner's own instance of the same swallow
-        # already fixed for miner.py at #23). Returning here leaves the old
-        # drawers' stored mtime untouched, so the next mine still sees a
-        # mismatch and retries.
-        try:
-            delete_ids = [drawer_id for drawer_id in stored if drawer_id not in planned_ids]
-            if delete_ids:
-                collection.delete(ids=delete_ids)
-        except Exception as exc:
-            print(
-                f"  ! [error] stale-drawer purge failed for {source_file!r} "
-                f"({exc!r}); leaving existing drawers untouched, will retry "
-                f"on the next mine",
-                file=sys.stderr,
-            )
-            logger.debug("Stale-drawer purge failed for %s", source_file, exc_info=True)
-            return 0, room_counts_delta, PURGE_FAILED
+        # Stale drawers: the stored ids this pass will not rewrite (a shrunk or
+        # rewritten file, a chunk routed to a different room, a normalize-schema
+        # bump). They are deleted only AFTER this pass's rows are written (below):
+        # deleted first, a write that then fails leaves the file with nothing
+        # (2026-11-17). A pass that fails part way leaves them in place, and the
+        # next pass, which still sees them as stored and unplanned, deletes them.
+        orphan_ids = [drawer_id for drawer_id in stored if drawer_id not in planned_ids]
 
         # Split the plan: byte-identical chunks get a metadata refresh only;
         # everything else is embedded and upserted.
@@ -1114,14 +1096,19 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
                         raise
         except Exception:
             # A successful earlier batch has the source's current mtime and
-            # chunk_total. Remove the rows this pass wrote so the next run
+            # chunk_total. Remove the rows this pass CREATED so the next run
             # cannot treat the incomplete set as fully filed (#2183 / #2122).
-            # The unchanged drawers stay. Without a manifest they already carry the
-            # new mtime and chunk_total, and with the new rows gone the group is short
-            # of chunk_total. With one, the manifest row was not written. Either way
-            # the file is re-mined next pass.
+            # A drawer that existed before this pass is never deleted here: the
+            # failed write may not have touched it, and deleting every "changed"
+            # id wiped whole transcripts when the refresh fallback had made every
+            # planned chunk "changed" (2026-11-17). It keeps its old content or
+            # this pass's. With a manifest, the manifest row was not written, so
+            # the file is re-mined next pass; without one, the group is short of
+            # chunk_total once a new row is gone.
             try:
-                delete_ids = [drawer_id for _chunk, _room, drawer_id in changed]
+                delete_ids = [
+                    drawer_id for _chunk, _room, drawer_id in changed if drawer_id not in stored
+                ]
                 if delete_ids:
                     collection.delete(ids=delete_ids)
             except Exception:
@@ -1131,6 +1118,21 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
                     exc_info=True,
                 )
             raise
+        # Every row of this pass is written: now the orphans can go. A failed
+        # delete is an error for this file (the manifest is not written, so the
+        # next pass retries); the rows just written stay.
+        try:
+            if orphan_ids:
+                collection.delete(ids=orphan_ids)
+        except Exception as exc:
+            print(
+                f"  ! [error] stale-drawer purge failed for {source_file!r} "
+                f"({exc!r}); this pass's drawers are written, the stale ones "
+                f"stay until the next mine",
+                file=sys.stderr,
+            )
+            logger.debug("Stale-drawer purge failed for %s", source_file, exc_info=True)
+            return drawers_added, room_counts_delta, PURGE_FAILED
         _write_source_manifest(
             use_manifest, collection, source_file, extract_mode, source_mtime, chunk_total
         )
