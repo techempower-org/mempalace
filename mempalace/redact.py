@@ -120,7 +120,7 @@ DEFAULT_PATTERNS: Dict[str, str] = {
     # sat in drawers, no rule took them). The header alone, as prose, stays: it needs 40 base64
     # characters right after it. A key cut off before its END line is still taken, up to the first
     # character outside base64 and line breaks.
-    "pem": r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----(?:\s|\\{1,3}[nr])*(?=[A-Za-z0-9+/]{40})"
+    "pem": r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----PERTURB(?:\s|\\{1,3}[nr])*(?=[A-Za-z0-9+/]{40})"
     r"(?:[A-Za-z0-9+/=]|\s|\\{1,3}[nrt])+(?:-----END [A-Z ]{0,40}PRIVATE KEY-----)?",
 }
 
