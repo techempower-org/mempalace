@@ -80,15 +80,16 @@ from typing import Any, Dict, List, Optional, Tuple
 # ("  12\t" or "12→", as a numbered file view prints it). Header lines after BEGIN (Proc-Type,
 # DEK-Info, Version, Comment) and blank lines are taken with the key. The body is lines of base64,
 # the first 16-80 characters (so a header alone, as prose, stays), each ending at a line break, a
-# quote, the END line or the end of the text: a key cut off before its END line is taken without
-# the prose after it (at most one following line that is a single base64-alphabet word).
+# quote, an ellipsis, the END line or the end of the text: a key cut off before its END line is
+# taken without the prose after it (at most one following line that is a single base64-alphabet
+# word). A key shown on one line ("BEGIN … KEY----- <base64>...") is taken too.
 _PEM_SEP = r"(?:\r?\n|\\{1,3}r\\{1,3}n|\\{1,3}n)"
 _PEM_LEAD = r"[ \t]*(?:\d{1,6}(?:\t|→|\\{1,3}t)[ \t]*)?"
-_PEM_EOL = r"(?=[ \t]*(?:\r?\n|\\{1,3}[rn]|-----END|$|[\"'`]))"
+_PEM_EOL = r"(?=[ \t]*(?:\r?\n|\\{1,3}[rn]|-----END|$|[\"'`]|\.\.\.|…))"
 _PEM = (
     r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY(?: BLOCK)?-----"
     rf"(?:{_PEM_SEP}{_PEM_LEAD}[A-Z][A-Za-z-]{{1,30}}:[^\r\n\\]{{0,120}})*"
-    rf"(?:{_PEM_SEP}{_PEM_LEAD})+[A-Za-z0-9+/=]{{16,80}}{_PEM_EOL}"
+    rf"(?:(?:{_PEM_SEP}{_PEM_LEAD})+|[ \t]+)[A-Za-z0-9+/=]{{16,80}}{_PEM_EOL}"
     rf"(?:(?:{_PEM_SEP}{_PEM_LEAD})+[A-Za-z0-9+/=]{{1,80}}{_PEM_EOL})*"
     rf"(?:(?:{_PEM_SEP}{_PEM_LEAD})*-----END [A-Z ]{{0,40}}PRIVATE KEY(?: BLOCK)?-----)?"
 )

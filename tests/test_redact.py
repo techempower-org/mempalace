@@ -1585,3 +1585,10 @@ def test_a_putty_key_files_private_lines_are_taken_and_its_public_lines_stay():
     out = redact(text)
     assert priv[0] not in out and "[redacted ppk sha256:" in out
     assert "Private-MAC: 00ff" in out and "Encryption: none" in out
+
+
+def test_a_key_shown_on_one_line_and_elided_is_taken():
+    lines = _pem_lines(seed=16, n=1)
+    for tail in ("...", "…"):
+        out = redact(f"{_HEAD} {lines[0][:52]}{tail} rest of the line")
+        assert lines[0][:52] not in out and out.endswith(f"]{tail} rest of the line")
