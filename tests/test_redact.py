@@ -1622,3 +1622,32 @@ def test_a_putty_private_section_stops_before_prose():
     text = "\n".join(["Private-Lines: 2", *priv, "Thanks", "Alice"])
     out = redact(text)
     assert all(p not in out for p in priv) and out.endswith("]\nThanks\nAlice")
+
+
+def test_a_pgp_short_last_data_line_before_its_checksum_is_taken():
+    head = "-----" + "BEGIN PGP " + "PRIVATE KEY BLOCK-----"
+    end = "-----" + "END PGP " + "PRIVATE KEY BLOCK-----"
+    full = _pem_lines(seed=21, n=2)
+    out = redact("\n".join([head, "", *full, "QUJD", "=AbCd", end]))
+    assert all(ln not in out for ln in full) and "QUJD" not in out
+    assert out.startswith("[redacted pem sha256:") and out.endswith("]")
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [" \n" * 5000 + "!", "\t \n" * 5000 + "!", " \\n" * 5000 + "!", "  7\t \n" * 5000 + "!"],
+    ids=["blank-lines", "tab-blank-lines", "escaped-blank-lines", "numbered-blank-lines"],
+)
+def test_runs_of_blank_lines_after_a_header_cannot_stall_the_matcher(tail):
+    # A subprocess with a hard limit: an exponential split would never return.
+    import subprocess
+    import sys
+
+    code = (
+        "import re, sys; from mempalace.redact import _PEM, _PPK; "
+        "t = sys.stdin.read(); re.search(_PEM, t); re.search(_PPK, t.replace('-----BEGIN', 'Private-Lines: 3 '))"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", code], input=_HEAD + "\n" + tail, text=True, timeout=10
+    )
+    assert r.returncode == 0

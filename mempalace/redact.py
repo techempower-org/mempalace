@@ -76,32 +76,40 @@ from typing import Any, Dict, List, Optional, Tuple
 # Kind -> pattern. Each matches a credential's shape only.
 # A PEM private key, taken line by line (2026-11-17: four OpenSSH private keys sat in drawers and no
 # rule took them): OpenSSH, RSA, EC, DSA, PKCS#8 (encrypted or not) and a PGP private key block. Line
-# breaks may be raw, CRLF, or JSON-escaped once or twice, with trailing blanks; each line may carry a
+# breaks may be raw, CRLF, or JSON-escaped once or twice, with blanks around lines; each line may carry a
 # line-number prefix ("  12\t" or "12→", as a numbered file view prints it). Header lines after
 # BEGIN ("Name: value", e.g. Proc-Type, DEK-Info, Version, Comment) and blank lines go with the key.
 # The body is lines of base64 ending at a line break, a quote, an ellipsis, the END line or the end
 # of the text. The first holds 16-80 characters and may follow the header on its line (so a header
 # alone, as prose, stays). Each later line holds 16-80, or is the short last line right before END
-# (a PGP checksum): a key cut off before its END line is taken without short prose lines after it.
-_PEM_SEP = r"(?:[ \t]*(?:\r?\n|\\{1,3}r\\{1,3}n|\\{1,3}n))"
+# (or before a PGP checksum line and END): a key cut off before its END line is taken without short
+# prose lines after it.
+# Every blank has one owner, so no input can make the matcher try the ways of splitting a run of
+# blanks between neighbours (2026-11-17 review: an ambiguous split was exponential on blank lines):
+# a separator is a line break only, a line's lead owns the blanks (and line number) before its
+# content, and a body line owns the blanks after it.
+_PEM_SEP = r"(?:\r?\n|\\{1,3}r\\{1,3}n|\\{1,3}n)"
 _PEM_LEAD = r"[ \t]*(?:\d{1,6}(?:\t|→|\\{1,3}t)[ \t]*)?"
-_PEM_EOL = r"(?=[ \t]*(?:\r?\n|\\{1,3}[rn]|-----END|$|[\"'`]|\.\.\.|…))"
+_PEM_EOL = r"(?=\r?\n|\\{1,3}[rn]|-----END|$|[\"'`]|\.\.\.|…)"
 _PEM_B64 = r"[A-Za-z0-9+/=]"
 _PEM_END = r"-----END [A-Z ]{0,40}PRIVATE KEY(?: BLOCK)?-----"
+_PEM_GAP = rf"(?:{_PEM_SEP}{_PEM_LEAD})"
+# A short line counts as key only as the last data line: right before END, or before a PGP checksum
+# line ("=" and 4 characters) and END.
+_PEM_LAST = rf"(?={_PEM_GAP}*(?:=[A-Za-z0-9+/]{{4}}[ \t]*{_PEM_GAP}*)?{_PEM_END})"
 _PEM = (
     r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY(?: BLOCK)?-----"
-    rf"(?:{_PEM_SEP}{_PEM_LEAD}[A-Za-z][A-Za-z0-9-]{{0,40}}:(?:(?!{_PEM_SEP})[^\r\n]){{0,1000}})*"
-    rf"(?:(?:{_PEM_SEP}{_PEM_LEAD})+|[ \t]+){_PEM_B64}{{16,80}}{_PEM_EOL}"
-    rf"(?:(?:{_PEM_SEP}{_PEM_LEAD})+(?:{_PEM_B64}{{16,80}}{_PEM_EOL}"
-    rf"|{_PEM_B64}{{1,15}}(?=(?:{_PEM_SEP}{_PEM_LEAD})*{_PEM_END})))*"
-    rf"(?:(?:{_PEM_SEP}{_PEM_LEAD})*{_PEM_END})?"
+    rf"(?:{_PEM_GAP}[A-Za-z][A-Za-z0-9-]{{0,40}}:(?:(?!{_PEM_SEP})[^\r\n]){{0,1000}})*"
+    rf"(?:{_PEM_GAP}+|[ \t]+){_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL}"
+    rf"(?:{_PEM_GAP}+(?:{_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL}|{_PEM_B64}{{1,15}}[ \t]*{_PEM_LAST}))*"
+    rf"(?:{_PEM_GAP}*{_PEM_END})?"
 )
 # A PuTTY private key file's private lines: the count line and the base64 lines after it, each of
 # 16-80 characters or the short last one right before Private-MAC (prose after it stays).
 _PPK = (
     r"Private-Lines:[ \t]*\d{1,3}"
-    rf"(?:{_PEM_SEP}{_PEM_LEAD}(?:{_PEM_B64}{{16,80}}{_PEM_EOL}"
-    rf"|{_PEM_B64}{{1,15}}(?={_PEM_SEP}{_PEM_LEAD}Private-MAC:)))+"
+    rf"(?:{_PEM_GAP}(?:{_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL}"
+    rf"|{_PEM_B64}{{1,15}}[ \t]*(?={_PEM_GAP}Private-MAC:)))+"
 )
 
 DEFAULT_PATTERNS: Dict[str, str] = {
