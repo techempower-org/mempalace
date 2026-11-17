@@ -41,7 +41,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   is open again). `python -m mempalace.dream routed --out DIR` prints
   `dreams: N proposals routed, M acted` for a lead's daily pass.
 
-  *Tests:* 16 (tests/test_dream_route.py)
+  *Tests:* 22 (tests/test_dream_route.py)
   *Files:* `mempalace/dream/route.py`, `mempalace/dream/nightly.py`, `mempalace/dream/__main__.py`, `tests/test_dream_route.py`
 
 

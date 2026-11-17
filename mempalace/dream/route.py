@@ -16,13 +16,14 @@ Each project gets ``scratch/dream-inbox.md``, appended to, one line per proposal
 is written only when it is outside every git work tree or git ignores the inbox path. The
 write goes through descriptors opened without following links (the project, ``scratch/``,
 the inbox), and the inbox must then be a regular file with one link, owned by this user; it
-is kept at mode 0600. A proposal id already in the inbox is never appended again, so a run
-that stops between the append and the ledger save repeats nothing.
+is kept at mode 0600. A proposal id already on a complete line of the inbox is never
+appended again, so a run that stops between the append and the ledger save repeats nothing,
+and a torn last line is closed before anything is appended after it.
 
 The routing is recorded in the verdict ledger (``judged.json``) under :data:`KEY`: for each
 routed id, its kind, where it went and whether it has been acted on, which it has once it is
 decided on the review page, or once a night whose producer for its kind ran complete no
-longer proposes it (a proposal that comes back is open again).
+longer proposes it (a proposal proposed again with no decision on it is open again).
 """
 
 from __future__ import annotations
@@ -48,6 +49,11 @@ _LINE = re.compile(r":\d+$")
 _ENC = re.compile(r"[^A-Za-z0-9]")
 _SENTENCE = re.compile(r"^(.+?[.!?])(?:\s|$)")
 _MEMORY = re.compile(r"/([^/]+)/memory/")
+_UNSAFE_LANE = re.compile(r"[^A-Za-z0-9._+-]")
+# A complete inbox line; only these count as delivered.
+_ENTRY = re.compile(
+    r"^- \[[ xX]\] [A-Za-z0-9._+-]+ · ([A-Za-z0-9]{1,64}) · .+ \(dream \d{4}-\d{2}-\d{2}, [a-z-]+\)$"
+)
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", None)
 _DIRECTORY = getattr(os, "O_DIRECTORY", None)
 
@@ -112,6 +118,11 @@ def project_of(source: str, roots: Sequence[Path], _idx: Optional[Dict] = None) 
     return None
 
 
+def lane_text(name: str) -> str:
+    """A lane name safe inside one inbox line: letters, digits and ``._+-`` only."""
+    return _UNSAFE_LANE.sub("-", str(name))[:64] or "-"
+
+
 def ask(proposal: Mapping) -> str:
     """The proposal's first sentence, on one line, at most :data:`MAX_ASK` characters."""
     text = " ".join(str(proposal.get("summary", "")).split())
@@ -130,9 +141,14 @@ def _writable(project: Path) -> Optional[str]:
             capture_output=True,
             text=True,
             timeout=10,
+            env={**os.environ, "LC_ALL": "C"},
         )
-        if inside.returncode != 0 or inside.stdout.strip() != "true":
-            return None  # not in any work tree
+        if inside.returncode != 0:
+            if "not a git repository" in inside.stderr:
+                return None  # positively outside every work tree
+            return "git could not tell whether it is in a work tree"
+        if inside.stdout.strip() != "true":
+            return "inside a git directory"
         ignored = subprocess.run(
             ["git", "-C", str(project), "check-ignore", "-q", INBOX],
             capture_output=True,
@@ -147,14 +163,58 @@ class Unsafe(Exception):
     """The inbox's target is not one this writer will write through."""
 
 
-def _open_inbox(project: Path) -> int:
-    """A descriptor for appending to the project's inbox, every component opened without
-    following a link; raises :class:`Unsafe` with the reason when the target is unsafe."""
+def _private_group(gid: int) -> bool:
+    """True for this user's own group with no other members (the user-private-group scheme,
+    where a 775 folder is still writable by this user alone)."""
+    if gid != os.getgid():
+        return False
+    try:
+        import grp
+
+        return not grp.getgrgid(gid).gr_mem
+    except (ImportError, KeyError):
+        return False
+
+
+def _safe_dir(fd: int, what: str) -> None:
+    st = os.fstat(fd)
+    others = st.st_mode & stat.S_IWOTH
+    group = st.st_mode & stat.S_IWGRP and not _private_group(st.st_gid)
+    if st.st_uid != os.getuid() or others or group:
+        raise Unsafe(f"{what} is not this user's or others can write it")
+
+
+def _walk(path: Path, flags: int) -> int:
+    """A directory descriptor for absolute ``path``, every component opened from ``/``
+    without following a link."""
+    fd = os.open("/", flags)
+    try:
+        for part in path.parts[1:]:
+            nfd = os.open(part, flags, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _open_inbox(project: Path, expect: Optional[tuple] = None) -> int:
+    """A read-write append descriptor for the project's inbox. ``project`` is a real path;
+    every component is opened without following a link, the project and ``scratch/`` must be
+    this user's and not group- or other-writable, and the project must be the folder
+    ``expect`` (``(st_dev, st_ino)``) names, the one git was asked about. Raises
+    :class:`Unsafe` with the reason when the target is unsafe."""
     if _NOFOLLOW is None or _DIRECTORY is None:
         raise Unsafe("this platform cannot open without following links")
     dflags = os.O_RDONLY | _DIRECTORY | _NOFOLLOW
-    pfd = os.open(str(project), dflags)
+    pfd = _walk(project, dflags)
     try:
+        _safe_dir(pfd, "the project folder")
+        if expect is not None:
+            st = os.fstat(pfd)
+            if (st.st_dev, st.st_ino) != expect:
+                raise Unsafe("the project folder changed after it was checked")
         try:
             os.mkdir("scratch", 0o700, dir_fd=pfd)
         except FileExistsError:
@@ -163,24 +223,30 @@ def _open_inbox(project: Path) -> int:
     finally:
         os.close(pfd)
     try:
+        _safe_dir(sfd, "scratch/")
         name = os.path.basename(INBOX)
-        fd = os.open(name, os.O_RDWR | os.O_APPEND | os.O_CREAT | _NOFOLLOW, 0o600, dir_fd=sfd)
+        flags = os.O_RDWR | os.O_APPEND | os.O_CREAT | _NOFOLLOW
+        fd = os.open(name, flags, 0o600, dir_fd=sfd)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid != os.getuid():
+                raise Unsafe("inbox is not a regular single-link file of this user")
+            if stat.S_IMODE(st.st_mode) != 0o600:
+                os.fchmod(fd, 0o600)
+            os.fsync(sfd)  # the entry itself is durable before the ledger claims delivery
+        except BaseException:
+            os.close(fd)
+            raise
     finally:
         os.close(sfd)
-    st = os.fstat(fd)
-    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or st.st_uid != os.getuid():
-        os.close(fd)
-        raise Unsafe("inbox is not a regular single-link file of this user")
-    if stat.S_IMODE(st.st_mode) & 0o077:
-        os.fchmod(fd, 0o600)
     return fd
 
 
-def _append(project: Path, lines: Sequence[tuple]) -> tuple:
+def _append(project: Path, lines: Sequence[tuple], expect: Optional[tuple] = None) -> tuple:
     """Append ``(pid, line)`` pairs whose id is not already in the inbox. Returns (the ids now
     in the inbox, None) or (set(), why not)."""
     try:
-        fd = _open_inbox(project)
+        fd = _open_inbox(project, expect)
     except Unsafe as exc:
         return set(), str(exc)
     except OSError as exc:
@@ -189,9 +255,12 @@ def _append(project: Path, lines: Sequence[tuple]) -> tuple:
         with os.fdopen(os.dup(fd), "r", encoding="utf-8", errors="replace") as r:
             r.seek(0)
             have = r.read()
-        present = {pid for pid, _ln in lines if f" · {pid} · " in have}
-        todo = [ln for pid, ln in lines if pid not in present]
-        text = ("" if have else HEADER) + "".join(f"{ln}\n" for ln in todo)
+        delivered = {
+            m.group(1) for m in map(_ENTRY.match, have.split("\n")[:-1]) if m is not None
+        }  # complete lines only: a torn last line (no newline) is never a delivery
+        todo = [ln for pid, ln in lines if pid not in delivered]
+        lead = HEADER if not have else ("" if have.endswith("\n") else "\n")
+        text = lead + "".join(f"{ln}\n" for ln in todo) if todo or not have else ""
         if text:
             data = text.encode("utf-8")
             while data:
@@ -247,16 +316,21 @@ def route(
         for p in projects:
             if str(p) in done:
                 continue
-            lane = lanes.get(p.name, p.name)
+            lane = lane_text(lanes.get(p.name, p.name))
             line = f"- [ ] {lane} · {pid} · {ask(prop)} (dream {day}, {prop.get('kind')})"
             per_project.setdefault(p, []).append((pid, line))
             lane_of[(pid, str(p))] = lane
     skipped, new = [], set()
     for p, lines in sorted(per_project.items()):
-        why = _writable(p)
-        written = set()
+        written: set = set()
+        try:
+            st = os.stat(p, follow_symlinks=False)
+            expect: Optional[tuple] = (st.st_dev, st.st_ino)
+            why = _writable(p)
+        except OSError as exc:
+            expect, why = None, f"cannot stat the project ({type(exc).__name__})"
         if why is None:
-            written, why = _append(p, lines)
+            written, why = _append(p, lines, expect)
         if why:
             skipped.append(f"{p.name}: {why}")
         for pid in sorted(written):
@@ -266,15 +340,14 @@ def route(
             )
             new.add(pid)
     for pid, entry in record.items():
-        acted = entry.get("acted")
-        if pid in tonight:
-            if acted and acted.get("how") == GONE:
-                entry["acted"] = None  # it came back
-            continue
-        if acted:
-            continue
         d = decisions.get(pid)
-        if isinstance(d, Mapping) and d.get("decision") in ("accept", "reject"):
+        decided = isinstance(d, Mapping) and d.get("decision") in ("accept", "reject")
+        if pid in tonight and not decided:
+            entry["acted"] = None  # proposed again with no decision on it: open
+            continue
+        if entry.get("acted"):
+            continue
+        if decided:
             entry["acted"] = {"how": f"decided: {d['decision']}", "day": day}
         elif entry.get("kind") in complete:
             entry["acted"] = {"how": GONE, "day": day}

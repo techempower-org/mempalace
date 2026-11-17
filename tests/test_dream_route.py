@@ -333,3 +333,76 @@ def test_one_unwritable_project_does_not_stop_the_others(tmp_path):
     finally:
         os.chmod(alpha / "scratch", 0o700)
     assert stats["routed"] == 1 and stats["skipped"][0].startswith("alpha.site: cannot open")
+
+
+# --- review round 2
+
+
+def test_git_that_cannot_answer_is_never_taken_as_outside_a_repo(tmp_path):
+    root, _mem, alpha, _beta = _projects(tmp_path)
+    (alpha / ".git").write_text("not a gitdir pointer\n")  # git fails, but not "not a repo"
+    stats = route.route(
+        [_prop("aa01", "no-mechanism", [str(alpha / "CLAUDE.md:1")])], [root], {}, day="2026-11-17"
+    )
+    assert stats["routed"] == 0 and not (alpha / "scratch").exists()
+    assert stats["skipped"] == ["alpha.site: git could not tell whether it is in a work tree"]
+
+
+def test_a_torn_last_line_is_closed_and_is_not_a_delivery(tmp_path):
+    root, _mem, alpha, _beta = _projects(tmp_path)
+    (alpha / "scratch").mkdir(mode=0o700)
+    (alpha / route.INBOX).write_text(route.HEADER + "- [ ] alpha.site · d1 · Add the")
+    os.chmod(alpha / route.INBOX, 0o600)
+    ledger: dict = {}
+    route.route(
+        [_prop("d1", "no-mechanism", [str(alpha / "CLAUDE.md:1")])],
+        [root],
+        ledger,
+        day="2026-11-17",
+    )
+    text = (alpha / route.INBOX).read_text()
+    assert text.endswith("(dream 2026-11-17, no-mechanism)\n")
+    complete = [ln for ln in text.splitlines() if route._ENTRY.match(ln)]
+    assert len(complete) == 1 and "d1" in ledger[route.KEY]
+
+
+def test_a_decided_proposal_proposed_again_without_its_decision_reopens(tmp_path):
+    root, _mem, alpha, _beta = _projects(tmp_path)
+    src = [str(alpha / "CLAUDE.md:1")]
+    ledger: dict = {}
+    route.route([_prop("b1", "no-mechanism", src)], [root], ledger, day="2026-11-17")
+    route.route([], [root], ledger, day="2026-11-18", decisions={"b1": {"decision": "accept"}})
+    assert ledger[route.KEY]["b1"]["acted"]["how"] == "decided: accept"
+    route.route([_prop("b1", "no-mechanism", src)], [root], ledger, day="2026-11-19")
+    assert ledger[route.KEY]["b1"]["acted"] is None
+
+
+def test_a_lane_name_cannot_break_the_line_or_forge_an_id(tmp_path):
+    root, _mem, alpha, _beta = _projects(tmp_path)
+    lanes = {"alpha.site": "bad\nlane · ffff · x"}
+    route.route(
+        [_prop("c0ffee", "no-mechanism", [str(alpha / "CLAUDE.md:1")])],
+        [root],
+        {},
+        day="2026-11-17",
+        lanes=lanes,
+    )
+    entries = [ln for ln in (alpha / route.INBOX).read_text().splitlines() if ln.startswith("- [")]
+    assert len(entries) == 1 and route._ENTRY.match(entries[0]).group(1) == "c0ffee"
+
+
+def test_a_scratch_others_can_write_is_refused(tmp_path):
+    root, _mem, alpha, _beta = _projects(tmp_path)
+    (alpha / "scratch").mkdir()
+    os.chmod(alpha / "scratch", 0o777)
+    stats = route.route(
+        [_prop("e0", "no-mechanism", [str(alpha / "CLAUDE.md:1")])], [root], {}, day="2026-11-17"
+    )
+    assert stats["skipped"] == ["alpha.site: scratch/ is not this user's or others can write it"]
+    assert not (alpha / route.INBOX).exists()
+
+
+def test_a_project_that_is_not_the_folder_git_was_asked_about_is_refused(tmp_path):
+    _root, _mem, alpha, _beta = _projects(tmp_path)
+    written, why = route._append(alpha, [("e1", "- [ ] a · e1 · x. (dream 2026-11-17, k)")], (0, 0))
+    assert written == set() and why == "the project folder changed after it was checked"

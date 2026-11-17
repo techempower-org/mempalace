@@ -20,13 +20,14 @@ Each project gets ``scratch/dream-inbox.md``, appended to, one line per proposal
 is written only when it is outside every git work tree or git ignores the inbox path. The
 write goes through descriptors opened without following links (the project, ``scratch/``,
 the inbox), and the inbox must then be a regular file with one link, owned by this user; it
-is kept at mode 0600. A proposal id already in the inbox is never appended again, so a run
-that stops between the append and the ledger save repeats nothing.
+is kept at mode 0600. A proposal id already on a complete line of the inbox is never
+appended again, so a run that stops between the append and the ledger save repeats nothing,
+and a torn last line is closed before anything is appended after it.
 
 The routing is recorded in the verdict ledger (``judged.json``) under :data:`KEY`: for each
 routed id, its kind, where it went and whether it has been acted on, which it has once it is
 decided on the review page, or once a night whose producer for its kind ran complete no
-longer proposes it (a proposal that comes back is open again).
+longer proposes it (a proposal proposed again with no decision on it is open again).
 
 ## Classes
 
@@ -43,6 +44,14 @@ def project_of(source: str, roots: Sequence[Path], _idx: Optional[Dict] = None) 
 ```
 
 The real project folder a source names, or None.
+
+### `lane_text`
+
+```python
+def lane_text(name: str) -> str
+```
+
+A lane name safe inside one inbox line: letters, digits and ``._+-`` only.
 
 ### `ask`
 

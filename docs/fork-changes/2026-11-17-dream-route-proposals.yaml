@@ -21,7 +21,7 @@ body: |
   night without the judge never closes a contradiction; one that comes back
   is open again). `python -m mempalace.dream routed --out DIR` prints
   `dreams: N proposals routed, M acted` for a lead's daily pass.
-tests: "16 (tests/test_dream_route.py)"
+tests: "22 (tests/test_dream_route.py)"
 fork_pr: 641
 files:
   - mempalace/dream/route.py
