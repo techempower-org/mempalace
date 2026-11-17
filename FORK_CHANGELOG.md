@@ -58,7 +58,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **a re-mine asks which drawers exist by id, never by source_file, and redaction never rewrites a source_file or an id with the broad shapes** (`HEAD` — pending resolution)
+- **a re-mine asks which drawers exist by id, never by source_file, and redaction never rewrites a source_file or an id with the broad shapes** ([`42dfd33`](https://github.com/techempower-org/mempalace/commit/42dfd33))
   A transcript's drawers were stored under a source_file the broad token
   shape had rewritten (a project directory segment). A re-mine looked them
   up by the real path, saw none, collided with them on write, and the

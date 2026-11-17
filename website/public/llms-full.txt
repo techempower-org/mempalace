@@ -316,7 +316,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
-| a re-mine asks which drawers exist by id, never by source_file, and redaction never rewrites a source_file or an id with the broad shapes | — | `HEAD` — pending resolution |
+| a re-mine asks which drawers exist by id, never by source_file, and redaction never rewrites a source_file or an id with the broad shapes | — | [`42dfd33`](https://github.com/techempower-org/mempalace/commit/42dfd33) |
 | a DigitalOcean GenAI key (sk-do-) is redacted on every write as its own kind, whatever the case of its body | — | [`2b200e4`](https://github.com/techempower-org/mempalace/commit/2b200e4) |
 | redaction takes PEM private keys (OpenSSH, RSA, EC, DSA, PKCS#8, PGP) and PuTTY private lines | — | [`ea2d32d`](https://github.com/techempower-org/mempalace/commit/ea2d32d) |
 | docs/specs/dream-inbox.md: the dream inbox's format, who may tick a line, and what acted means | — | [`0161990`](https://github.com/techempower-org/mempalace/commit/0161990) |
