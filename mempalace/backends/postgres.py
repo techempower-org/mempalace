@@ -536,6 +536,12 @@ class PostgresCollection(BaseCollection):
             raise ValueError("embeddings and documents must have the same length")
         return embeddings
 
+    # Rows per INSERT statement. Each row updates the HNSW and GIN indexes, so a 1000-row statement on a loaded
+    # palace (an autovacuum in its index phase) ran past the 30 s statement timeout and failed the whole mine
+    # (2026-11-17). The connection is autocommit: each statement commits on its own, and a mine that dies part way
+    # stays short of chunk_total, so the next mine finishes the file.
+    INSERT_STATEMENT_ROWS = 100
+
     def _insert_rows(
         self,
         *,
@@ -607,30 +613,47 @@ class PostgresCollection(BaseCollection):
         row_metadatas = [row[5] for row in rows]
 
         cur = self._cursor()
-        if self._table_am == "sorted_heap":
-            cur.execute(
-                self._sql.SQL(
-                    "INSERT INTO {} (wing, room, id, document, embedding, metadata) "
-                    "SELECT wing, room, id, document, embedding_text::{}, metadata_text::jsonb "
-                    "FROM unnest("
-                    "%s::text[], %s::text[], %s::text[], %s::text[], %s::text[], %s::text[]"
-                    ") AS rows(wing, room, id, document, embedding_text, metadata_text) "
-                    "{}"
-                ).format(self._table_id, self._vec_type_sql, conflict_clause),
-                (wings, rooms, doc_ids, row_documents, row_embeddings, row_metadatas),
-            )
-        else:
-            cur.execute(
-                self._sql.SQL(
-                    "INSERT INTO {} (id, wing, room, document, embedding, metadata) "
-                    "SELECT id, wing, room, document, embedding_text::{}, metadata_text::jsonb "
-                    "FROM unnest("
-                    "%s::text[], %s::text[], %s::text[], %s::text[], %s::text[], %s::text[]"
-                    ") AS rows(id, wing, room, document, embedding_text, metadata_text) "
-                    "{}"
-                ).format(self._table_id, self._vec_type_sql, conflict_clause),
-                (doc_ids, wings, rooms, row_documents, row_embeddings, row_metadatas),
-            )
+        step = max(1, int(self.INSERT_STATEMENT_ROWS))
+        for lo in range(0, len(rows), step):
+            sl = slice(lo, lo + step)
+            if self._table_am == "sorted_heap":
+                cur.execute(
+                    self._sql.SQL(
+                        "INSERT INTO {} (wing, room, id, document, embedding, metadata) "
+                        "SELECT wing, room, id, document, embedding_text::{}, metadata_text::jsonb "
+                        "FROM unnest("
+                        "%s::text[], %s::text[], %s::text[], %s::text[], %s::text[], %s::text[]"
+                        ") AS rows(wing, room, id, document, embedding_text, metadata_text) "
+                        "{}"
+                    ).format(self._table_id, self._vec_type_sql, conflict_clause),
+                    (
+                        wings[sl],
+                        rooms[sl],
+                        doc_ids[sl],
+                        row_documents[sl],
+                        row_embeddings[sl],
+                        row_metadatas[sl],
+                    ),
+                )
+            else:
+                cur.execute(
+                    self._sql.SQL(
+                        "INSERT INTO {} (id, wing, room, document, embedding, metadata) "
+                        "SELECT id, wing, room, document, embedding_text::{}, metadata_text::jsonb "
+                        "FROM unnest("
+                        "%s::text[], %s::text[], %s::text[], %s::text[], %s::text[], %s::text[]"
+                        ") AS rows(id, wing, room, document, embedding_text, metadata_text) "
+                        "{}"
+                    ).format(self._table_id, self._vec_type_sql, conflict_clause),
+                    (
+                        doc_ids[sl],
+                        wings[sl],
+                        rooms[sl],
+                        row_documents[sl],
+                        row_embeddings[sl],
+                        row_metadatas[sl],
+                    ),
+                )
 
         self._maybe_create_vector_index(inserted_rows=len(rows))
 

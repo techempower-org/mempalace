@@ -493,3 +493,22 @@ def test_palace_falls_back_for_a_backend_without_the_batch_seam(monkeypatch):
     palace_mod._maybe_attach_writethrough(col, "postgresql://fake/db")
 
     assert col.per_drawer is not None
+
+
+def test_inserts_go_in_statements_of_bounded_size(collection):
+    """A large insert is split so no single statement carries more than INSERT_STATEMENT_ROWS rows (a 1000-row
+    statement ran past the 30 s statement timeout on a loaded palace, 2026-11-17)."""
+    n = collection.INSERT_STATEMENT_ROWS * 2 + 7
+    collection._conn = None
+    conn = pg._load_psycopg2()[0].connect("x")
+    before = len(conn.executed)
+    collection.add(
+        documents=[f"doc {i}" for i in range(n)],
+        ids=[f"id{i}" for i in range(n)],
+        metadatas=[{"wing": "w"}] * n,
+        embeddings=[[0.0] * 384] * n,
+    )
+    inserts = [q for q in conn.executed[before:] if "INSERT INTO" in q]
+    assert len(inserts) == 3, (
+        f"expected 3 bounded INSERT statements for {n} rows, got {len(inserts)}"
+    )

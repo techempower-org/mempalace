@@ -162,8 +162,8 @@ def test_convo_mine_counts_purge_failures_as_errors_and_fails(
         return real(collection, source_file, extract_mode)
 
     monkeypatch.setattr(convo_miner, "_source_file_delete_ids", delete_ids)
-    # Fork (#414): a successful stored-document prefetch purges by id without _source_file_delete_ids, so b.txt's
-    # prefetch fails too, sending it down the full-purge path this test injects the failure into.
+    # Fork (#414): a successful stored-document prefetch purges by id without _source_file_delete_ids. A failed
+    # prefetch now aborts the file before any purge (2026-11-17), so b.txt fails there, as an error, never a skip.
     real_prefetch = convo_miner._source_file_stored_documents
 
     def stored_documents(collection, source_file, extract_mode):

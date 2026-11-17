@@ -877,9 +877,13 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
     stored is ever deleted to make room for a rewrite; a crash leaves the
     existing drawers in place.
 
-    Fail-safe: if the prefetch fails, fall back to the pre-#414 full purge +
-    rebuild; if the metadata refresh fails, the affected chunks are simply
-    re-filed in full (wasteful, never lossy).
+    Fail-safe: if the prefetch fails, the file is left untouched and counted
+    as a failed purge (the next mine retries). It never falls back to purging
+    every drawer of the file: the rebuild after such a purge can fail too (a
+    statement timeout on a loaded palace), and then the transcript is left with
+    no drawers at all (2026-11-17: 194,461 drawers of six live transcripts). If
+    the metadata refresh fails, the affected chunks are simply re-filed in full
+    (wasteful, never lossy).
 
     Returns (drawers_added, room_counts_delta, skipped). ``skipped`` is
     :data:`PURGE_FAILED` when the stale-drawer purge raised, which the mine
@@ -935,20 +939,23 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             return 0, room_counts_delta, PURGE_FAILED
         planned_ids = {drawer_id for _chunk, _room, drawer_id in planned}
 
-        # Prefetch what the palace already holds for this file. On failure
-        # fall back to the pre-#414 behaviour: purge everything, rebuild all.
-        stored: Optional[dict] = None
+        # Prefetch what the palace already holds for this file. On failure stop
+        # here, leaving the stored drawers as they are: never purge the whole
+        # file to rebuild it (the rebuild can fail as well, and then nothing is
+        # left; 2026-11-17).
         try:
             stored = _source_file_stored_documents(collection, source_file, extract_mode)
-        except Exception:
-            logger.debug(
-                "Stored-document prefetch failed for %s; falling back to full rebuild",
-                source_file,
-                exc_info=True,
+        except Exception as exc:
+            print(
+                f"  ! [error] stored-drawer prefetch failed for {source_file!r} "
+                f"({exc!r}); leaving existing drawers untouched, will retry "
+                f"on the next mine",
+                file=sys.stderr,
             )
+            logger.debug("Stored-document prefetch failed for %s", source_file, exc_info=True)
+            return 0, room_counts_delta, PURGE_FAILED
 
-        # Purge stale drawers: with a prefetch, only the ids this pass will
-        # not rewrite; without one, every drawer of the file (legacy path).
+        # Purge stale drawers: only the ids this pass will not rewrite.
         # Also fires on a normalize-schema bump, where file_already_mined()
         # returned False for pre-v2 drawers.
         #
@@ -961,11 +968,7 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
         # drawers' stored mtime untouched, so the next mine still sees a
         # mismatch and retries.
         try:
-            if stored is None:
-                delete_ids = _source_file_delete_ids(collection, source_file, extract_mode)
-                stored = {}
-            else:
-                delete_ids = [drawer_id for drawer_id in stored if drawer_id not in planned_ids]
+            delete_ids = [drawer_id for drawer_id in stored if drawer_id not in planned_ids]
             if delete_ids:
                 collection.delete(ids=delete_ids)
         except Exception as exc:

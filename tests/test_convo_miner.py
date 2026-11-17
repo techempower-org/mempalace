@@ -1497,3 +1497,52 @@ def test_mine_convos_reaches_a_yield_point_before_each_file(tmp_path, capsys):
     with mine_yield_hook(lambda: calls.append(1)):
         mine_convos(str(src), str(tmp_path / "palace"), wing="test")
     assert len(calls) == 3
+
+
+def test_mine_convos_failed_prefetch_leaves_stored_drawers(capsys, monkeypatch):
+    """A re-mine whose stored-drawer prefetch fails must leave the file's drawers in place, not purge them all to
+    rebuild (2026-11-17: the rebuild then hit a statement timeout and six live transcripts were left empty)."""
+    from mempalace import convo_miner
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        convo_path = Path(tmpdir) / "session.txt"
+        convo_path.write_text(
+            "> What is the plan?\nUNIQUE_KEPT_EXCHANGE_MARKER here.\n\n"
+            "> Any risks?\nMigration ordering is the main one.\n"
+        )
+        palace_path = os.path.join(tmpdir, "palace")
+        mine_convos(tmpdir, palace_path, wing="test")
+        capsys.readouterr()
+
+        convo_path.write_text(
+            "> What is the plan?\nUNIQUE_KEPT_EXCHANGE_MARKER here.\n\n"
+            "> Any risks?\nMigration ordering is the main one.\n\n"
+            "> One more?\nUNIQUE_LATER_EXCHANGE_MARKER here.\n"
+        )
+        future = time.time() + 60
+        os.utime(convo_path, (future, future))
+
+        def boom(*_a, **_k):
+            raise RuntimeError("canceling statement due to statement timeout")
+
+        monkeypatch.setattr(convo_miner, "_source_file_stored_documents", boom)
+        from mempalace.palace import MineFileErrors
+
+        with pytest.raises(
+            MineFileErrors
+        ):  # the failed file is an error the next mine retries, never a skip
+            mine_convos(tmpdir, palace_path, wing="test")
+        err = capsys.readouterr().err
+        assert "prefetch failed" in err
+
+        client = chromadb.PersistentClient(path=palace_path)
+        docs = client.get_collection("mempalace_drawers").get(include=["documents"])["documents"]
+        assert sum(1 for d in docs if "UNIQUE_KEPT_EXCHANGE_MARKER" in d) == 1, (
+            "stored drawers were purged"
+        )
+        assert not any("UNIQUE_LATER_EXCHANGE_MARKER" in d for d in docs), (
+            "the failed pass still wrote"
+        )
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
