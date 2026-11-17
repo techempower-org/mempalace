@@ -139,9 +139,10 @@ def ask(proposal: Mapping) -> str:
 # git never uses (GIT_DISCOVERY_ACROSS_FILESYSTEM is dropped with every GIT_* variable), so it
 # can never track the inbox either. Anything else, such as "not a git repository: <gitdir>"
 # from a broken pointer, is not an answer.
-_GIT_OUTSIDE = (
-    "not a git repository (or any of the parent directories)",
-    "not a git repository (or any parent up to mount point ",
+# Matched against git's whole first line, never as a substring (a gitdir path can hold any text).
+_GIT_OUTSIDE = re.compile(
+    r"fatal: not a git repository "
+    r"\((?:or any of the parent directories\): \.git|or any parent up to mount point /[^\n]*\))"
 )
 
 
@@ -163,7 +164,8 @@ def _writable(pfd: int) -> Optional[str]:
     try:
         inside = subprocess.run(["git", "-C", here, "rev-parse", "--is-inside-work-tree"], **run)
         if inside.returncode != 0:
-            if any(m in inside.stderr for m in _GIT_OUTSIDE):
+            first = inside.stderr.split("\n", 1)[0]
+            if _GIT_OUTSIDE.fullmatch(first):
                 return None  # git searched every parent it would use and found no repository
             return "git could not tell whether it is in a work tree"
         if inside.stdout.strip() != "true":

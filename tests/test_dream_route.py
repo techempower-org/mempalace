@@ -501,6 +501,11 @@ def test_an_existing_scratch_is_still_synced_before_delivery(tmp_path, monkeypat
             True,
         ),
         ("fatal: not a git repository: /missing/path\n", False),
+        (
+            "fatal: not a git repository: "
+            "/m/not a git repository (or any of the parent directories)/r\n",
+            False,
+        ),
         ("fatal: detected dubious ownership in repository at '/x'\n", False),
     ],
 )
@@ -515,3 +520,13 @@ def test_only_gits_searched_and_found_none_answers_mean_outside(
     finally:
         os.close(fd)
     assert (why is None) is outside
+
+
+def test_a_pointer_whose_path_quotes_gits_answer_is_still_refused(tmp_path):
+    root, _mem, alpha, _beta = _projects(tmp_path)
+    trick = tmp_path / "not a git repository (or any of the parent directories)" / "repo"
+    (alpha / ".git").write_text(f"gitdir: {trick}\n")
+    stats = route.route(
+        [_prop("f9", "no-mechanism", [str(alpha / "CLAUDE.md:1")])], [root], {}, day="2026-11-17"
+    )
+    assert not (alpha / "scratch").exists() and stats["routed"] == 0
