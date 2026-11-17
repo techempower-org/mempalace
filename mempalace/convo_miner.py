@@ -986,8 +986,12 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             if drawer_id not in planned_ids and drawer_id not in sensitive_ids
         ]
         # Except an orphan whose own stored text is marked sensitive (an old shared
-        # copy under an id a re-key retired): it goes now, like the copies above; the
-        # transcript's sensitive chunks were filed privately by this pass.
+        # copy under an id a re-key retired). It is MOVED now, never just deleted:
+        # its own stored text and metadata are filed into the private collection
+        # under its own id, and only then removed from shared, so it leaves the
+        # shared search without ever existing nowhere. A pass whose prefetch failed
+        # cannot see such rows; they were in shared before the pass, and the next
+        # pass that can read the file moves them.
         all_written = True
         try:
             marks = (
@@ -1000,7 +1004,7 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             exposed = [drawer_id for drawer_id, mark in zip(orphan_ids, marks) if mark]
             orphan_ids = [drawer_id for drawer_id, mark in zip(orphan_ids, marks) if not mark]
             if exposed:
-                collection.delete(ids=exposed)
+                _move_to_private(palace_path, collection, exposed)
         except Exception as exc:
             print(
                 f"  ! [error] removing the shared copies of private chunks failed for "
@@ -1293,6 +1297,29 @@ def _file_sensitive_chunks(
     # The caller deletes these only after the shared write succeeds: a private row whose chunk
     # is now filed shared must not go before its shared copy exists.
     return orphans
+
+
+def _move_to_private(palace_path, collection, ids) -> None:
+    """Move shared drawers ``ids`` into the private collection verbatim (own text, own metadata, own id, marked
+    ``privacy_class: sensitive``), then delete them from shared. Raises before the delete if the private write
+    fails, so the shared rows stay until a later pass can move them."""
+    from .palace import PRIVATE_COLLECTION_NAME, get_collection
+
+    if palace_path is None:
+        raise RuntimeError(
+            f"{len(ids)} sensitive shared drawer(s) and no palace path for the private collection"
+        )
+    got = collection.get(ids=list(ids), include=["documents", "metadatas"])
+    if not got["ids"]:
+        return
+    metas = []
+    for meta in got["metadatas"]:
+        meta = dict(meta or {})
+        meta["privacy_class"] = "sensitive"
+        metas.append(meta)
+    private = get_collection(palace_path, collection_name=PRIVATE_COLLECTION_NAME, create=True)
+    private.upsert(documents=list(got["documents"]), ids=list(got["ids"]), metadatas=metas)
+    collection.delete(ids=list(got["ids"]))
 
 
 def _delete_private(palace_path, ids) -> None:

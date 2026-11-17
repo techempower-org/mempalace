@@ -368,3 +368,43 @@ def test_a_rekeyed_old_shared_copy_of_sensitive_text_goes_at_once(session, monke
     assert any("notes folder holds two files" in d for d in _docs(palace, "mempalace_drawers")), (
         "non-sensitive lost"
     )
+
+
+def test_a_rekeyed_sensitive_orphan_is_moved_with_its_own_text(session, monkeypatch):
+    """xreview r4 finding 1: a marked orphan whose own text the pass did not file privately (the transcript now holds
+    different text) is moved into the private collection with its own text before it leaves shared, so a later write
+    failure cannot lose it."""
+    from mempalace.palace import MineFileErrors
+
+    convos, path, palace = session
+    with monkeypatch.context() as m:
+        m.setattr(
+            convo_miner,
+            "sensitive_chunk_flags",
+            lambda contents, extra=(): [False] * len(list(contents)),
+        )
+        convo_miner.mine_convos(str(convos), palace, wing="w")
+    assert any(SECRET in d for d in _docs(palace, "mempalace_drawers"))
+
+    real_id = convo_miner.make_convo_drawer_id
+    monkeypatch.setattr(
+        convo_miner, "make_convo_drawer_id", lambda *a, **k: real_id(*a, **k) + "_rekeyed"
+    )
+    # the secret line itself is gone from the transcript now: the pass files other private text, not this one
+    path.write_text(
+        _transcript().replace(f"{SECRET} appears here", "OTHER_PRIVATE_TEXT appears here")
+    )
+    os.utime(path, (os.path.getmtime(path) + 5,) * 2)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("canceling statement due to statement timeout")
+
+    monkeypatch.setattr(convo_miner, "assert_no_collisions", boom)
+    with pytest.raises((MineFileErrors, RuntimeError)):
+        convo_miner.mine_convos(str(convos), palace, wing="w")
+    assert not any(SECRET in d for d in _docs(palace, "mempalace_drawers")), (
+        "sensitive text left in shared"
+    )
+    assert any(SECRET in d for d in _docs(palace, "mempalace_private_drawers")), (
+        "the orphan's own text was lost"
+    )
