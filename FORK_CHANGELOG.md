@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **docs/specs/dream-inbox.md: the dream inbox's format, who may tick a line, and what acted means** (`HEAD` — pending resolution)
+- **docs/specs/dream-inbox.md: the dream inbox's format, who may tick a line, and what acted means** ([`0161990`](https://github.com/techempower-org/mempalace/commit/0161990))
   The contract for `scratch/dream-inbox.md` (routed by `nightly --route`,
   #641): the line format, that the dream only appends while a project's lane
   only ticks boxes and the owner decides on the review page, when to tick,

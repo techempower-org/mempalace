@@ -297,7 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
-| docs/specs/dream-inbox.md: the dream inbox's format, who may tick a line, and what acted means | — | `HEAD` — pending resolution |
+| docs/specs/dream-inbox.md: the dream inbox's format, who may tick a line, and what acted means | — | [`0161990`](https://github.com/techempower-org/mempalace/commit/0161990) |
 | the nightly dream can route each proposal that names a project to that project's inbox | — | [`5831c33`](https://github.com/techempower-org/mempalace/commit/5831c33) |
 | LLM and embedding errors never repeat an endpoint's reply or reason, mask the URL, and keep no original exception | — | [`51c96db`](https://github.com/techempower-org/mempalace/commit/51c96db) |
 | default search leaves out drawers flagged judged_class chatter or stale; --all-classes (all_classes=True) returns every drawer | — | [`b309a4e`](https://github.com/techempower-org/mempalace/commit/b309a4e) |
