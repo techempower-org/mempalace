@@ -1680,3 +1680,22 @@ def test_blanks_after_begin_then_header_lines_still_take_the_key(nl, blank):
     )
     out = redact(text)
     assert line not in out and "DEK-Info" not in out and out.startswith("[redacted pem sha256:")
+
+
+@pytest.mark.parametrize("width", [128, 2000], ids=["128-columns", "unwrapped"])
+def test_wide_and_unwrapped_key_bodies_are_taken(width):
+    rnd = _random.Random(22)
+    alpha = _string.ascii_letters + _string.digits + "+/"
+    data = "".join(rnd.choice(alpha) for _ in range(2000))
+    lines = [data[i : i + width] for i in range(0, len(data), width)]
+    out = redact("\n".join([_HEAD, *lines, _END]) + "\nafter")
+    assert all(ln[:40] not in out for ln in lines) and out.endswith("]\nafter")
+
+
+@pytest.mark.parametrize("nl", ["\n", "\\n"], ids=["raw", "json"])
+def test_a_header_line_of_any_length_does_not_hide_the_key(nl):
+    head = "-----" + "BEGIN PGP " + "PRIVATE KEY BLOCK-----"
+    end = "-----" + "END PGP " + "PRIVATE KEY BLOCK-----"
+    lines = _pem_lines(seed=23, n=3)
+    out = redact(nl.join([head, "Comment: " + "x" * 5000, "", *lines, end]))
+    assert all(ln not in out for ln in lines) and out.startswith("[redacted pem sha256:")

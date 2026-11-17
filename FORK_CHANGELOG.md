@@ -67,7 +67,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   needs 40 base64 characters right after it (80 such mentions in the palace are
   left as they are).
 
-  *Tests:* 43 (tests/test_redact.py: pem, ppk, no-stall)
+  *Tests:* 47 (tests/test_redact.py: pem, ppk, no-stall)
   *Files:* `mempalace/redact.py`, `tests/test_redact.py`
 
 

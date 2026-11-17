@@ -80,8 +80,9 @@ from typing import Any, Dict, List, Optional, Tuple
 # line-number prefix ("  12\t" or "12→", as a numbered file view prints it). Header lines after
 # BEGIN ("Name: value", e.g. Proc-Type, DEK-Info, Version, Comment) and blank lines go with the key.
 # The body is lines of base64 ending at a line break, a quote, an ellipsis, the END line or the end
-# of the text. The first holds 16-80 characters and may follow the header on its line (so a header
-# alone, as prose, stays). Each later line holds 16-80, or is the short last line right before END
+# of the text, at any width (64, 76, 128 columns, or not wrapped). The first holds 16+ characters and
+# may follow the header on its line (so a header alone, as prose, stays). Each later line holds 16+,
+# or is the short last line right before END
 # (or before a PGP checksum line and END): a key cut off before its END line is taken without short
 # prose lines after it.
 # Every blank has one owner, so no input can make the matcher try the ways of splitting a run of
@@ -103,17 +104,17 @@ _PEM = (
     # given back (a lookahead captures it, a backreference consumes it: an atomic group that works
     # on Python 3.10), so a run of long header lines cannot be retried at every shorter length.
     r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY(?: BLOCK)?-----[ \t]*"
-    rf"(?:(?<=[ \t]){_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL}"
-    rf"|(?:{_PEM_GAP}[A-Za-z][A-Za-z0-9-]{{0,40}}:(?=(?P<pemhv>(?:(?!{_PEM_SEP})[^\r\n]){{0,1000}}))(?P=pemhv))*"
-    rf"{_PEM_GAP}+{_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL})"
-    rf"(?:{_PEM_GAP}+(?:{_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL}|{_PEM_B64}{{1,15}}[ \t]*{_PEM_LAST}))*"
+    rf"(?:(?<=[ \t]){_PEM_B64}{{16,}}[ \t]*{_PEM_EOL}"
+    rf"|(?:{_PEM_GAP}[A-Za-z][A-Za-z0-9-]{{0,40}}:(?=(?P<pemhv>(?:(?!{_PEM_SEP})[^\r\n])*))(?P=pemhv))*"
+    rf"{_PEM_GAP}+{_PEM_B64}{{16,}}[ \t]*{_PEM_EOL})"
+    rf"(?:{_PEM_GAP}+(?:{_PEM_B64}{{16,}}[ \t]*{_PEM_EOL}|{_PEM_B64}{{1,15}}[ \t]*{_PEM_LAST}))*"
     rf"(?:{_PEM_GAP}*{_PEM_END})?"
 )
 # A PuTTY private key file's private lines: the count line and the base64 lines after it, each of
-# 16-80 characters or the short last one right before Private-MAC (prose after it stays).
+# 16+ characters or the short last one right before Private-MAC (prose after it stays).
 _PPK = (
     r"Private-Lines:[ \t]*\d{1,3}[ \t]*"
-    rf"(?:{_PEM_GAP}(?:{_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL}"
+    rf"(?:{_PEM_GAP}(?:{_PEM_B64}{{16,}}[ \t]*{_PEM_EOL}"
     rf"|{_PEM_B64}{{1,15}}[ \t]*(?={_PEM_GAP}Private-MAC:)))+"
 )
 
