@@ -175,7 +175,7 @@ def route(
         d = decisions.get(pid)
         if isinstance(d, Mapping) and d.get("decision") in ("accept", "reject"):
             entry["acted"] = {"how": f"decided: {d['decision']}", "day": day}
-        elif False and pid not in tonight:
+        elif pid not in tonight:
             entry["acted"] = {"how": "no longer proposed", "day": day}
     acted = sum(1 for e in record.values() if e.get("acted"))
     return {
