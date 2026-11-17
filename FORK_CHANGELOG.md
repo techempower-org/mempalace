@@ -58,6 +58,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **a DigitalOcean GenAI key (sk-do-) is redacted on every write as its own kind, whatever the case of its body** ([`2b200e4`](https://github.com/techempower-org/mempalace/commit/2b200e4))
+  A DigitalOcean GenAI key printed into a session was caught only
+  incidentally, by the LiteLLM shape, and named as one; a key whose body
+  is letters in one case would have passed. An "sk-do-" token of 20 to
+  1000 characters is now its own kind, ahead of the LiteLLM shape.
+
+
 - **redaction takes PEM private keys (OpenSSH, RSA, EC, DSA, PKCS#8, PGP) and PuTTY private lines** ([`ea2d32d`](https://github.com/techempower-org/mempalace/commit/ea2d32d))
   No built-in rule matched a PEM private key, so a key printed into a session
   reached the palace whole: on 2026-11-17 four distinct OpenSSH private keys sat
