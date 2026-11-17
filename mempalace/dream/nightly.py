@@ -44,6 +44,8 @@ LOCK = ".nightly.lock"
 APPLIED = "applied.json"
 # The judge's verdicts by pair_key: kept so a night with the judge off still has them.
 JUDGED = "judged.json"
+# Keys in judged.json that are records kept beside the verdicts, never pruned as pairs.
+RESERVED = frozenset({route.KEY})
 _DAY_FILE = re.compile(r"^\d{4}-\d{2}-\d{2}\.json$")
 _DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 _LINE = re.compile(r":\d+$")
@@ -247,8 +249,8 @@ def run(
             on_verdict=checkpoint,
         )
         if verdicts is not None:
-            # keys starting "_" are records kept beside the verdicts (the routing), never pairs
-            for key in [k for k in verdicts if k not in used and not k.startswith("_")]:
+            # the routing record sits beside the verdicts; pair keys are hex digests
+            for key in [k for k in verdicts if k not in used and k not in RESERVED]:
                 del verdicts[key]
         proposals += found
         steps["contradictions"] = stats
@@ -266,7 +268,12 @@ def run(
         out.append(fit({"id": pid, **p.as_dict(), "first_seen": seen[pid]}))
     out.sort(key=lambda d: KIND_PRIORITY.index(d["kind"]) if d["kind"] in KIND_PRIORITY else 99)
     if route_roots:
-        # every proposal, before the page's size cut, so a dropped one is not counted as acted
+        # Every proposal, before the page's size cut, so a cut one is not counted as acted; and
+        # only a kind whose producer ran complete tonight can be "no longer proposed".
+        con = steps["contradictions"]
+        complete = {"no-mechanism", "near-duplicate", "oversized-index"}
+        if not con.get("skipped") and not con.get("error") and con.get("judge") != "off":
+            complete.add("contradiction")
         steps["routing"] = route.route(
             out,
             route_roots,
@@ -274,6 +281,7 @@ def run(
             day,
             lanes=lanes,
             decisions=decisions,
+            complete_kinds=complete,
         )
     ledger, waiting = apply_decisions(decisions, applied or [], known or {})
     run_info = {"mempalace": _version(), "steps": steps, "decided_and_dropped": dropped}

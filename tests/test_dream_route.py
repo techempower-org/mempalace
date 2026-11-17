@@ -18,13 +18,13 @@ def _enc(path) -> str:
 def _projects(tmp_path):
     """A projects root with two projects (one a git repo ignoring scratch/) and a memory root
     whose folders are named the way the harness names them: the encoded project path."""
-    root = tmp_path / "Projects"
+    root = tmp_path.resolve() / "Projects"
     alpha, beta = root / "alpha.site", root / "beta"
     for p in (alpha, beta):
         p.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(beta)], check=True)
     (beta / ".gitignore").write_text("scratch/\n")
-    mem = tmp_path / "mem"
+    mem = tmp_path.resolve() / "mem"
     for p in (alpha, beta):
         (mem / _enc(p) / "memory").mkdir(parents=True)
     return root, mem, alpha, beta
@@ -106,7 +106,7 @@ def test_a_second_night_adds_nothing_twice_and_marks_decided_or_gone_as_acted(tm
 
 
 def test_a_tracked_scratch_folder_is_never_written(tmp_path):
-    root = tmp_path / "Projects"
+    root = tmp_path.resolve() / "Projects"
     gamma = root / "gamma"
     gamma.mkdir(parents=True)
     subprocess.run(["git", "init", "-q", str(gamma)], check=True)  # scratch/ NOT ignored
@@ -118,7 +118,7 @@ def test_a_tracked_scratch_folder_is_never_written(tmp_path):
         day="2026-11-17",
     )
     assert not (gamma / "scratch").exists()
-    assert stats["routed"] == 0 and stats["skipped"] == ["gamma: scratch/ is not git-ignored"]
+    assert stats["routed"] == 0 and stats["skipped"] == ["gamma: the inbox path is not git-ignored"]
 
 
 def test_a_symlinked_inbox_is_not_followed(tmp_path):
@@ -131,7 +131,9 @@ def test_a_symlinked_inbox_is_not_followed(tmp_path):
         [_prop("s1", "no-mechanism", [str(alpha / "CLAUDE.md:1")])], [root], {}, day="2026-11-17"
     )
     assert target.read_text() == "keep\n"
-    assert stats["routed"] == 0 and stats["skipped"] == ["alpha.site: inbox is not a regular file"]
+    assert stats["routed"] == 0 and stats["skipped"][0].startswith(
+        "alpha.site: cannot open the inbox"
+    )
 
 
 def test_the_judge_never_prunes_the_routing_record(tmp_path, monkeypatch):
@@ -189,3 +191,145 @@ def test_the_cli_routes_when_asked_and_reports_the_line(tmp_path, monkeypatch, c
     capsys.readouterr()
     assert main(["routed", "--out", str(out)]) == 0
     assert re.fullmatch(r"dreams: \d+ proposals routed, \d+ acted\n", capsys.readouterr().out)
+
+
+# --- review round 1 (xreview gpt-6.1-sol, 2026-11-17)
+
+
+def test_a_source_cannot_climb_out_of_the_root_or_name_a_hidden_folder(tmp_path):
+    root, _mem, _alpha, _beta = _projects(tmp_path)
+    (root.parent / "private").mkdir()
+    assert route.project_of(str(root / ".." / "private" / "CLAUDE.md"), [root]) is None
+    assert route.project_of(str(root / ".git" / "x"), [root]) is None
+    assert route.project_of("relative/beta/CLAUDE.md", [root]) is None
+
+
+def test_a_symlinked_project_routes_to_its_real_folder_once(tmp_path):
+    root, mem, alpha, _beta = _projects(tmp_path)
+    (root / "alias").symlink_to(alpha)
+    by_link = str(root / "alias" / "CLAUDE.md")
+    by_mem = str(mem / _enc(root / "alias") / "memory" / "x.md")
+    (mem / _enc(root / "alias") / "memory").mkdir(parents=True)
+    assert route.project_of(by_link, [root]) == alpha
+    assert route.project_of(by_mem, [root]) == alpha
+    ledger: dict = {}
+    route.route(
+        [_prop("s2", "no-mechanism", [by_link, str(alpha / "CLAUDE.md")])],
+        [root],
+        ledger,
+        day="2026-11-17",
+    )
+    lines = [ln for ln in (alpha / route.INBOX).read_text().splitlines() if ln.startswith("- [")]
+    assert len(lines) == 1 and len(ledger[route.KEY]["s2"]["to"]) == 1
+
+
+def test_a_memory_name_two_folders_share_names_neither(tmp_path):
+    root, mem, alpha, _beta = _projects(tmp_path)
+    (root / "alpha-site").mkdir()  # encodes like alpha.site
+    assert route.project_of(str(mem / _enc(alpha) / "memory" / "x.md"), [root]) is None
+    assert route.project_of(str(alpha / "CLAUDE.md"), [root]) == alpha  # a path still names it
+
+
+def test_a_night_without_the_judge_does_not_mark_contradictions_acted(tmp_path):
+    root, _mem, alpha, _beta = _projects(tmp_path)
+    src = [str(alpha / "CLAUDE.md:1")]
+    ledger: dict = {}
+    route.route(
+        [_prop("c1", "contradiction", src), _prop("n1", "no-mechanism", src)],
+        [root],
+        ledger,
+        day="2026-11-17",
+    )
+    stats = route.route(
+        [],
+        [root],
+        ledger,
+        day="2026-11-18",
+        complete_kinds={"no-mechanism", "near-duplicate", "oversized-index"},
+    )
+    assert ledger[route.KEY]["c1"]["acted"] is None
+    assert ledger[route.KEY]["n1"]["acted"]["how"] == route.GONE
+    assert stats["acted"] == 1
+    # n1 comes back: open again
+    route.route([_prop("n1", "no-mechanism", src)], [root], ledger, day="2026-11-19")
+    assert ledger[route.KEY]["n1"]["acted"] is None
+
+
+def test_the_nightly_run_tells_routing_which_kinds_are_complete(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_route(*a, **k):
+        seen.update(k)
+        return {"routed": 0}
+
+    monkeypatch.setattr(nightly.route, "route", fake_route)
+    root, mem, _alpha, _beta = _projects(tmp_path)
+    md = tmp_path / "CLAUDE.md"
+    md.write_text("# Rules\n- **Concise.** No fluff.\n")
+    embed = lambda t: [[1.0, 0.0] for _ in t]  # noqa: E731
+    nightly.run(mem, [md], embed, None, {}, day="2026-11-17", verdicts={}, route_roots=[root])
+    assert "contradiction" not in seen["complete_kinds"]
+    assert "no-mechanism" in seen["complete_kinds"]
+
+
+def test_an_id_already_in_the_inbox_is_not_appended_again(tmp_path):
+    # a run that appended and then stopped before the ledger was saved
+    root, _mem, alpha, _beta = _projects(tmp_path)
+    src = [str(alpha / "CLAUDE.md:1")]
+    route.route([_prop("d1", "no-mechanism", src)], [root], {}, day="2026-11-17")
+    ledger: dict = {}  # the ledger save was lost
+    route.route([_prop("d1", "no-mechanism", src)], [root], ledger, day="2026-11-17")
+    lines = [ln for ln in (alpha / route.INBOX).read_text().splitlines() if ln.startswith("- [")]
+    assert len(lines) == 1 and "d1" in ledger[route.KEY]
+
+
+def test_a_tracked_inbox_or_a_repo_above_is_never_written(tmp_path):
+    root = tmp_path.resolve() / "Projects"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)  # a repo ABOVE the project
+    delta = root / "delta"
+    delta.mkdir()
+    stats = route.route(
+        [_prop("e1", "no-mechanism", [str(delta / "CLAUDE.md:2")])], [root], {}, day="2026-11-17"
+    )
+    assert not (delta / "scratch").exists() and stats["routed"] == 0
+    assert stats["skipped"] == ["delta: the inbox path is not git-ignored"]
+
+
+def test_a_loose_inbox_is_tightened_and_a_hard_link_is_refused(tmp_path):
+    root, _mem, alpha, beta = _projects(tmp_path)
+    (alpha / "scratch").mkdir()
+    (alpha / route.INBOX).write_text("")
+    os.chmod(alpha / route.INBOX, 0o644)
+    route.route(
+        [_prop("f1", "no-mechanism", [str(alpha / "CLAUDE.md:1")])], [root], {}, day="2026-11-17"
+    )
+    assert os.stat(alpha / route.INBOX).st_mode & 0o777 == 0o600
+    (beta / "scratch").mkdir()
+    other = tmp_path / "other.md"
+    other.write_text("x\n")
+    os.link(other, beta / route.INBOX)
+    stats = route.route(
+        [_prop("f2", "no-mechanism", [str(beta / "CLAUDE.md:1")])], [root], {}, day="2026-11-17"
+    )
+    assert other.read_text() == "x\n"
+    assert stats["skipped"] == ["beta: inbox is not a regular single-link file of this user"]
+
+
+def test_one_unwritable_project_does_not_stop_the_others(tmp_path):
+    root, _mem, alpha, beta = _projects(tmp_path)
+    (alpha / "scratch").mkdir()
+    os.chmod(alpha / "scratch", 0o500)
+    try:
+        stats = route.route(
+            [
+                _prop("g1", "no-mechanism", [str(alpha / "CLAUDE.md:1")]),
+                _prop("g2", "no-mechanism", [str(beta / "CLAUDE.md:1")]),
+            ],
+            [root],
+            {},
+            day="2026-11-17",
+        )
+    finally:
+        os.chmod(alpha / "scratch", 0o700)
+    assert stats["routed"] == 1 and stats["skipped"][0].startswith("alpha.site: cannot open")
