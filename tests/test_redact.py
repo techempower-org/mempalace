@@ -1592,3 +1592,33 @@ def test_a_key_shown_on_one_line_and_elided_is_taken():
     for tail in ("...", "…"):
         out = redact(f"{_HEAD} {lines[0][:52]}{tail} rest of the line")
         assert lines[0][:52] not in out and out.endswith(f"]{tail} rest of the line")
+
+
+@pytest.mark.parametrize("sep", ["\n", "\r\n", "\\n", "\\\\n"], ids=["lf", "crlf", "json", "json2"])
+def test_trailing_blanks_on_key_lines_do_not_stop_the_key(sep):
+    lines = _pem_lines(seed=17)
+    rows = [_HEAD, *(ln + (" " if k % 2 else "\t") for k, ln in enumerate(lines)), _END]
+    out = redact(sep.join(rows) + sep + "after")
+    assert all(ln not in out for ln in lines) and out.endswith(f"]{sep}after")
+
+
+def test_header_lines_with_a_backslash_or_a_long_value_go_with_the_key():
+    lines = _pem_lines(seed=18, n=3)
+    head = "-----" + "BEGIN PGP " + "PRIVATE KEY BLOCK-----"
+    end = "-----" + "END PGP " + "PRIVATE KEY BLOCK-----"
+    text = "\n".join([head, "Comment: C:\\keys\\mine", "Comment: " + "x" * 300, "", *lines, end])
+    out = redact(text)
+    assert all(ln not in out for ln in lines) and out.startswith("[redacted pem sha256:")
+
+
+def test_short_prose_lines_after_a_truncated_key_stay():
+    lines = _pem_lines(seed=19)
+    out = redact("\n".join([_HEAD, *lines, "Thanks", "Alice"]))
+    assert all(ln[:20] not in out for ln in lines) and out.endswith("]\nThanks\nAlice")
+
+
+def test_a_putty_private_section_stops_before_prose():
+    priv = _pem_lines(seed=20, n=2)
+    text = "\n".join(["Private-Lines: 2", *priv, "Thanks", "Alice"])
+    out = redact(text)
+    assert all(p not in out for p in priv) and out.endswith("]\nThanks\nAlice")
