@@ -536,6 +536,13 @@ class PostgresCollection(BaseCollection):
             raise ValueError("embeddings and documents must have the same length")
         return embeddings
 
+    # Rows per INSERT statement. Each row updates the HNSW and GIN indexes, so a 1000-row statement on a loaded
+    # palace (an autovacuum in its index phase) ran past the 30 s statement timeout and failed the whole mine
+    # (2026-11-17). Larger writes go in slices, each a full _insert_rows call of its own: its own statement (the
+    # connection is autocommit, so each commits on its own), and its own KG write-through call, so a write that
+    # dies part way has delivered the hook for every slice it committed.
+    INSERT_STATEMENT_ROWS = 100
+
     def _insert_rows(
         self,
         *,
@@ -545,6 +552,25 @@ class PostgresCollection(BaseCollection):
         embeddings: list[list[float]],
         update_on_conflict: bool,
     ) -> None:
+        step = max(1, int(self.INSERT_STATEMENT_ROWS))
+        if len(ids) > step:
+            # Duplicate ids are resolved over the WHOLE input first, as the single statement did (DO NOTHING keeps
+            # the first occurrence, DO UPDATE the last), so the result never depends on where a slice ends.
+            pick: dict[str, int] = {}
+            for index, doc_id in enumerate(ids):
+                if doc_id not in pick or update_on_conflict:
+                    pick[doc_id] = index
+            keep = sorted(pick.values())
+            for lo in range(0, len(keep), step):
+                part = keep[lo : lo + step]
+                self._insert_rows(
+                    documents=[documents[i] for i in part],
+                    ids=[ids[i] for i in part],
+                    metadatas=[metadatas[i] for i in part] if metadatas else metadatas,
+                    embeddings=[embeddings[i] for i in part],
+                    update_on_conflict=update_on_conflict,
+                )
+            return
         if update_on_conflict:
             conflict_clause = self._sql.SQL(
                 "ON CONFLICT (id) DO UPDATE SET "

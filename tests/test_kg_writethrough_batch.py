@@ -493,3 +493,80 @@ def test_palace_falls_back_for_a_backend_without_the_batch_seam(monkeypatch):
     palace_mod._maybe_attach_writethrough(col, "postgresql://fake/db")
 
     assert col.per_drawer is not None
+
+
+def test_inserts_go_in_statements_of_bounded_size(collection):
+    """A large insert is split so no single statement carries more than INSERT_STATEMENT_ROWS rows (a 1000-row
+    statement ran past the 30 s statement timeout on a loaded palace, 2026-11-17)."""
+    n = collection.INSERT_STATEMENT_ROWS * 2 + 7
+    collection._conn = None
+    conn = pg._load_psycopg2()[0].connect("x")
+    before = len(conn.executed)
+    collection.add(
+        documents=[f"doc {i}" for i in range(n)],
+        ids=[f"id{i}" for i in range(n)],
+        metadatas=[{"wing": "w"}] * n,
+        embeddings=[[0.0] * 384] * n,
+    )
+    inserts = [q for q in conn.executed[before:] if "INSERT INTO" in q]
+    assert len(inserts) == 3, (
+        f"expected 3 bounded INSERT statements for {n} rows, got {len(inserts)}"
+    )
+
+
+def test_each_committed_slice_gets_its_own_hook_call(collection):
+    """xreview r1 finding 3: a write split into statements calls the batch hook once per committed slice, so a
+    write that dies part way has delivered the hook for every slice it committed."""
+    n = collection.INSERT_STATEMENT_ROWS * 2 + 7
+    calls = []
+    collection.set_kg_writethrough_batch(lambda drawers: calls.append(len(list(drawers))))
+    collection.add(
+        documents=[f"doc {i}" for i in range(n)],
+        ids=[f"id{i}" for i in range(n)],
+        metadatas=[{"wing": "w"}] * n,
+        embeddings=[[0.0] * 384] * n,
+    )
+    step = collection.INSERT_STATEMENT_ROWS
+    assert calls == [step, step, 7]
+
+
+@pytest.mark.parametrize("update", [False, True])
+def test_duplicate_ids_are_resolved_before_slicing(collection, update):
+    """xreview r2 finding 3: a duplicate id across what would be two slices is resolved over the whole input first
+    (DO NOTHING keeps the first, DO UPDATE the last), so 101 rows with one duplicate are one 100-row statement."""
+    n = collection.INSERT_STATEMENT_ROWS + 1
+    ids = [f"id{i}" for i in range(n - 1)] + ["id0"]
+    calls = []
+    collection.set_kg_writethrough_batch(
+        lambda drawers: calls.append([d["document"] for d in drawers])
+    )
+    conn = pg._load_psycopg2()[0].connect("x")
+    before = len(conn.executed)
+    collection._insert_rows(
+        documents=[f"doc {i}" for i in range(n)],
+        ids=ids,
+        metadatas=[{"wing": "w"}] * n,
+        embeddings=[[0.0] * 384] * n,
+        update_on_conflict=update,
+    )
+    assert len([q for q in conn.executed[before:] if "INSERT INTO" in q]) == 1
+    docs = [d for call in calls for d in call]
+    assert len(docs) == n - 1
+    assert ("doc 100" in docs) is update and ("doc 0" in docs) is (not update)
+
+
+def test_duplicates_in_a_small_write_were_already_resolved(collection):
+    """xreview r3 finding 2 (checked, not a defect): a write of at most INSERT_STATEMENT_ROWS rows dedupes its ids
+    before its one statement (rows_by_id), so DO UPDATE never sees one id twice; the last occurrence wins."""
+    calls = []
+    collection.set_kg_writethrough_batch(
+        lambda drawers: calls.append([d["document"] for d in drawers])
+    )
+    collection._insert_rows(
+        documents=["first", "last"],
+        ids=["x", "x"],
+        metadatas=[{"wing": "w"}, {"wing": "w"}],
+        embeddings=[[0.0] * 384] * 2,
+        update_on_conflict=True,
+    )
+    assert calls == [["last"]]

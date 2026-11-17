@@ -877,9 +877,13 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
     stored is ever deleted to make room for a rewrite; a crash leaves the
     existing drawers in place.
 
-    Fail-safe: if the prefetch fails, fall back to the pre-#414 full purge +
-    rebuild; if the metadata refresh fails, the affected chunks are simply
-    re-filed in full (wasteful, never lossy).
+    Fail-safe: if the prefetch fails, the file is left untouched and counted
+    as a failed purge (the next mine retries). It never falls back to purging
+    every drawer of the file: the rebuild after such a purge can fail too (a
+    statement timeout on a loaded palace), and then the transcript is left with
+    no drawers at all (2026-11-17: 194,461 drawers of six live transcripts). If
+    the metadata refresh fails, the affected chunks are simply re-filed in full
+    (wasteful, never lossy).
 
     Returns (drawers_added, room_counts_delta, skipped). ``skipped`` is
     :data:`PURGE_FAILED` when the stale-drawer purge raised, which the mine
@@ -921,7 +925,7 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             ]
             sensitive = [item for item, flag in zip(planned, flags) if flag]
             planned = [item for item, flag in zip(planned, flags) if not flag]
-            _file_sensitive_chunks(
+            private_orphans = _file_sensitive_chunks(
                 palace_path, source_file, sensitive, wing, agent, extract_mode, authored_at
             )
         except Exception as exc:
@@ -934,48 +938,80 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             )
             return 0, room_counts_delta, PURGE_FAILED
         planned_ids = {drawer_id for _chunk, _room, drawer_id in planned}
+        sensitive_ids = {drawer_id for _chunk, _room, drawer_id in sensitive}
 
-        # Prefetch what the palace already holds for this file. On failure
-        # fall back to the pre-#414 behaviour: purge everything, rebuild all.
-        stored: Optional[dict] = None
+        # The shared copies of the chunks just filed privately leave the shared
+        # collection now, looked up by id (no source-file prefetch needed), so
+        # neither a failed prefetch nor a failed write below keeps that text
+        # searchable there.
         try:
-            stored = _source_file_stored_documents(collection, source_file, extract_mode)
-        except Exception:
-            logger.debug(
-                "Stored-document prefetch failed for %s; falling back to full rebuild",
-                source_file,
-                exc_info=True,
-            )
-
-        # Purge stale drawers: with a prefetch, only the ids this pass will
-        # not rewrite; without one, every drawer of the file (legacy path).
-        # Also fires on a normalize-schema bump, where file_already_mined()
-        # returned False for pre-v2 drawers.
-        #
-        # A failed purge must abort this file's mine attempt rather than
-        # fall through to upsert: proceeding on top of an unpurged (or
-        # partially purged) set produces duplicate/stale drawers under
-        # mixed schema versions, with no operator-visible signal beyond a
-        # debug log (#105 — convo_miner's own instance of the same swallow
-        # already fixed for miner.py at #23). Returning here leaves the old
-        # drawers' stored mtime untouched, so the next mine still sees a
-        # mismatch and retries.
-        try:
-            if stored is None:
-                delete_ids = _source_file_delete_ids(collection, source_file, extract_mode)
-                stored = {}
-            else:
-                delete_ids = [drawer_id for drawer_id in stored if drawer_id not in planned_ids]
-            if delete_ids:
-                collection.delete(ids=delete_ids)
+            if sensitive_ids:
+                present = collection.get(ids=sorted(sensitive_ids), include=["metadatas"])["ids"]
+                if present:
+                    collection.delete(ids=list(present))
         except Exception as exc:
             print(
-                f"  ! [error] stale-drawer purge failed for {source_file!r} "
+                f"  ! [error] removing the shared copies of private chunks failed for "
+                f"{source_file!r} ({exc!r}); will retry on the next mine",
+                file=sys.stderr,
+            )
+            logger.debug("Shared-copy purge failed for %s", source_file, exc_info=True)
+            return 0, room_counts_delta, PURGE_FAILED
+
+        # Prefetch what the palace already holds for this file. On failure stop
+        # here, leaving the stored drawers as they are: never purge the whole
+        # file to rebuild it (the rebuild can fail as well, and then nothing is
+        # left; 2026-11-17).
+        try:
+            stored = _source_file_stored_documents(collection, source_file, extract_mode)
+        except Exception as exc:
+            print(
+                f"  ! [error] stored-drawer prefetch failed for {source_file!r} "
                 f"({exc!r}); leaving existing drawers untouched, will retry "
                 f"on the next mine",
                 file=sys.stderr,
             )
-            logger.debug("Stale-drawer purge failed for %s", source_file, exc_info=True)
+            logger.debug("Stored-document prefetch failed for %s", source_file, exc_info=True)
+            return 0, room_counts_delta, PURGE_FAILED
+
+        # Stale drawers: the stored ids this pass will not rewrite (a shrunk or
+        # rewritten file, a chunk routed to a different room, a normalize-schema
+        # bump). They are deleted only AFTER this pass's rows are written (below):
+        # deleted first, a write that then fails leaves the file with nothing
+        # (2026-11-17). A pass that fails part way leaves them in place, and the
+        # next pass, which still sees them as stored and unplanned, deletes them.
+        orphan_ids = [
+            drawer_id
+            for drawer_id in stored
+            if drawer_id not in planned_ids and drawer_id not in sensitive_ids
+        ]
+        # Except an orphan whose own stored text is marked sensitive (an old shared
+        # copy under an id a re-key retired). It is MOVED now, never just deleted:
+        # its own stored text and metadata are filed into the private collection
+        # under its own id, and only then removed from shared, so it leaves the
+        # shared search without ever existing nowhere. A pass whose prefetch failed
+        # cannot see such rows; they were in shared before the pass, and the next
+        # pass that can read the file moves them.
+        all_written = True
+        try:
+            marks = (
+                sensitive_chunk_flags(
+                    [stored[drawer_id] or "" for drawer_id in orphan_ids], configured_markers()
+                )
+                if orphan_ids
+                else []
+            )
+            exposed = [drawer_id for drawer_id, mark in zip(orphan_ids, marks) if mark]
+            orphan_ids = [drawer_id for drawer_id, mark in zip(orphan_ids, marks) if not mark]
+            if exposed:
+                _move_to_private(palace_path, collection, exposed)
+        except Exception as exc:
+            print(
+                f"  ! [error] removing the shared copies of private chunks failed for "
+                f"{source_file!r} ({exc!r}); will retry on the next mine",
+                file=sys.stderr,
+            )
+            logger.debug("Shared-copy purge failed for %s", source_file, exc_info=True)
             return 0, room_counts_delta, PURGE_FAILED
 
         # Split the plan: byte-identical chunks get a metadata refresh only;
@@ -1109,16 +1145,23 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
                 except Exception as e:
                     if "already exists" not in str(e).lower():
                         raise
+                    # Not proof the batch was written: the stale drawers below stay this pass.
+                    all_written = False
         except Exception:
             # A successful earlier batch has the source's current mtime and
-            # chunk_total. Remove the rows this pass wrote so the next run
+            # chunk_total. Remove the rows this pass CREATED so the next run
             # cannot treat the incomplete set as fully filed (#2183 / #2122).
-            # The unchanged drawers stay. Without a manifest they already carry the
-            # new mtime and chunk_total, and with the new rows gone the group is short
-            # of chunk_total. With one, the manifest row was not written. Either way
-            # the file is re-mined next pass.
+            # A drawer that existed before this pass is never deleted here: the
+            # failed write may not have touched it, and deleting every "changed"
+            # id wiped whole transcripts when the refresh fallback had made every
+            # planned chunk "changed" (2026-11-17). It keeps its old content or
+            # this pass's. With a manifest, the manifest row was not written, so
+            # the file is re-mined next pass; without one, the group is short of
+            # chunk_total once a new row is gone.
             try:
-                delete_ids = [drawer_id for _chunk, _room, drawer_id in changed]
+                delete_ids = [
+                    drawer_id for _chunk, _room, drawer_id in changed if drawer_id not in stored
+                ]
                 if delete_ids:
                     collection.delete(ids=delete_ids)
             except Exception:
@@ -1128,6 +1171,34 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
                     exc_info=True,
                 )
             raise
+        if not all_written:
+            # A batch skipped as "already exists" is not proof it was written: the
+            # file is not complete. No orphan delete, no manifest; the next pass
+            # retries.
+            print(
+                f"  ! [error] a write batch for {source_file!r} was skipped as "
+                f"already existing; stale drawers kept, will retry on the next mine",
+                file=sys.stderr,
+            )
+            return drawers_added, room_counts_delta, PURGE_FAILED
+        # Every row of this pass is written: now the orphans can go. A failed
+        # delete is an error for this file (the manifest is not written, so the
+        # next pass retries); the rows just written stay. Private rows the pass
+        # no longer files privately go too.
+        try:
+            if orphan_ids:
+                collection.delete(ids=orphan_ids)
+            if private_orphans:
+                _delete_private(palace_path, private_orphans)
+        except Exception as exc:
+            print(
+                f"  ! [error] stale-drawer purge failed for {source_file!r} "
+                f"({exc!r}); this pass's drawers are written, the stale ones "
+                f"stay until the next mine",
+                file=sys.stderr,
+            )
+            logger.debug("Stale-drawer purge failed for %s", source_file, exc_info=True)
+            return drawers_added, room_counts_delta, PURGE_FAILED
         _write_source_manifest(
             use_manifest, collection, source_file, extract_mode, source_mtime, chunk_total
         )
@@ -1159,7 +1230,8 @@ def _file_sensitive_chunks(
     palace_path, source_file, items, wing, agent, extract_mode, authored_at
 ) -> None:
     """File ``items`` (planned ``(chunk, room, drawer_id)``) verbatim into the private collection,
-    and drop that collection's rows for ``source_file`` the pass no longer plans there.
+    and return that collection's ids for ``source_file`` the pass no longer plans there (the
+    caller deletes them once the shared write has succeeded).
 
     The private collection is created only when there is something to file. Raises on any
     failure, so the caller leaves the shared drawers as they were.
@@ -1173,7 +1245,7 @@ def _file_sensitive_chunks(
                 f"{len(items)} sensitive chunk(s) of {source_file} and no palace path for the "
                 "private collection"
             )
-        return
+        return []
     try:
         private = get_collection(
             palace_path, collection_name=PRIVATE_COLLECTION_NAME, create=bool(items)
@@ -1181,7 +1253,7 @@ def _file_sensitive_chunks(
     except Exception:
         if items:
             raise
-        return  # no private collection yet, and nothing to file in it
+        return []  # no private collection yet, and nothing to file in it
     stored = _source_file_stored_documents(private, source_file, extract_mode)
     keep = {drawer_id for _chunk, _room, drawer_id in items}
     orphans = [drawer_id for drawer_id in stored if drawer_id not in keep]
@@ -1222,8 +1294,40 @@ def _file_sensitive_chunks(
                 ids=[drawer_id for _chunk, _room, drawer_id in batch],
                 metadatas=metas[start : start + DRAWER_UPSERT_BATCH_SIZE],
             )
-    if orphans:
-        private.delete(ids=orphans)
+    # The caller deletes these only after the shared write succeeds: a private row whose chunk
+    # is now filed shared must not go before its shared copy exists.
+    return orphans
+
+
+def _move_to_private(palace_path, collection, ids) -> None:
+    """Move shared drawers ``ids`` into the private collection verbatim (own text, own metadata, own id, marked
+    ``privacy_class: sensitive``), then delete them from shared. Raises before the delete if the private write
+    fails, so the shared rows stay until a later pass can move them."""
+    from .palace import PRIVATE_COLLECTION_NAME, get_collection
+
+    if palace_path is None:
+        raise RuntimeError(
+            f"{len(ids)} sensitive shared drawer(s) and no palace path for the private collection"
+        )
+    got = collection.get(ids=list(ids), include=["documents", "metadatas"])
+    if not got["ids"]:
+        return
+    metas = []
+    for meta in got["metadatas"]:
+        meta = dict(meta or {})
+        meta["privacy_class"] = "sensitive"
+        metas.append(meta)
+    private = get_collection(palace_path, collection_name=PRIVATE_COLLECTION_NAME, create=True)
+    private.upsert(documents=list(got["documents"]), ids=list(got["ids"]), metadatas=metas)
+    collection.delete(ids=list(got["ids"]))
+
+
+def _delete_private(palace_path, ids) -> None:
+    from .palace import PRIVATE_COLLECTION_NAME, get_collection
+
+    get_collection(palace_path, collection_name=PRIVATE_COLLECTION_NAME, create=False).delete(
+        ids=list(ids)
+    )
 
 
 def _unchanged_to_refresh(collection, unchanged: list, extract_mode, content_hash):

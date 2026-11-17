@@ -1497,3 +1497,245 @@ def test_mine_convos_reaches_a_yield_point_before_each_file(tmp_path, capsys):
     with mine_yield_hook(lambda: calls.append(1)):
         mine_convos(str(src), str(tmp_path / "palace"), wing="test")
     assert len(calls) == 3
+
+
+def test_mine_convos_failed_prefetch_leaves_stored_drawers(capsys, monkeypatch):
+    """A re-mine whose stored-drawer prefetch fails must leave the file's drawers in place, not purge them all to
+    rebuild (2026-11-17: the rebuild then hit a statement timeout and six live transcripts were left empty)."""
+    from mempalace import convo_miner
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        convo_path = Path(tmpdir) / "session.txt"
+        convo_path.write_text(
+            "> What is the plan?\nUNIQUE_KEPT_EXCHANGE_MARKER here.\n\n"
+            "> Any risks?\nMigration ordering is the main one.\n"
+        )
+        palace_path = os.path.join(tmpdir, "palace")
+        mine_convos(tmpdir, palace_path, wing="test")
+        capsys.readouterr()
+
+        convo_path.write_text(
+            "> What is the plan?\nUNIQUE_KEPT_EXCHANGE_MARKER here.\n\n"
+            "> Any risks?\nMigration ordering is the main one.\n\n"
+            "> One more?\nUNIQUE_LATER_EXCHANGE_MARKER here.\n"
+        )
+        future = time.time() + 60
+        os.utime(convo_path, (future, future))
+
+        def boom(*_a, **_k):
+            raise RuntimeError("canceling statement due to statement timeout")
+
+        monkeypatch.setattr(convo_miner, "_source_file_stored_documents", boom)
+        from mempalace.palace import MineFileErrors
+
+        with pytest.raises(
+            MineFileErrors
+        ):  # the failed file is an error the next mine retries, never a skip
+            mine_convos(tmpdir, palace_path, wing="test")
+        err = capsys.readouterr().err
+        assert "prefetch failed" in err
+
+        client = chromadb.PersistentClient(path=palace_path)
+        docs = client.get_collection("mempalace_drawers").get(include=["documents"])["documents"]
+        assert sum(1 for d in docs if "UNIQUE_KEPT_EXCHANGE_MARKER" in d) == 1, (
+            "stored drawers were purged"
+        )
+        assert not any("UNIQUE_LATER_EXCHANGE_MARKER" in d for d in docs), (
+            "the failed pass still wrote"
+        )
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _two_exchange_file(tmpdir, extra=""):
+    p = Path(tmpdir) / "session.txt"
+    p.write_text(
+        "> What is the plan?\nUNIQUE_FIRST_EXCHANGE_MARKER here.\n\n"
+        "> Any risks?\nUNIQUE_SECOND_EXCHANGE_MARKER here.\n" + extra
+    )
+    return p
+
+
+def _bump(p):
+    future = time.time() + 60
+    os.utime(p, (future, future))
+
+
+def _docs(palace_path):
+    client = chromadb.PersistentClient(path=palace_path)
+    return client.get_collection("mempalace_drawers").get(include=["documents"])["documents"]
+
+
+def test_failed_write_never_deletes_drawers_that_existed_before_the_pass(capsys, monkeypatch):
+    """xreview r1 finding 1: when the refresh of unchanged drawers fails, every planned chunk becomes "changed"; a
+    write failure after that must not delete the drawers that were there before the pass (it used to delete every
+    "changed" id: the whole transcript)."""
+    from mempalace import convo_miner
+    from mempalace.palace import MineFileErrors
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        p = _two_exchange_file(tmpdir)
+        palace_path = os.path.join(tmpdir, "palace")
+        mine_convos(tmpdir, palace_path, wing="test")
+        capsys.readouterr()
+
+        ids_before = set(
+            chromadb.PersistentClient(path=palace_path)
+            .get_collection("mempalace_drawers")
+            .get()["ids"]
+        )
+        # Every exchange is edited in place (same chunk ids, new content): existing drawers this pass rewrites,
+        # so they are "changed" whatever the refresh path does. The refresh fallback is forced as well.
+        p.write_text(
+            "> What is the plan?\nUNIQUE_FIRST_EXCHANGE_MARKER, edited.\n\n"
+            "> Any risks?\nUNIQUE_SECOND_EXCHANGE_MARKER, edited.\n\n"
+            "> And then?\nUNIQUE_THIRD_EXCHANGE_MARKER here.\n"
+        )
+        _bump(p)
+        monkeypatch.setattr(convo_miner, "_refresh_unchanged_drawers", lambda *a, **k: False)
+
+        fired = []
+
+        def boom(*_a, **_k):
+            fired.append(1)
+            raise RuntimeError("canceling statement due to statement timeout")
+
+        monkeypatch.setattr(convo_miner, "assert_no_collisions", boom)
+        with pytest.raises((MineFileErrors, RuntimeError)):
+            mine_convos(tmpdir, palace_path, wing="test")
+        out = capsys.readouterr()
+        assert fired, (
+            "the pass failed before its write (the test would prove nothing): " + out.err[-400:]
+        )
+
+        ids_after = set(
+            chromadb.PersistentClient(path=palace_path)
+            .get_collection("mempalace_drawers")
+            .get()["ids"]
+        )
+        assert ids_before - ids_after == set(), "a drawer that existed before the pass was deleted"
+        docs = _docs(palace_path)
+        assert any("UNIQUE_FIRST_EXCHANGE_MARKER" in d for d in docs), (
+            "an existing drawer was deleted"
+        )
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_stale_drawers_are_deleted_only_after_the_new_rows_are_written(capsys, monkeypatch):
+    """xreview r1 finding 2: when every stored id is stale (a room change re-keys every chunk), the stale drawers
+    must survive a pass whose write fails, and go once a pass writes its rows."""
+    from mempalace import convo_miner
+    from mempalace.palace import MineFileErrors
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        p = _two_exchange_file(tmpdir)
+        palace_path = os.path.join(tmpdir, "palace")
+        mine_convos(tmpdir, palace_path, wing="test")
+        capsys.readouterr()
+        before = len(_docs(palace_path))
+
+        real_id = convo_miner.make_convo_drawer_id
+        monkeypatch.setattr(
+            convo_miner, "make_convo_drawer_id", lambda *a, **k: real_id(*a, **k) + "_rekeyed"
+        )
+        _two_exchange_file(tmpdir, "\n> And then?\nUNIQUE_THIRD_EXCHANGE_MARKER here.\n")
+        _bump(p)
+        real_check = convo_miner.assert_no_collisions
+
+        def boom(*_a, **_k):
+            raise RuntimeError("canceling statement due to statement timeout")
+
+        monkeypatch.setattr(convo_miner, "assert_no_collisions", boom)
+        with pytest.raises((MineFileErrors, RuntimeError)):
+            mine_convos(tmpdir, palace_path, wing="test")
+        docs = _docs(palace_path)
+        assert sum(1 for d in docs if "UNIQUE_FIRST_EXCHANGE_MARKER" in d) == 1, (
+            "stale drawers purged before the write"
+        )
+
+        monkeypatch.setattr(convo_miner, "assert_no_collisions", real_check)
+        _bump(p)
+        mine_convos(tmpdir, palace_path, wing="test")
+        docs = _docs(palace_path)
+        assert sum(1 for d in docs if "UNIQUE_FIRST_EXCHANGE_MARKER" in d) == 1, (
+            "stale drawers kept after a good pass"
+        )
+        assert any("UNIQUE_THIRD_EXCHANGE_MARKER" in d for d in docs)
+        assert len(docs) >= before
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_an_already_exists_write_never_lets_stale_drawers_go(capsys, monkeypatch):
+    """xreview r2 finding 1: an upsert error whose text says "already exists" is skipped, but it is not proof the
+    rows were written: when every stored id is stale (a re-key), the stale drawers must stay that pass."""
+    from mempalace import convo_miner
+    from mempalace.palace import get_collection
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        p = _two_exchange_file(tmpdir)
+        palace_path = os.path.join(tmpdir, "palace")
+        mine_convos(tmpdir, palace_path, wing="test")
+        capsys.readouterr()
+
+        real_id = convo_miner.make_convo_drawer_id
+        monkeypatch.setattr(
+            convo_miner, "make_convo_drawer_id", lambda *a, **k: real_id(*a, **k) + "_rekeyed"
+        )
+        col_type = type(get_collection(palace_path))
+
+        def upsert(self, *a, **k):
+            raise RuntimeError("drawer already exists")
+
+        monkeypatch.setattr(col_type, "upsert", upsert)
+        _two_exchange_file(tmpdir, "\n> And then?\nUNIQUE_THIRD_EXCHANGE_MARKER here.\n")
+        _bump(p)
+        try:
+            mine_convos(tmpdir, palace_path, wing="test")
+        except Exception:
+            pass
+        docs = _docs(palace_path)
+        assert any("UNIQUE_FIRST_EXCHANGE_MARKER" in d for d in docs), (
+            "stale drawers deleted after a skipped write"
+        )
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_a_skipped_write_is_not_a_complete_pass(capsys, monkeypatch):
+    """xreview r3 finding 1: a batch skipped as "already exists" must not let the pass write its manifest or report
+    success; the file is retried on the next mine and the new exchange lands then."""
+    from mempalace.palace import MineFileErrors, get_collection
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        p = _two_exchange_file(tmpdir)
+        palace_path = os.path.join(tmpdir, "palace")
+        mine_convos(tmpdir, palace_path, wing="test")
+        capsys.readouterr()
+
+        col_type = type(get_collection(palace_path))
+        real_upsert = col_type.upsert
+
+        def upsert(self, *a, **k):
+            raise RuntimeError("drawer already exists")
+
+        _two_exchange_file(tmpdir, "\n> And then?\nUNIQUE_THIRD_EXCHANGE_MARKER here.\n")
+        _bump(p)
+        with monkeypatch.context() as m:
+            m.setattr(col_type, "upsert", upsert)
+            with pytest.raises(MineFileErrors):
+                mine_convos(tmpdir, palace_path, wing="test")
+        assert "skipped as already existing" in capsys.readouterr().err
+        assert col_type.upsert is real_upsert
+        mine_convos(tmpdir, palace_path, wing="test")
+        assert any("UNIQUE_THIRD_EXCHANGE_MARKER" in d for d in _docs(palace_path)), (
+            "the retry did not happen"
+        )
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
