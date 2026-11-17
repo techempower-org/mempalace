@@ -1,0 +1,15 @@
+seq: 208
+id: dream-inbox-contract
+date: 2026-11-17
+bucket: Added
+commit: HEAD
+area: Docs
+summary: "docs/specs/dream-inbox.md: the dream inbox's format, who may tick a line, and what acted means"
+body: |
+  The contract for `scratch/dream-inbox.md` (routed by `nightly --route`,
+  #641): the line format, that the dream only appends while a project's lane
+  only ticks boxes and the owner decides on the review page, when to tick,
+  and that a routed proposal counts as acted once it is decided on the review
+  page or no longer proposed after a complete night.
+files:
+  - docs/specs/dream-inbox.md
