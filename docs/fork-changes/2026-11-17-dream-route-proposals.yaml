@@ -1,10 +1,10 @@
 seq: 207
 id: dream-route-proposals
-date: 2026-11-17
+date: '2026-11-17'
 bucket: Added
-commit: HEAD
+commit: 5831c33
 area: CLI
-summary: "the nightly dream can route each proposal that names a project to that project's inbox"
+summary: the nightly dream can route each proposal that names a project to that project's inbox
 body: |
   `python -m mempalace.dream nightly --route` appends one line per proposal
   (lane, proposal id, the first sentence of the ask) to
@@ -21,10 +21,10 @@ body: |
   night without the judge never closes a contradiction; one that comes back
   is open again). `python -m mempalace.dream routed --out DIR` prints
   `dreams: N proposals routed, M acted` for a lead's daily pass.
-tests: "33 (tests/test_dream_route.py)"
+tests: 33 (tests/test_dream_route.py)
 fork_pr: 641
 files:
-  - mempalace/dream/route.py
-  - mempalace/dream/nightly.py
-  - mempalace/dream/__main__.py
-  - tests/test_dream_route.py
+- mempalace/dream/route.py
+- mempalace/dream/nightly.py
+- mempalace/dream/__main__.py
+- tests/test_dream_route.py

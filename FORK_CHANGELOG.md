@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **the nightly dream can route each proposal that names a project to that project's inbox** (`HEAD` — pending resolution)
+- **the nightly dream can route each proposal that names a project to that project's inbox** ([`5831c33`](https://github.com/techempower-org/mempalace/commit/5831c33))
   `python -m mempalace.dream nightly --route` appends one line per proposal
   (lane, proposal id, the first sentence of the ask) to
   `scratch/dream-inbox.md` in each project folder the proposal's sources name,
