@@ -58,7 +58,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **redaction takes PEM private keys (OpenSSH, RSA, EC, DSA, PKCS#8, PGP) and PuTTY private lines** (`HEAD` — pending resolution)
+- **redaction takes PEM private keys (OpenSSH, RSA, EC, DSA, PKCS#8, PGP) and PuTTY private lines** ([`ea2d32d`](https://github.com/techempower-org/mempalace/commit/ea2d32d))
   No built-in rule matched a PEM private key, so a key printed into a session
   reached the palace whole: on 2026-11-17 four distinct OpenSSH private keys sat
   in 24 drawers. The new `pem` kind takes the header, the body (line breaks raw,
