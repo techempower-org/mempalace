@@ -2,7 +2,7 @@ seq: 212
 id: dream-key-files
 date: '2026-11-17'
 bucket: Added
-commit: HEAD
+commit: 2bd76b0
 area: Dream
 summary: a dream run reads its keys from 0600 env files named by --key-file, so a unit needs no EnvironmentFile= on a secrets file
 body: |

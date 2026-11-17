@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **a dream run reads its keys from 0600 env files named by --key-file, so a unit needs no EnvironmentFile= on a secrets file** (`HEAD` — pending resolution)
+- **a dream run reads its keys from 0600 env files named by --key-file, so a unit needs no EnvironmentFile= on a secrets file** ([`2bd76b0`](https://github.com/techempower-org/mempalace/commit/2bd76b0))
   systemd logs a line of an EnvironmentFile= it cannot parse, in full, so
   a secrets file must never be one. --key-file (repeatable) names an env
   file; the run reads only PALACE_API_KEY and DREAM_LLM_API_KEY from it,
