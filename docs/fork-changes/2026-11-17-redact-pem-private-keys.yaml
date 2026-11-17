@@ -13,7 +13,7 @@ body: |
   key cut off before its END line too. The header alone, as prose, stays: the rule
   needs 40 base64 characters right after it (80 such mentions in the palace are
   left as they are).
-tests: "37 (tests/test_redact.py: pem, ppk, no-stall)"
+tests: "43 (tests/test_redact.py: pem, ppk, no-stall)"
 files:
   - mempalace/redact.py
   - tests/test_redact.py

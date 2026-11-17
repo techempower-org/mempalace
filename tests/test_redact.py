@@ -1667,3 +1667,16 @@ def test_blanks_after_the_begin_and_count_lines_do_not_stop_the_key(nl, blank):
     assert line not in out and out.startswith("[redacted pem sha256:")
     out = redact(f"Private-Lines: 1{blank}{nl}{line}{nl}Private-MAC: 00ff")
     assert line not in out and out.endswith(f"]{nl}Private-MAC: 00ff")
+
+
+@pytest.mark.parametrize("nl", ["\n", "\\n"], ids=["raw", "json"])
+@pytest.mark.parametrize("blank", [" ", "\t", " \t "], ids=["space", "tab", "mixed"])
+def test_blanks_after_begin_then_header_lines_still_take_the_key(nl, blank):
+    head = "-----" + "BEGIN RSA " + "PRIVATE KEY-----"
+    end = "-----" + "END RSA " + "PRIVATE KEY-----"
+    line = "Ab+/" * 16
+    text = nl.join(
+        [head + blank, "Proc-Type: 4,ENCRYPTED", "DEK-Info: AES-256-CBC,0123ABCD", "", line, end]
+    )
+    out = redact(text)
+    assert line not in out and "DEK-Info" not in out and out.startswith("[redacted pem sha256:")

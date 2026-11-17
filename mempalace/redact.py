@@ -98,11 +98,14 @@ _PEM_GAP = rf"(?:{_PEM_SEP}{_PEM_LEAD})"
 # line ("=" and 4 characters) and END.
 _PEM_LAST = rf"(?={_PEM_GAP}*(?:=[A-Za-z0-9+/]{{4}}[ \t]*{_PEM_GAP}*)?{_PEM_END})"
 _PEM = (
-    r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY(?: BLOCK)?-----"
-    rf"(?:{_PEM_GAP}[A-Za-z][A-Za-z0-9-]{{0,40}}:(?:(?!{_PEM_SEP})[^\r\n]){{0,1000}})*"
-    # the header line owns its trailing blanks; the body starts on a later line, or on this one
-    # after at least one blank
-    rf"[ \t]*(?:{_PEM_GAP}+|(?<=[ \t])){_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL}"
+    # The BEGIN line owns its trailing blanks. The body starts on the BEGIN line after at least one
+    # blank, or after header lines and line breaks. A header line's value is taken whole and never
+    # given back (a lookahead captures it, a backreference consumes it: an atomic group that works
+    # on Python 3.10), so a run of long header lines cannot be retried at every shorter length.
+    r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY(?: BLOCK)?-----[ \t]*"
+    rf"(?:(?<=[ \t]){_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL}"
+    rf"|(?:{_PEM_GAP}[A-Za-z][A-Za-z0-9-]{{0,40}}:(?=(?P<pemhv>(?:(?!{_PEM_SEP})[^\r\n]){{0,1000}}))(?P=pemhv))*"
+    rf"{_PEM_GAP}+{_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL})"
     rf"(?:{_PEM_GAP}+(?:{_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL}|{_PEM_B64}{{1,15}}[ \t]*{_PEM_LAST}))*"
     rf"(?:{_PEM_GAP}*{_PEM_END})?"
 )
