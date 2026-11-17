@@ -4,7 +4,7 @@ date: 2026-11-17
 bucket: Added
 commit: HEAD
 area: Docs
-summary: "PERTURBED docs/specs/dream-inbox.md: the dream inbox's format, who may tick a line, and what acted means"
+summary: "docs/specs/dream-inbox.md: the dream inbox's format, who may tick a line, and what acted means"
 body: |
   The contract for `scratch/dream-inbox.md` (routed by `nightly --route`,
   #641): the line format, that the dream only appends while a project's lane
