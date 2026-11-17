@@ -13,10 +13,12 @@ Each project gets ``scratch/dream-inbox.md``, appended to, one line per proposal
     - [ ] <lane> · <proposal id> · <one-sentence ask> (dream <day>, <kind>)
 
 ``lane`` is the project's lane from an optional map, else the project folder's name. A folder
-is written only when it is outside every git work tree or git ignores the inbox path. The
-write goes through descriptors opened without following links (the project, ``scratch/``,
-the inbox), and the inbox must then be a regular file with one link, owned by this user; it
-is kept at mode 0600. A proposal id already on a complete line of the inbox is never
+is written only when git, run in the very folder opened for the write and with no inherited
+``GIT_*`` variable, says it is outside every work tree or ignores the inbox path. The write
+goes through descriptors opened from ``/`` without following links; the project and
+``scratch/`` must be this user's and writable by no one else (a group of this user alone
+counts as no one else); the inbox must be a regular file with one link, owned by this user,
+and is kept at mode 0600; new directory entries and the inbox are synced. A proposal id already on a complete line of the inbox is never
 appended again, so a run that stops between the append and the ledger save repeats nothing,
 and a torn last line is closed before anything is appended after it.
 
@@ -133,30 +135,37 @@ def ask(proposal: Mapping) -> str:
     return text.replace("·", "-")
 
 
-def _writable(project: Path) -> Optional[str]:
-    """None when git will never track the project's inbox, else why not."""
+def _git_env() -> Dict[str, str]:
+    """The environment for git: no inherited variable that picks a repository or work tree."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["LC_ALL"] = "C"
+    return env
+
+
+def _writable(pfd: int) -> Optional[str]:
+    """None when git will never track the inbox of the folder open on ``pfd``, else why not.
+    Git runs in that very folder (``/proc/self/fd/<pfd>``), so what it judges is what is
+    written; any answer but a positive one is a no."""
+    here = f"/proc/self/fd/{pfd}"
+    if not os.path.isdir(here):
+        return "cannot run git in the opened folder (no /proc/self/fd)"
+    run = dict(capture_output=True, text=True, timeout=10, env=_git_env(), pass_fds=(pfd,))
     try:
-        inside = subprocess.run(
-            ["git", "-C", str(project), "rev-parse", "--is-inside-work-tree"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env={**os.environ, "LC_ALL": "C"},
-        )
+        inside = subprocess.run(["git", "-C", here, "rev-parse", "--is-inside-work-tree"], **run)
         if inside.returncode != 0:
             if "not a git repository" in inside.stderr:
                 return None  # positively outside every work tree
             return "git could not tell whether it is in a work tree"
         if inside.stdout.strip() != "true":
             return "inside a git directory"
-        ignored = subprocess.run(
-            ["git", "-C", str(project), "check-ignore", "-q", INBOX],
-            capture_output=True,
-            timeout=10,
-        )
+        ignored = subprocess.run(["git", "-C", here, "check-ignore", "-q", INBOX], **run)
     except (OSError, subprocess.SubprocessError):
         return "git could not be asked"
-    return None if ignored.returncode == 0 else "the inbox path is not git-ignored"
+    if ignored.returncode == 0:
+        return None
+    if ignored.returncode == 1:
+        return "the inbox path is not git-ignored"
+    return "git could not tell whether the inbox is ignored"
 
 
 class Unsafe(Exception):
@@ -164,15 +173,20 @@ class Unsafe(Exception):
 
 
 def _private_group(gid: int) -> bool:
-    """True for this user's own group with no other members (the user-private-group scheme,
-    where a 775 folder is still writable by this user alone)."""
+    """True for this user's own group with no other member: none listed in the group, and no
+    other account with it as its primary group (the user-private-group scheme, where a 775
+    folder is still writable by this user alone). Any doubt is False."""
     if gid != os.getgid():
         return False
     try:
         import grp
+        import pwd
 
-        return not grp.getgrgid(gid).gr_mem
-    except (ImportError, KeyError):
+        if grp.getgrgid(gid).gr_mem:
+            return False
+        me = os.getuid()
+        return not any(u.pw_gid == gid and u.pw_uid != me for u in pwd.getpwall())
+    except (ImportError, KeyError, OSError):
         return False
 
 
@@ -199,24 +213,24 @@ def _walk(path: Path, flags: int) -> int:
     return fd
 
 
-def _open_inbox(project: Path, expect: Optional[tuple] = None) -> int:
+def _open_inbox(project: Path) -> int:
     """A read-write append descriptor for the project's inbox. ``project`` is a real path;
-    every component is opened without following a link, the project and ``scratch/`` must be
-    this user's and not group- or other-writable, and the project must be the folder
-    ``expect`` (``(st_dev, st_ino)``) names, the one git was asked about. Raises
-    :class:`Unsafe` with the reason when the target is unsafe."""
+    every component is opened without following a link; the project and ``scratch/`` must be
+    this user's (see :func:`_safe_dir`); git is asked about the folder actually opened; and
+    each new directory entry is synced. Raises :class:`Unsafe` with the reason when the
+    target is not one to write."""
     if _NOFOLLOW is None or _DIRECTORY is None:
         raise Unsafe("this platform cannot open without following links")
     dflags = os.O_RDONLY | _DIRECTORY | _NOFOLLOW
     pfd = _walk(project, dflags)
     try:
         _safe_dir(pfd, "the project folder")
-        if expect is not None:
-            st = os.fstat(pfd)
-            if (st.st_dev, st.st_ino) != expect:
-                raise Unsafe("the project folder changed after it was checked")
+        why = _writable(pfd)
+        if why:
+            raise Unsafe(why)
         try:
             os.mkdir("scratch", 0o700, dir_fd=pfd)
+            os.fsync(pfd)  # the new scratch/ entry is durable
         except FileExistsError:
             pass
         sfd = os.open("scratch", dflags, dir_fd=pfd)
@@ -233,7 +247,7 @@ def _open_inbox(project: Path, expect: Optional[tuple] = None) -> int:
                 raise Unsafe("inbox is not a regular single-link file of this user")
             if stat.S_IMODE(st.st_mode) != 0o600:
                 os.fchmod(fd, 0o600)
-            os.fsync(sfd)  # the entry itself is durable before the ledger claims delivery
+            os.fsync(sfd)  # the inbox's entry is durable
         except BaseException:
             os.close(fd)
             raise
@@ -242,11 +256,11 @@ def _open_inbox(project: Path, expect: Optional[tuple] = None) -> int:
     return fd
 
 
-def _append(project: Path, lines: Sequence[tuple], expect: Optional[tuple] = None) -> tuple:
-    """Append ``(pid, line)`` pairs whose id is not already in the inbox. Returns (the ids now
-    in the inbox, None) or (set(), why not)."""
+def _append(project: Path, lines: Sequence[tuple]) -> tuple:
+    """Append ``(pid, line)`` pairs whose id is not already on a complete line of the inbox,
+    and sync it. Returns (the ids now in the inbox, None) or (set(), why not)."""
     try:
-        fd = _open_inbox(project, expect)
+        fd = _open_inbox(project)
     except Unsafe as exc:
         return set(), str(exc)
     except OSError as exc:
@@ -261,12 +275,11 @@ def _append(project: Path, lines: Sequence[tuple], expect: Optional[tuple] = Non
         todo = [ln for pid, ln in lines if pid not in delivered]
         lead = HEADER if not have else ("" if have.endswith("\n") else "\n")
         text = lead + "".join(f"{ln}\n" for ln in todo) if todo or not have else ""
-        if text:
-            data = text.encode("utf-8")
-            while data:
-                n = os.write(fd, data)
-                data = data[n:]
-            os.fsync(fd)
+        data = text.encode("utf-8")
+        while data:
+            n = os.write(fd, data)
+            data = data[n:]
+        os.fsync(fd)  # always: lines a stopped run left unsynced are durable before the ledger
     except OSError as exc:
         return set(), f"cannot write the inbox ({type(exc).__name__})"
     finally:
@@ -322,15 +335,7 @@ def route(
             lane_of[(pid, str(p))] = lane
     skipped, new = [], set()
     for p, lines in sorted(per_project.items()):
-        written: set = set()
-        try:
-            st = os.stat(p, follow_symlinks=False)
-            expect: Optional[tuple] = (st.st_dev, st.st_ino)
-            why = _writable(p)
-        except OSError as exc:
-            expect, why = None, f"cannot stat the project ({type(exc).__name__})"
-        if why is None:
-            written, why = _append(p, lines, expect)
+        written, why = _append(p, lines)
         if why:
             skipped.append(f"{p.name}: {why}")
         for pid in sorted(written):

@@ -402,7 +402,64 @@ def test_a_scratch_others_can_write_is_refused(tmp_path):
     assert not (alpha / route.INBOX).exists()
 
 
-def test_a_project_that_is_not_the_folder_git_was_asked_about_is_refused(tmp_path):
-    _root, _mem, alpha, _beta = _projects(tmp_path)
-    written, why = route._append(alpha, [("e1", "- [ ] a · e1 · x. (dream 2026-11-17, k)")], (0, 0))
-    assert written == set() and why == "the project folder changed after it was checked"
+def test_git_runs_in_the_opened_folder_with_no_inherited_repository(tmp_path, monkeypatch):
+    root = tmp_path.resolve() / "Projects"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)  # inbox NOT ignored here
+    delta = root / "delta"
+    delta.mkdir()
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "nowhere"))  # would say "not a git repository"
+    seen = []
+    real_run = subprocess.run
+
+    def spy(argv, **kw):
+        seen.append((argv, kw))
+        return real_run(argv, **kw)
+
+    monkeypatch.setattr(route.subprocess, "run", spy)
+    stats = route.route(
+        [_prop("f5", "no-mechanism", [str(delta / "CLAUDE.md:1")])], [root], {}, day="2026-11-17"
+    )
+    assert stats["skipped"] == ["delta: the inbox path is not git-ignored"]
+    assert not (delta / "scratch").exists()
+    argv, kw = seen[0]
+    assert argv[2].startswith("/proc/self/fd/") and kw["pass_fds"]
+    assert not any(k.startswith("GIT_") for k in kw["env"])
+
+
+def test_new_directory_entries_and_the_inbox_are_synced(tmp_path, monkeypatch):
+    root, _mem, alpha, _beta = _projects(tmp_path)
+    synced = []
+    real = os.fsync
+
+    def spy(fd):
+        synced.append(os.readlink(f"/proc/self/fd/{fd}"))
+        return real(fd)
+
+    monkeypatch.setattr(route.os, "fsync", spy)
+    route.route(
+        [_prop("f6", "no-mechanism", [str(alpha / "CLAUDE.md:1")])], [root], {}, day="2026-11-17"
+    )
+    assert synced == [str(alpha), str(alpha / "scratch"), str(alpha / route.INBOX)]
+    synced.clear()
+    route.route(  # nothing new to append: the inbox is still synced before the ledger
+        [_prop("f6", "no-mechanism", [str(alpha / "CLAUDE.md:1")])], [root], {}, day="2026-11-17"
+    )
+    assert synced[-1] == str(alpha / route.INBOX)
+
+
+def test_a_group_shared_by_another_account_is_not_private(monkeypatch):
+    import grp
+    import pwd
+
+    gid, uid = os.getgid(), os.getuid()
+    me = type("P", (), {"pw_gid": gid, "pw_uid": uid})()
+    other = type("P", (), {"pw_gid": gid, "pw_uid": uid + 1})()
+    monkeypatch.setattr(grp, "getgrgid", lambda g: type("G", (), {"gr_mem": []})())
+    monkeypatch.setattr(pwd, "getpwall", lambda: [me])
+    assert route._private_group(gid) is True
+    monkeypatch.setattr(pwd, "getpwall", lambda: [me, other])
+    assert route._private_group(gid) is False
+    monkeypatch.setattr(grp, "getgrgid", lambda g: type("G", (), {"gr_mem": ["someone"]})())
+    monkeypatch.setattr(pwd, "getpwall", lambda: [me])
+    assert route._private_group(gid) is False

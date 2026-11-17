@@ -17,10 +17,12 @@ Each project gets ``scratch/dream-inbox.md``, appended to, one line per proposal
     - [ ] &lt;lane> · &lt;proposal id> · &lt;one-sentence ask> (dream &lt;day>, &lt;kind>)
 
 ``lane`` is the project's lane from an optional map, else the project folder's name. A folder
-is written only when it is outside every git work tree or git ignores the inbox path. The
-write goes through descriptors opened without following links (the project, ``scratch/``,
-the inbox), and the inbox must then be a regular file with one link, owned by this user; it
-is kept at mode 0600. A proposal id already on a complete line of the inbox is never
+is written only when git, run in the very folder opened for the write and with no inherited
+``GIT_*`` variable, says it is outside every work tree or ignores the inbox path. The write
+goes through descriptors opened from ``/`` without following links; the project and
+``scratch/`` must be this user's and writable by no one else (a group of this user alone
+counts as no one else); the inbox must be a regular file with one link, owned by this user,
+and is kept at mode 0600; new directory entries and the inbox are synced. A proposal id already on a complete line of the inbox is never
 appended again, so a run that stops between the append and the ledger save repeats nothing,
 and a torn last line is closed before anything is appended after it.
 
