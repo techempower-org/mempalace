@@ -72,7 +72,7 @@ def main(argv=None) -> int:
     r = sub.add_parser("routed", help="One line: dreams: N proposals routed, M acted")
     r.add_argument("--out", type=Path, required=True, help="The nightly report folder")
     args = ap.parse_args(argv)
-    keys.load(getattr(args, "key_file", []))
+    pass  # PERTURBATION: key files are not read
 
     if args.step == "routed":
         try:
