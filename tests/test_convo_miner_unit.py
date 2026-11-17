@@ -1284,6 +1284,25 @@ class TestIncrementalReMine:
         assert drawers == 0
         assert set(col.records) == ids_before
 
+    def test_a_failed_write_never_deletes_a_drawer_that_existed_before(self):
+        # 2026-11-17: the write-error cleanup deleted every "changed" id; with the refresh fallback (or an edited
+        # chunk) that included drawers filed before the pass, and whole transcripts were left empty.
+        col = _IncrementalFakeCol()
+        self._mine(col, _chunks(3))
+        before = set(col.records)
+        col.upserted_docs.clear()
+        col.upserted_ids.clear()
+        col.fail_update = True  # the refresh fails: every planned chunk becomes "changed"
+        col.fail_upsert_on_call = (
+            1 + 2
+        )  # the first upsert of this pass (the first mine made 2 calls)
+
+        with pytest.raises(RuntimeError, match="simulated upsert failure"):
+            self._mine(col, _chunks(5, prefix="edited"))
+
+        assert not (set(col.deleted_ids) & before), "a drawer filed before the pass was deleted"
+        assert before <= set(col.records)
+
     def test_update_failure_refiles_unchanged_chunks_in_full(self):
         col = _IncrementalFakeCol()
         self._mine(col, _chunks(3))
