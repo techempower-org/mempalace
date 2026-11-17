@@ -8,7 +8,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from . import contradictions, inventory, nightly, route
+from . import contradictions, inventory, keys, nightly, route
 
 
 def _inputs(p) -> None:
@@ -25,6 +25,14 @@ def _inputs(p) -> None:
     )
     p.add_argument("--out", type=Path, required=True, help="Report folder (keep it private)")
     p.add_argument("--day", help="Report date (default today)")
+    p.add_argument(
+        "--key-file",
+        type=Path,
+        action="append",
+        default=[],
+        help="A 0600 env file to read PALACE_API_KEY / DREAM_LLM_API_KEY from when the environment lacks "
+        "them (repeatable; never a systemd EnvironmentFile=)",
+    )
 
 
 def _claude_md(args):
@@ -64,6 +72,7 @@ def main(argv=None) -> int:
     r = sub.add_parser("routed", help="One line: dreams: N proposals routed, M acted")
     r.add_argument("--out", type=Path, required=True, help="The nightly report folder")
     args = ap.parse_args(argv)
+    keys.load(getattr(args, "key_file", []))
 
     if args.step == "routed":
         try:

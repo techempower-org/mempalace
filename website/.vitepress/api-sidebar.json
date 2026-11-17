@@ -628,6 +628,10 @@
         "link": "/reference/python-api/dream/inventory"
       },
       {
+        "text": "mempalace.dream.keys",
+        "link": "/reference/python-api/dream/keys"
+      },
+      {
         "text": "mempalace.dream.nightly",
         "link": "/reference/python-api/dream/nightly"
       },

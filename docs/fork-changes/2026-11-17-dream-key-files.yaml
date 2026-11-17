@@ -1,0 +1,12 @@
+seq: 212
+id: dream-key-files
+date: '2026-11-17'
+bucket: Added
+commit: HEAD
+area: Dream
+summary: a dream run reads its keys from 0600 env files named by --key-file, so a unit needs no EnvironmentFile= on a secrets file
+body: |
+  systemd logs a line of an EnvironmentFile= it cannot parse, in full, so
+  a secrets file must never be one. --key-file (repeatable) names an env
+  file; the run reads only PALACE_API_KEY and DREAM_LLM_API_KEY from it,
+  and only when the environment does not already set them.
