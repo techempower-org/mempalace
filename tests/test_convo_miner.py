@@ -1596,12 +1596,19 @@ def test_failed_write_never_deletes_drawers_that_existed_before_the_pass(capsys,
         _bump(p)
         monkeypatch.setattr(convo_miner, "_refresh_unchanged_drawers", lambda *a, **k: False)
 
+        fired = []
+
         def boom(*_a, **_k):
+            fired.append(1)
             raise RuntimeError("canceling statement due to statement timeout")
 
         monkeypatch.setattr(convo_miner, "assert_no_collisions", boom)
         with pytest.raises((MineFileErrors, RuntimeError)):
             mine_convos(tmpdir, palace_path, wing="test")
+        out = capsys.readouterr()
+        assert fired, (
+            "the pass failed before its write (the test would prove nothing): " + out.err[-400:]
+        )
 
         ids_after = set(
             chromadb.PersistentClient(path=palace_path)
