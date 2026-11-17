@@ -109,6 +109,14 @@ exclude = [
     # #226 on 2026-05-26, two of them on rerun. Page is live in
     # browsers. Cited from docs/research/uncertainty-aware-retrieval.md.
     '^https://www\.csail\.mit\.edu/',
+
+    # infoq.com answered 502 Bad Gateway to CI on #540 @ 7ec96d17 (a docs
+    # PR that touched neither citing file) and 200 to a direct probe two
+    # minutes later; max_retries/retry_wait_time above did not cover it
+    # (#547). Same class as csail above: a third-party 5xx should not turn
+    # an unrelated PR's gate red. Cited from README.md and
+    # docs/BIBLIOGRAPHY.md, and from a verbatim research capture.
+    '^https?://(www\.)?infoq\.com/',
 ]
 
 # Exclude path patterns from the *scan* (not just from URL checking).
