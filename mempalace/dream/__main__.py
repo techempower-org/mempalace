@@ -8,7 +8,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from . import contradictions, inventory, nightly
+from . import contradictions, inventory, nightly, route
 
 
 def _inputs(p) -> None:
@@ -54,7 +54,25 @@ def main(argv=None) -> int:
     n.add_argument("--decisions", type=Path, help="decisions.json (default: <out>/decisions.json)")
     n.add_argument("--min-available-mb", type=int, default=nightly.MIN_AVAILABLE_MB)
     n.add_argument("--no-model", action="store_true", help="Skip the contradictions pass")
+    n.add_argument(
+        "--route",
+        action="store_true",
+        help="Append each proposal that names a project under --projects-root to its "
+        "scratch/dream-inbox.md, recorded in judged.json",
+    )
+    n.add_argument("--lanes", type=Path, help='JSON {"<project folder>": "<lane>"} for --route')
+    r = sub.add_parser("routed", help="One line: dreams: N proposals routed, M acted")
+    r.add_argument("--out", type=Path, required=True, help="The nightly report folder")
     args = ap.parse_args(argv)
+
+    if args.step == "routed":
+        try:
+            ledger = nightly.read_json(args.out / nightly.JUDGED, {})
+        except (OSError, ValueError):
+            print("dreams: routing record unreadable")
+            return 3
+        print(route.summary(ledger))
+        return 0
 
     if args.step == "nightly":
         # Every check before anything is created: a bad --day writes nothing at all.
@@ -65,6 +83,14 @@ def main(argv=None) -> int:
         if reason:
             print(f"not starting: {reason}")
             return 4
+        lanes = None
+        if args.lanes is not None:
+            lanes = json.loads(args.lanes.read_text(encoding="utf-8"))
+            if not isinstance(lanes, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in lanes.items()
+            ):
+                print(f"not starting: {args.lanes} must map project folder names to lane names")
+                return 2
         nightly.private_dir(args.out)
         # One writer for the whole night: the ledgers are read, extended and replaced, so two
         # overlapping runs (the timer and a manual re-run) could each drop the other's entries.
@@ -95,6 +121,8 @@ def main(argv=None) -> int:
             known=nightly.published_proposals(args.out),
             verdicts=verdicts,
             checkpoint=lambda: nightly.save_verdicts(args.out, verdicts),
+            route_roots=args.projects_root if args.route else (),
+            lanes=lanes,
         )
         # Deferred AGE delete-through (#558): remove the queued Drawer vertices in
         # batches, at the night's quiet hour. Skips or reports; never fails the night.
