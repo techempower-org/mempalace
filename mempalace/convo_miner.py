@@ -348,6 +348,20 @@ def _source_file_delete_ids(collection, source_file: str, extract_mode: str) -> 
     ]
 
 
+_ID_LOOKUP_BATCH = 500
+
+
+def _ids_present(collection, ids) -> set:
+    """The subset of ``ids`` the collection holds, looked up by id (never by
+    source_file). Raises when the backend cannot answer."""
+    ids = sorted(ids)
+    found: set = set()
+    for i in range(0, len(ids), _ID_LOOKUP_BATCH):
+        got = collection.get(ids=ids[i : i + _ID_LOOKUP_BATCH], include=["metadatas"])
+        found.update(got["ids"])
+    return found
+
+
 def _source_file_stored_documents(
     collection, source_file: str, extract_mode: str
 ) -> dict[str, Optional[str]]:
@@ -974,6 +988,23 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             logger.debug("Stored-document prefetch failed for %s", source_file, exc_info=True)
             return 0, room_counts_delta, PURGE_FAILED
 
+        # Which of this pass's ids exist already, asked BY ID: the source_file
+        # prefetch above is no proof a drawer is new. A drawer stored under a
+        # different source_file string (a path the redactor rewrote, 2026-11-17)
+        # is invisible to it, and the write-error cleanup below deleted 17,574
+        # such drawers as "created by this pass". A failed lookup stops the file.
+        try:
+            existed = set(stored) | _ids_present(collection, planned_ids)
+        except Exception as exc:
+            print(
+                f"  ! [error] existing-drawer lookup failed for {source_file!r} "
+                f"({exc!r}); leaving existing drawers untouched, will retry "
+                f"on the next mine",
+                file=sys.stderr,
+            )
+            logger.debug("Existing-id lookup failed for %s", source_file, exc_info=True)
+            return 0, room_counts_delta, PURGE_FAILED
+
         # Stale drawers: the stored ids this pass will not rewrite (a shrunk or
         # rewritten file, a chunk routed to a different room, a normalize-schema
         # bump). They are deleted only AFTER this pass's rows are written (below):
@@ -1160,7 +1191,7 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             # chunk_total once a new row is gone.
             try:
                 delete_ids = [
-                    drawer_id for _chunk, _room, drawer_id in changed if drawer_id not in stored
+                    drawer_id for _chunk, _room, drawer_id in changed if drawer_id not in existed
                 ]
                 if delete_ids:
                     collection.delete(ids=delete_ids)
