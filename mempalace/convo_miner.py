@@ -1160,7 +1160,7 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             # chunk_total once a new row is gone.
             try:
                 delete_ids = [
-                    drawer_id for _chunk, _room, drawer_id in changed if drawer_id not in stored
+                    drawer_id for _chunk, _room, drawer_id in changed
                 ]
                 if delete_ids:
                     collection.delete(ids=delete_ids)
