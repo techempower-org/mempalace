@@ -1,0 +1,12 @@
+seq: 210
+id: redact-digitalocean-keys
+date: 2026-11-17
+bucket: Fixed
+commit: HEAD
+area: Privacy
+summary: "a DigitalOcean GenAI key (sk-do-) is redacted on every write as its own kind, whatever the case of its body"
+body: |
+  A DigitalOcean GenAI key printed into a session was caught only
+  incidentally, by the LiteLLM shape, and named as one; a key whose body
+  is letters in one case would have passed. An "sk-do-" token of 20 to
+  1000 characters is now its own kind, ahead of the LiteLLM shape.
