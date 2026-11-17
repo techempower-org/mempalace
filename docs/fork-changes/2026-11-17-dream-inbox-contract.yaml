@@ -1,7 +1,7 @@
 seq: 208
 id: dream-inbox-contract
 date: 2026-11-17
-bucket: Added
+bucket: Bogus
 commit: HEAD
 area: Docs
 summary: "docs/specs/dream-inbox.md: the dream inbox's format, who may tick a line, and what acted means"
