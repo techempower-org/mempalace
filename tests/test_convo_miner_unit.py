@@ -1322,9 +1322,12 @@ class TestIncrementalReMine:
         assert not (set(col.deleted_ids) & before), "a drawer filed before the pass was deleted"
         assert set(col.records) == before
 
-    def test_a_partial_write_cleanup_keeps_drawers_stored_under_another_source_file(self, monkeypatch):
-        # xreview r1: past the collision scan, a write that fails after a partial write removes only the ids
-        # this pass created; every id that existed before (under any source_file) stays. The lookup batches.
+    def test_a_partial_write_cleanup_keeps_drawers_stored_under_another_source_file(
+        self, monkeypatch
+    ):
+        # xreview r1: past the collision scan, a write that fails after a partial write
+        # removes only the ids this pass created; every id that existed before (under any
+        # source_file) stays. The lookup batches.
         import mempalace.convo_miner as cm
 
         monkeypatch.setattr(cm, "assert_no_collisions", lambda *a, **k: None)

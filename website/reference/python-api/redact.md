@@ -88,12 +88,14 @@ fails raises (fails closed) rather than keep matching a stale value.
 ### `redact`
 
 ```python
-def redact(text: str, skip_hex: bool = False) -> str
+def redact(text: str, skip_hex: bool = False, skip_shapes: bool = False) -> str
 ```
 
 ``text`` with every secret-shaped run replaced by its placeholder. ``skip_hex=True`` skips
 only the #619 ``hex`` shape, and is used only for a whole-hex value under a metadata key that
 names a digest or an id (a content hash for dedup); every other rule still applies.
+``skip_shapes=True`` skips the broad #619 shapes (token, hex, quoted) and nothing else; it is
+used only for one identifier in an identity metadata field (``_redact_metadata``).
 
 ### `redact_documents`
 

@@ -1749,11 +1749,12 @@ def test_identity_fields_are_never_rewritten_but_content_fields_still_are():
 
 
 def test_a_strong_secret_in_an_identity_field_is_still_redacted():
-    key = "AKIA" + "".join(_random.Random(7).choice(_string.ascii_uppercase + _string.digits) for _ in range(16))
+    key = "AKIA" + "".join(
+        _random.Random(7).choice(_string.ascii_uppercase + _string.digits) for _ in range(16)
+    )
     assert redact(key) != key, "precondition: the aws shape takes it"
     out = redact_metadatas({"source_file": f"/x/{key}/chat.jsonl"})
     assert key not in out["source_file"]
-
 
 
 def test_a_named_assignment_in_an_identity_field_is_still_redacted():

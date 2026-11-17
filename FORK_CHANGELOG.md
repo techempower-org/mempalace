@@ -58,6 +58,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **a re-mine asks which drawers exist by id, never by source_file, and redaction never rewrites a source_file or an id with the broad shapes** (`HEAD` — pending resolution)
+  A transcript's drawers were stored under a source_file the broad token
+  shape had rewritten (a project directory segment). A re-mine looked them
+  up by the real path, saw none, collided with them on write, and the
+  write-error cleanup deleted every one as created by that pass. The
+  cleanup now spares every id that existed before the pass, asked by id;
+  a failed lookup stops the file. Identity metadata (source_file,
+  source_path, drawer_id, id, ids) holding one identifier skips only the broad
+  shapes, so a provider key or a named assignment there is still replaced.
+
+
 - **a DigitalOcean GenAI key (sk-do-) is redacted on every write as its own kind, whatever the case of its body** ([`2b200e4`](https://github.com/techempower-org/mempalace/commit/2b200e4))
   A DigitalOcean GenAI key printed into a session was caught only
   incidentally, by the LiteLLM shape, and named as one; a key whose body
