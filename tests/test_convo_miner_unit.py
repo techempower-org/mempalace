@@ -1322,6 +1322,31 @@ class TestIncrementalReMine:
         assert not (set(col.deleted_ids) & before), "a drawer filed before the pass was deleted"
         assert set(col.records) == before
 
+    def test_a_partial_write_cleanup_keeps_drawers_stored_under_another_source_file(self, monkeypatch):
+        # xreview r1: past the collision scan, a write that fails after a partial write removes only the ids
+        # this pass created; every id that existed before (under any source_file) stays. The lookup batches.
+        import mempalace.convo_miner as cm
+
+        monkeypatch.setattr(cm, "assert_no_collisions", lambda *a, **k: None)
+        monkeypatch.setattr(cm, "_ID_LOOKUP_BATCH", 2)
+        col = _IncrementalFakeCol()
+        self._mine(col, _chunks(3))  # 2 upsert calls (batch size 2)
+        before = set(col.records)
+        for rec in col.records.values():
+            rec["metadata"]["source_file"] = "/elsewhere/[redacted]/chat.jsonl"
+        col.upserted_ids.clear()
+        # second pass, 5 chunks, all "changed" (the prefetch sees none): calls 3 (0,1), 4 (2,3), 5 (4) fails
+        col.fail_upsert_on_call = 5
+
+        with pytest.raises(RuntimeError, match="simulated upsert failure"):
+            self._mine(col, _chunks(5))
+
+        created = [i for i in col.upserted_ids if i not in before]
+        assert created, "precondition: the pass wrote a new id before failing"
+        assert set(created) <= set(col.deleted_ids), "a row this pass created was kept"
+        assert not (set(col.deleted_ids) & before), "a drawer filed before the pass was deleted"
+        assert set(col.records) == before
+
     def test_a_failed_existing_id_lookup_stops_the_file_and_deletes_nothing(self):
         col = _IncrementalFakeCol()
         self._mine(col, _chunks(3))

@@ -1753,3 +1753,16 @@ def test_a_strong_secret_in_an_identity_field_is_still_redacted():
     assert redact(key) != key, "precondition: the aws shape takes it"
     out = redact_metadatas({"source_file": f"/x/{key}/chat.jsonl"})
     assert key not in out["source_file"]
+
+
+
+def test_a_named_assignment_in_an_identity_field_is_still_redacted():
+    # xreview r1: identity fields skip only the broad shapes, never the assignment rules
+    value = "correct-horse-battery-staple-" + SHAPE_TOKEN[:6]
+    out = redact_metadatas({"drawer_id": "password=" + value})
+    assert value not in out["drawer_id"]
+
+
+def test_the_identity_list_is_explicit_not_a_suffix_rule():
+    out = redact_metadatas({"credential_id": SHAPE_TOKEN, "session_ids": SHAPE_TOKEN})
+    assert SHAPE_TOKEN not in str(out)

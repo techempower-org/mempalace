@@ -11,5 +11,5 @@ body: |
   write-error cleanup deleted every one as created by that pass. The
   cleanup now spares every id that existed before the pass, asked by id;
   a failed lookup stops the file. Identity metadata (source_file,
-  source_path, id fields) holding one identifier is judged by the strong
-  passes only, so a provider key there is still replaced.
+  source_path, drawer_id, id, ids) holding one identifier skips only the broad
+  shapes, so a provider key or a named assignment there is still replaced.
