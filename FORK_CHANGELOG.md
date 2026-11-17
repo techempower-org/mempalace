@@ -24,6 +24,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **a dream run reads its keys from 0600 env files named by --key-file, so a unit needs no EnvironmentFile= on a secrets file** (`HEAD` — pending resolution)
+  systemd logs a line of an EnvironmentFile= it cannot parse, in full, so
+  a secrets file must never be one. --key-file (repeatable) names an env
+  file; the run reads only PALACE_API_KEY and DREAM_LLM_API_KEY from it,
+  and only when the environment does not already set them.
+
+
 - **docs/specs/dream-inbox.md: the dream inbox's format, who may tick a line, and what acted means** ([`0161990`](https://github.com/techempower-org/mempalace/commit/0161990))
   The contract for `scratch/dream-inbox.md` (routed by `nightly --route`,
   #641): the line format, that the dream only appends while a project's lane
