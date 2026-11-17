@@ -72,5 +72,3 @@ happened to the proposal, not whether its box is ticked.
   folder upward has unticked lines, and nothing when it has none.
 - **A lead's daily pass.** `python -m mempalace.dream routed --out <review folder>` prints
   `dreams: N proposals routed, M acted`, from `judged.json`.
-
-PERTURBATION: [a link to nowhere](./no-such-file-dream-inbox.md).
