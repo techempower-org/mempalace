@@ -58,7 +58,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **redaction takes PEM private keys (OpenSSH, RSA, EC, DSA, PKCS#8), body and END line with the header** (`HEAD` — pending resolution)
+- **redaction takes PEM private keys (OpenSSH, RSA, EC, DSA, PKCS#8, PGP) and PuTTY private lines** (`HEAD` — pending resolution)
   No built-in rule matched a PEM private key, so a key printed into a session
   reached the palace whole: on 2026-11-17 four distinct OpenSSH private keys sat
   in 24 drawers. The new `pem` kind takes the header, the body (line breaks raw,
@@ -67,7 +67,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   needs 40 base64 characters right after it (80 such mentions in the palace are
   left as they are).
 
-  *Tests:* 6 (tests/test_redact.py: pem)
+  *Tests:* 14 (tests/test_redact.py: pem, ppk)
   *Files:* `mempalace/redact.py`, `tests/test_redact.py`
 
 

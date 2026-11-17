@@ -74,6 +74,30 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 # Kind -> pattern. Each matches a credential's shape only.
+# A PEM private key, taken line by line (2026-11-17: four OpenSSH private keys sat in drawers and no
+# rule took them): OpenSSH, RSA, EC, DSA, PKCS#8 (encrypted or not) and a PGP private key block. Line
+# breaks may be raw, CRLF, or JSON-escaped once or twice; each line may carry a line-number prefix
+# ("  12\t" or "12→", as a numbered file view prints it). Header lines after BEGIN (Proc-Type,
+# DEK-Info, Version, Comment) and blank lines are taken with the key. The body is lines of base64,
+# the first 16-80 characters (so a header alone, as prose, stays), each ending at a line break, a
+# quote, the END line or the end of the text: a key cut off before its END line is taken without
+# the prose after it (at most one following line that is a single base64-alphabet word).
+_PEM_SEP = r"(?:\r?\n|\\{1,3}r\\{1,3}n|\\{1,3}n)"
+_PEM_LEAD = r"[ \t]*(?:\d{1,6}(?:\t|→|\\{1,3}t)[ \t]*)?"
+_PEM_EOL = r"(?=[ \t]*(?:\r?\n|\\{1,3}[rn]|-----END|$|[\"'`]))"
+_PEM = (
+    r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY(?: BLOCK)?-----"
+    rf"(?:{_PEM_SEP}{_PEM_LEAD}[A-Z][A-Za-z-]{{1,30}}:[^\r\n\\]{{0,120}})*"
+    rf"(?:{_PEM_SEP}{_PEM_LEAD})+[A-Za-z0-9+/=]{{16,80}}{_PEM_EOL}"
+    rf"(?:(?:{_PEM_SEP}{_PEM_LEAD})+[A-Za-z0-9+/=]{{1,80}}{_PEM_EOL})*"
+    rf"(?:(?:{_PEM_SEP}{_PEM_LEAD})*-----END [A-Z ]{{0,40}}PRIVATE KEY(?: BLOCK)?-----)?"
+)
+# A PuTTY private key file's private lines: the count line and the base64 lines after it.
+_PPK = (
+    r"Private-Lines:[ \t]*\d{1,3}"
+    rf"(?:{_PEM_SEP}{_PEM_LEAD}[A-Za-z0-9+/=]{{1,80}}{_PEM_EOL})+"
+)
+
 DEFAULT_PATTERNS: Dict[str, str] = {
     "anthropic": r"sk-ant-[A-Za-z0-9_-]{30,}",
     # A bare legacy key: 40+ letters and digits, then the rest of its token whatever follows, so a
@@ -115,13 +139,10 @@ DEFAULT_PATTERNS: Dict[str, str] = {
     "blob": r"(?:(?<![A-Za-z0-9+])|(?<=\\[nrt]))e[wy][A-Za-z0-9+/]{98,}={0,2}",
     # A TOTP or HOTP provisioning URI: its secret= is the second factor's seed.
     "otpauth": r"otpauth://[A-Za-z]{4}/[^\s\"'\\<>]+",
-    # A PEM private key (OpenSSH, RSA, EC, DSA, PKCS#8), body and END line taken with the header,
-    # its line breaks raw, CRLF, or JSON-escaped once or twice (2026-11-17: four OpenSSH private keys
-    # sat in drawers, no rule took them). The header alone, as prose, stays: it needs 40 base64
-    # characters right after it. A key cut off before its END line is still taken, up to the first
-    # character outside base64 and line breaks.
-    "pem": r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY-----(?:\s|\\{1,3}[nr])*(?=[A-Za-z0-9+/]{40})"
-    r"(?:[A-Za-z0-9+/=]|\s|\\{1,3}[nrt])+(?:-----END [A-Z ]{0,40}PRIVATE KEY-----)?",
+    # A PEM private key (OpenSSH, RSA, EC, DSA, PKCS#8, encrypted or not): see _PEM.
+    "pem": _PEM,
+    # A PuTTY (.ppk) key's private lines: see _PPK.
+    "ppk": _PPK,
 }
 
 # #619 prefix-free shapes. They run as their OWN pass after the assignment rule, so a value beside a

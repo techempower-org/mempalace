@@ -4,7 +4,7 @@ date: 2026-11-17
 bucket: Fixed
 commit: HEAD
 area: Reliability
-summary: "redaction takes PEM private keys (OpenSSH, RSA, EC, DSA, PKCS#8), body and END line with the header"
+summary: "redaction takes PEM private keys (OpenSSH, RSA, EC, DSA, PKCS#8, PGP) and PuTTY private lines"
 body: |
   No built-in rule matched a PEM private key, so a key printed into a session
   reached the palace whole: on 2026-11-17 four distinct OpenSSH private keys sat
@@ -13,7 +13,7 @@ body: |
   key cut off before its END line too. The header alone, as prose, stays: the rule
   needs 40 base64 characters right after it (80 such mentions in the palace are
   left as they are).
-tests: "6 (tests/test_redact.py: pem)"
+tests: "14 (tests/test_redact.py: pem, ppk)"
 files:
   - mempalace/redact.py
   - tests/test_redact.py

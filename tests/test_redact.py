@@ -1494,8 +1494,8 @@ def _pem_lines(seed=7, n=6):
 
 @pytest.mark.parametrize(
     "sep",
-    ["\n", "\\n", "\\\\n", "\r\n"],
-    ids=["newlines", "json-escaped", "json-escaped-twice", "crlf"],
+    ["\n", "\\n", "\\\\n", "\r\n", "\\r\\n", "\\\\r\\\\n"],
+    ids=["newlines", "json-escaped", "json-escaped-twice", "crlf", "crlf-json", "crlf-json-twice"],
 )
 def test_a_pem_private_key_block_becomes_one_placeholder(sep):
     lines = _pem_lines()
@@ -1506,13 +1506,82 @@ def test_a_pem_private_key_block_becomes_one_placeholder(sep):
     assert redact(out) == out
 
 
-def test_a_pem_key_without_its_end_line_is_still_taken():
+def test_a_pem_key_without_its_end_line_is_still_taken_and_the_prose_after_it_stays():
     lines = _pem_lines(seed=8)
-    out = redact("\n".join([_HEAD, *lines]) + "\n... (truncated)")
+    prose = "Please keep this paragraph intact\nand this second line too"
+    out = redact("\n".join([_HEAD, *lines]) + "\n" + prose)
     assert all(ln[:20] not in out for ln in lines)
-    assert out.startswith("[redacted pem sha256:")
+    assert out.startswith("[redacted pem sha256:") and out.endswith("\n" + prose)
+
+
+def test_a_traditional_encrypted_key_is_taken_with_its_preamble():
+    lines = _pem_lines(seed=9, n=4)
+    head = "-----" + "BEGIN RSA " + "PRIVATE KEY-----"
+    end = "-----" + "END RSA " + "PRIVATE KEY-----"
+    block = "\n".join(
+        [head, "Proc-Type: 4,ENCRYPTED", "DEK-Info: AES-256-CBC,0123ABCD", "", *lines, end]
+    )
+    out = redact(block + "\nafter")
+    assert all(ln not in out for ln in lines) and "DEK-Info" not in out
+    assert out.startswith("[redacted pem sha256:") and out.endswith("]\nafter")
+
+
+def test_pkcs8_encrypted_and_narrow_wrapping_are_taken():
+    head = "-----" + "BEGIN ENCRYPTED " + "PRIVATE KEY-----"
+    end = "-----" + "END ENCRYPTED " + "PRIVATE KEY-----"
+    rnd = _random.Random(10)
+    alpha = _string.ascii_letters + _string.digits + "+/"
+    lines = ["".join(rnd.choice(alpha) for _ in range(32)) for _ in range(8)]  # wrapped at 32
+    out = redact("\n".join([head, *lines, end]))
+    assert all(ln not in out for ln in lines)
+    assert out.startswith("[redacted pem sha256:") and out.endswith("]")
+
+
+def test_a_provider_shaped_run_inside_a_key_body_is_part_of_the_key():
+    lines = _pem_lines(seed=11)
+    lines[2] = FAKE["aws"] + lines[2][: 70 - len(FAKE["aws"])]
+    out = redact("\n".join([_HEAD, *lines, _END]))
+    assert "[redacted aws" not in out and FAKE["aws"] not in out
+    assert out.startswith("[redacted pem sha256:") and out.count("[redacted") == 1
 
 
 def test_a_mention_of_the_header_alone_is_left_as_it_is():
     text = f"The file starts with {_HEAD} and then the key body."
     assert redact(text) == text
+
+
+def test_a_line_numbered_view_of_a_key_is_taken():
+    lines = _pem_lines(seed=12)
+    rows = [_HEAD, *lines, _END]
+    for fmt in ("{n:>6}\t{row}", "{n:>6}→{row}"):
+        text = "\n".join(fmt.format(n=n, row=row) for n, row in enumerate(rows, 1))
+        out = redact(text)
+        assert all(ln not in out for ln in lines), fmt
+
+
+def test_a_pgp_private_key_block_is_taken():
+    lines = _pem_lines(seed=13, n=5)
+    head = "-----" + "BEGIN PGP " + "PRIVATE KEY BLOCK-----"
+    end = "-----" + "END PGP " + "PRIVATE KEY BLOCK-----"
+    out = redact("\n".join([head, "Version: GnuPG v2", "", *lines, "=AbCd", end]))
+    assert all(ln not in out for ln in lines) and out.startswith("[redacted pem sha256:")
+
+
+def test_a_putty_key_files_private_lines_are_taken_and_its_public_lines_stay():
+    pub = _pem_lines(seed=14, n=2)
+    priv = _pem_lines(seed=15, n=1)
+    text = "\n".join(
+        [
+            "PuTTY-User-" + "Key-File-3: ssh-ed25519",
+            "Encryption: none",
+            "Comment: k",
+            "Public-Lines: 2",
+            *pub,
+            "Private-Lines: 1",
+            *priv,
+            "Private-MAC: 00ff",
+        ]
+    )
+    out = redact(text)
+    assert priv[0] not in out and "[redacted ppk sha256:" in out
+    assert "Private-MAC: 00ff" in out and "Encryption: none" in out
