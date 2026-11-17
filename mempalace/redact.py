@@ -134,7 +134,6 @@ DEFAULT_PATTERNS: Dict[str, str] = {
     # Each kind is looked for with its complement class, so each scan has one way to match.
     # A DigitalOcean GenAI / model-access key: "sk-do-" and a token. Its own kind, ahead of litellm, so
     # it is named for what it is and a body of letters in one case (which litellm leaves) is caught too.
-    "digitalocean": r"(?:(?<![A-Za-z0-9_-])|(?<=\\[nrt]))sk-do-[A-Za-z0-9_-]{20,1000}(?![A-Za-z0-9_-])",
     "litellm": r"(?:(?<![A-Za-z0-9_-])|(?<=\\[nrt]))sk-"
     r"(?!(?:ecdsa-sha2-nistp256|ssh-ed25519)(?:-cert-v01)?@openssh\.com(?![A-Za-z0-9_.-]))"
     r"(?:(?=[a-z0-9_-]{0,1000}[A-Z])(?=[A-Z0-9_-]{0,1000}[a-z])"
