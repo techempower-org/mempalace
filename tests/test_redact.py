@@ -1478,3 +1478,224 @@ def test_619_a_list_of_digests_under_a_digest_key_is_kept():
 def test_619_a_key_with_a_trailing_newline_is_not_a_digest_field():
     h = "0123456789abcdef" * 4
     assert redact_metadatas({"content_hash\n": h})["content_hash\n"] != h
+
+
+# --- PEM private keys (2026-11-17: 4 distinct OpenSSH private keys found in drawers; no rule took them)
+
+_HEAD = "-----" + "BEGIN OPENSSH " + "PRIVATE KEY-----"
+_END = "-----" + "END OPENSSH " + "PRIVATE KEY-----"
+
+
+def _pem_lines(seed=7, n=6):
+    rnd = _random.Random(seed)
+    alpha = _string.ascii_letters + _string.digits + "+/"
+    return ["".join(rnd.choice(alpha) for _ in range(70)) for _ in range(n)]
+
+
+@pytest.mark.parametrize(
+    "sep",
+    ["\n", "\\n", "\\\\n", "\r\n", "\\r\\n", "\\\\r\\\\n"],
+    ids=["newlines", "json-escaped", "json-escaped-twice", "crlf", "crlf-json", "crlf-json-twice"],
+)
+def test_a_pem_private_key_block_becomes_one_placeholder(sep):
+    lines = _pem_lines()
+    block = sep.join([_HEAD, *lines, _END])
+    out = redact(f"cat key{sep}{block}{sep}next")
+    assert all(ln not in out for ln in lines) and "BEGIN OPENSSH" not in out
+    assert out.startswith(f"cat key{sep}[redacted pem sha256:") and out.endswith(f"]{sep}next")
+    assert redact(out) == out
+
+
+def test_a_pem_key_without_its_end_line_is_still_taken_and_the_prose_after_it_stays():
+    lines = _pem_lines(seed=8)
+    prose = "Please keep this paragraph intact\nand this second line too"
+    out = redact("\n".join([_HEAD, *lines]) + "\n" + prose)
+    assert all(ln[:20] not in out for ln in lines)
+    assert out.startswith("[redacted pem sha256:") and out.endswith("\n" + prose)
+
+
+def test_a_traditional_encrypted_key_is_taken_with_its_preamble():
+    lines = _pem_lines(seed=9, n=4)
+    head = "-----" + "BEGIN RSA " + "PRIVATE KEY-----"
+    end = "-----" + "END RSA " + "PRIVATE KEY-----"
+    block = "\n".join(
+        [head, "Proc-Type: 4,ENCRYPTED", "DEK-Info: AES-256-CBC,0123ABCD", "", *lines, end]
+    )
+    out = redact(block + "\nafter")
+    assert all(ln not in out for ln in lines) and "DEK-Info" not in out
+    assert out.startswith("[redacted pem sha256:") and out.endswith("]\nafter")
+
+
+def test_pkcs8_encrypted_and_narrow_wrapping_are_taken():
+    head = "-----" + "BEGIN ENCRYPTED " + "PRIVATE KEY-----"
+    end = "-----" + "END ENCRYPTED " + "PRIVATE KEY-----"
+    rnd = _random.Random(10)
+    alpha = _string.ascii_letters + _string.digits + "+/"
+    lines = ["".join(rnd.choice(alpha) for _ in range(32)) for _ in range(8)]  # wrapped at 32
+    out = redact("\n".join([head, *lines, end]))
+    assert all(ln not in out for ln in lines)
+    assert out.startswith("[redacted pem sha256:") and out.endswith("]")
+
+
+def test_a_provider_shaped_run_inside_a_key_body_is_part_of_the_key():
+    lines = _pem_lines(seed=11)
+    lines[2] = FAKE["aws"] + lines[2][: 70 - len(FAKE["aws"])]
+    out = redact("\n".join([_HEAD, *lines, _END]))
+    assert "[redacted aws" not in out and FAKE["aws"] not in out
+    assert out.startswith("[redacted pem sha256:") and out.count("[redacted") == 1
+
+
+def test_a_mention_of_the_header_alone_is_left_as_it_is():
+    text = f"The file starts with {_HEAD} and then the key body."
+    assert redact(text) == text
+
+
+def test_a_line_numbered_view_of_a_key_is_taken():
+    lines = _pem_lines(seed=12)
+    rows = [_HEAD, *lines, _END]
+    for fmt in ("{n:>6}\t{row}", "{n:>6}→{row}"):
+        text = "\n".join(fmt.format(n=n, row=row) for n, row in enumerate(rows, 1))
+        out = redact(text)
+        assert all(ln not in out for ln in lines), fmt
+
+
+def test_a_pgp_private_key_block_is_taken():
+    lines = _pem_lines(seed=13, n=5)
+    head = "-----" + "BEGIN PGP " + "PRIVATE KEY BLOCK-----"
+    end = "-----" + "END PGP " + "PRIVATE KEY BLOCK-----"
+    out = redact("\n".join([head, "Version: GnuPG v2", "", *lines, "=AbCd", end]))
+    assert all(ln not in out for ln in lines) and out.startswith("[redacted pem sha256:")
+
+
+def test_a_putty_key_files_private_lines_are_taken_and_its_public_lines_stay():
+    pub = _pem_lines(seed=14, n=2)
+    priv = _pem_lines(seed=15, n=1)
+    text = "\n".join(
+        [
+            "PuTTY-User-" + "Key-File-3: ssh-ed25519",
+            "Encryption: none",
+            "Comment: k",
+            "Public-Lines: 2",
+            *pub,
+            "Private-Lines: 1",
+            *priv,
+            "Private-MAC: 00ff",
+        ]
+    )
+    out = redact(text)
+    assert priv[0] not in out and "[redacted ppk sha256:" in out
+    assert "Private-MAC: 00ff" in out and "Encryption: none" in out
+
+
+def test_a_key_shown_on_one_line_and_elided_is_taken():
+    lines = _pem_lines(seed=16, n=1)
+    for tail in ("...", "…"):
+        out = redact(f"{_HEAD} {lines[0][:52]}{tail} rest of the line")
+        assert lines[0][:52] not in out and out.endswith(f"]{tail} rest of the line")
+
+
+@pytest.mark.parametrize("sep", ["\n", "\r\n", "\\n", "\\\\n"], ids=["lf", "crlf", "json", "json2"])
+def test_trailing_blanks_on_key_lines_do_not_stop_the_key(sep):
+    lines = _pem_lines(seed=17)
+    rows = [_HEAD, *(ln + (" " if k % 2 else "\t") for k, ln in enumerate(lines)), _END]
+    out = redact(sep.join(rows) + sep + "after")
+    assert all(ln not in out for ln in lines) and out.endswith(f"]{sep}after")
+
+
+def test_header_lines_with_a_backslash_or_a_long_value_go_with_the_key():
+    lines = _pem_lines(seed=18, n=3)
+    head = "-----" + "BEGIN PGP " + "PRIVATE KEY BLOCK-----"
+    end = "-----" + "END PGP " + "PRIVATE KEY BLOCK-----"
+    text = "\n".join([head, "Comment: C:\\keys\\mine", "Comment: " + "x" * 300, "", *lines, end])
+    out = redact(text)
+    assert all(ln not in out for ln in lines) and out.startswith("[redacted pem sha256:")
+
+
+def test_short_prose_lines_after_a_truncated_key_stay():
+    lines = _pem_lines(seed=19)
+    out = redact("\n".join([_HEAD, *lines, "Thanks", "Alice"]))
+    assert all(ln[:20] not in out for ln in lines) and out.endswith("]\nThanks\nAlice")
+
+
+def test_a_putty_private_section_stops_before_prose():
+    priv = _pem_lines(seed=20, n=2)
+    text = "\n".join(["Private-Lines: 2", *priv, "Thanks", "Alice"])
+    out = redact(text)
+    assert all(p not in out for p in priv) and out.endswith("]\nThanks\nAlice")
+
+
+def test_a_pgp_short_last_data_line_before_its_checksum_is_taken():
+    head = "-----" + "BEGIN PGP " + "PRIVATE KEY BLOCK-----"
+    end = "-----" + "END PGP " + "PRIVATE KEY BLOCK-----"
+    full = _pem_lines(seed=21, n=2)
+    out = redact("\n".join([head, "", *full, "QUJD", "=AbCd", end]))
+    assert all(ln not in out for ln in full) and "QUJD" not in out
+    assert out.startswith("[redacted pem sha256:") and out.endswith("]")
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [" \n" * 5000 + "!", "\t \n" * 5000 + "!", " \\n" * 5000 + "!", "  7\t \n" * 5000 + "!"],
+    ids=["blank-lines", "tab-blank-lines", "escaped-blank-lines", "numbered-blank-lines"],
+)
+@pytest.mark.parametrize("where", ["after-header", "after-a-body-line"])
+def test_runs_of_blank_lines_cannot_stall_the_matcher(tail, where):
+    # A subprocess with a hard limit: an exponential split would never return. Each rule gets its
+    # own input, so the tail really is walked by both.
+    import subprocess
+    import sys
+
+    body = "\n" + "A" * 64 + "\n" if where == "after-a-body-line" else "\n"
+    code = (
+        "import re, sys; from mempalace.redact import _PEM, _PPK; "
+        "t = sys.stdin.read(); a, b = t.split('\\x00'); "
+        "re.search(_PEM, a); re.search(_PPK, b)"
+    )
+    pem_text = _HEAD + body + tail
+    ppk_text = "Private-Lines: 3" + body + tail
+    r = subprocess.run(
+        [sys.executable, "-c", code], input=pem_text + "\x00" + ppk_text, text=True, timeout=10
+    )
+    assert r.returncode == 0
+
+
+@pytest.mark.parametrize("nl", ["\n", "\\n"], ids=["raw", "json"])
+@pytest.mark.parametrize("blank", [" ", "\t", " \t "], ids=["space", "tab", "mixed"])
+def test_blanks_after_the_begin_and_count_lines_do_not_stop_the_key(nl, blank):
+    line = "Ab+/" * 16
+    out = redact(f"{_HEAD}{blank}{nl}{line}{nl}{_END}")
+    assert line not in out and out.startswith("[redacted pem sha256:")
+    out = redact(f"Private-Lines: 1{blank}{nl}{line}{nl}Private-MAC: 00ff")
+    assert line not in out and out.endswith(f"]{nl}Private-MAC: 00ff")
+
+
+@pytest.mark.parametrize("nl", ["\n", "\\n"], ids=["raw", "json"])
+@pytest.mark.parametrize("blank", [" ", "\t", " \t "], ids=["space", "tab", "mixed"])
+def test_blanks_after_begin_then_header_lines_still_take_the_key(nl, blank):
+    head = "-----" + "BEGIN RSA " + "PRIVATE KEY-----"
+    end = "-----" + "END RSA " + "PRIVATE KEY-----"
+    line = "Ab+/" * 16
+    text = nl.join(
+        [head + blank, "Proc-Type: 4,ENCRYPTED", "DEK-Info: AES-256-CBC,0123ABCD", "", line, end]
+    )
+    out = redact(text)
+    assert line not in out and "DEK-Info" not in out and out.startswith("[redacted pem sha256:")
+
+
+@pytest.mark.parametrize("width", [128, 2000], ids=["128-columns", "unwrapped"])
+def test_wide_and_unwrapped_key_bodies_are_taken(width):
+    rnd = _random.Random(22)
+    alpha = _string.ascii_letters + _string.digits + "+/"
+    data = "".join(rnd.choice(alpha) for _ in range(2000))
+    lines = [data[i : i + width] for i in range(0, len(data), width)]
+    out = redact("\n".join([_HEAD, *lines, _END]) + "\nafter")
+    assert all(ln[:40] not in out for ln in lines) and out.endswith("]\nafter")
+
+
+@pytest.mark.parametrize("nl", ["\n", "\\n"], ids=["raw", "json"])
+def test_a_header_line_of_any_length_does_not_hide_the_key(nl):
+    head = "-----" + "BEGIN PGP " + "PRIVATE KEY BLOCK-----"
+    end = "-----" + "END PGP " + "PRIVATE KEY BLOCK-----"
+    lines = _pem_lines(seed=23, n=3)
+    out = redact(nl.join([head, "Comment: " + "x" * 5000, "", *lines, end]))
+    assert all(ln not in out for ln in lines) and out.startswith("[redacted pem sha256:")

@@ -55,6 +55,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/dream/route.py`, `mempalace/dream/nightly.py`, `mempalace/dream/__main__.py`, `tests/test_dream_route.py`
 
 
+### Fixed
+
+
+- **redaction takes PEM private keys (OpenSSH, RSA, EC, DSA, PKCS#8, PGP) and PuTTY private lines** (`HEAD` — pending resolution)
+  No built-in rule matched a PEM private key, so a key printed into a session
+  reached the palace whole: on 2026-11-17 four distinct OpenSSH private keys sat
+  in 24 drawers. The new `pem` kind takes the header, the body (line breaks raw,
+  CRLF, or JSON-escaped once or twice) and the END line as one placeholder, and a
+  key cut off before its END line too. The header alone, as prose, stays: the rule
+  needs 40 base64 characters right after it (80 such mentions in the palace are
+  left as they are).
+
+  *Tests:* 47 (tests/test_redact.py: pem, ppk, no-stall)
+  *Files:* `mempalace/redact.py`, `tests/test_redact.py`
+
+
 ## [2026-11-15]
 
 
