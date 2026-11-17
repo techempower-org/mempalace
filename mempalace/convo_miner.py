@@ -925,7 +925,7 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             ]
             sensitive = [item for item, flag in zip(planned, flags) if flag]
             planned = [item for item, flag in zip(planned, flags) if not flag]
-            _file_sensitive_chunks(
+            private_orphans = _file_sensitive_chunks(
                 palace_path, source_file, sensitive, wing, agent, extract_mode, authored_at
             )
         except Exception as exc:
@@ -938,6 +938,7 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             )
             return 0, room_counts_delta, PURGE_FAILED
         planned_ids = {drawer_id for _chunk, _room, drawer_id in planned}
+        sensitive_ids = {drawer_id for _chunk, _room, drawer_id in sensitive}
 
         # Prefetch what the palace already holds for this file. On failure stop
         # here, leaving the stored drawers as they are: never purge the whole
@@ -962,6 +963,23 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
         # (2026-11-17). A pass that fails part way leaves them in place, and the
         # next pass, which still sees them as stored and unplanned, deletes them.
         orphan_ids = [drawer_id for drawer_id in stored if drawer_id not in planned_ids]
+        # Except the shared copies of chunks this pass filed privately: those are written (the private
+        # filing above returned) and must leave the shared collection now, whatever happens to the
+        # write below, or a failed pass would keep sensitive text searchable there.
+        exposed = [drawer_id for drawer_id in orphan_ids if drawer_id in sensitive_ids]
+        orphan_ids = [drawer_id for drawer_id in orphan_ids if drawer_id not in sensitive_ids]
+        all_written = True
+        try:
+            if exposed:
+                collection.delete(ids=exposed)
+        except Exception as exc:
+            print(
+                f"  ! [error] removing the shared copies of private chunks failed for "
+                f"{source_file!r} ({exc!r}); will retry on the next mine",
+                file=sys.stderr,
+            )
+            logger.debug("Shared-copy purge failed for %s", source_file, exc_info=True)
+            return 0, room_counts_delta, PURGE_FAILED
 
         # Split the plan: byte-identical chunks get a metadata refresh only;
         # everything else is embedded and upserted.
@@ -1094,6 +1112,8 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
                 except Exception as e:
                     if "already exists" not in str(e).lower():
                         raise
+                    # Not proof the batch was written: the stale drawers below stay this pass.
+                    all_written = False
         except Exception:
             # A successful earlier batch has the source's current mtime and
             # chunk_total. Remove the rows this pass CREATED so the next run
@@ -1118,12 +1138,16 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
                     exc_info=True,
                 )
             raise
-        # Every row of this pass is written: now the orphans can go. A failed
-        # delete is an error for this file (the manifest is not written, so the
-        # next pass retries); the rows just written stay.
+        # Every row of this pass is written: now the orphans can go (only when no
+        # batch was skipped as "already exists"; then they stay until a pass that
+        # writes everything). A failed delete is an error for this file (the
+        # manifest is not written, so the next pass retries); the rows just
+        # written stay. Private rows the pass no longer files privately go too.
         try:
-            if orphan_ids:
+            if orphan_ids and all_written:
                 collection.delete(ids=orphan_ids)
+            if private_orphans and all_written:
+                _delete_private(palace_path, private_orphans)
         except Exception as exc:
             print(
                 f"  ! [error] stale-drawer purge failed for {source_file!r} "
@@ -1164,7 +1188,8 @@ def _file_sensitive_chunks(
     palace_path, source_file, items, wing, agent, extract_mode, authored_at
 ) -> None:
     """File ``items`` (planned ``(chunk, room, drawer_id)``) verbatim into the private collection,
-    and drop that collection's rows for ``source_file`` the pass no longer plans there.
+    and return that collection's ids for ``source_file`` the pass no longer plans there (the
+    caller deletes them once the shared write has succeeded).
 
     The private collection is created only when there is something to file. Raises on any
     failure, so the caller leaves the shared drawers as they were.
@@ -1178,7 +1203,7 @@ def _file_sensitive_chunks(
                 f"{len(items)} sensitive chunk(s) of {source_file} and no palace path for the "
                 "private collection"
             )
-        return
+        return []
     try:
         private = get_collection(
             palace_path, collection_name=PRIVATE_COLLECTION_NAME, create=bool(items)
@@ -1186,7 +1211,7 @@ def _file_sensitive_chunks(
     except Exception:
         if items:
             raise
-        return  # no private collection yet, and nothing to file in it
+        return []  # no private collection yet, and nothing to file in it
     stored = _source_file_stored_documents(private, source_file, extract_mode)
     keep = {drawer_id for _chunk, _room, drawer_id in items}
     orphans = [drawer_id for drawer_id in stored if drawer_id not in keep]
@@ -1227,8 +1252,17 @@ def _file_sensitive_chunks(
                 ids=[drawer_id for _chunk, _room, drawer_id in batch],
                 metadatas=metas[start : start + DRAWER_UPSERT_BATCH_SIZE],
             )
-    if orphans:
-        private.delete(ids=orphans)
+    # The caller deletes these only after the shared write succeeds: a private row whose chunk
+    # is now filed shared must not go before its shared copy exists.
+    return orphans
+
+
+def _delete_private(palace_path, ids) -> None:
+    from .palace import PRIVATE_COLLECTION_NAME, get_collection
+
+    get_collection(palace_path, collection_name=PRIVATE_COLLECTION_NAME, create=False).delete(
+        ids=list(ids)
+    )
 
 
 def _unchanged_to_refresh(collection, unchanged: list, extract_mode, content_hash):

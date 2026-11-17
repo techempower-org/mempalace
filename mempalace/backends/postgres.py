@@ -554,14 +554,20 @@ class PostgresCollection(BaseCollection):
     ) -> None:
         step = max(1, int(self.INSERT_STATEMENT_ROWS))
         if len(ids) > step:
-            # A duplicate id in two slices keeps the single-statement result: DO NOTHING keeps the first, DO UPDATE
-            # leaves the last.
-            for lo in range(0, len(ids), step):
+            # Duplicate ids are resolved over the WHOLE input first, as the single statement did (DO NOTHING keeps
+            # the first occurrence, DO UPDATE the last), so the result never depends on where a slice ends.
+            pick: dict[str, int] = {}
+            for index, doc_id in enumerate(ids):
+                if doc_id not in pick or update_on_conflict:
+                    pick[doc_id] = index
+            keep = sorted(pick.values())
+            for lo in range(0, len(keep), step):
+                part = keep[lo : lo + step]
                 self._insert_rows(
-                    documents=documents[lo : lo + step],
-                    ids=ids[lo : lo + step],
-                    metadatas=metadatas[lo : lo + step] if metadatas else metadatas,
-                    embeddings=embeddings[lo : lo + step],
+                    documents=[documents[i] for i in part],
+                    ids=[ids[i] for i in part],
+                    metadatas=[metadatas[i] for i in part] if metadatas else metadatas,
+                    embeddings=[embeddings[i] for i in part],
                     update_on_conflict=update_on_conflict,
                 )
             return

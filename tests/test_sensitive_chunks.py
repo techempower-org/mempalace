@@ -248,3 +248,45 @@ def test_a_palace_without_a_private_collection_mines_normally(session):
     convo_miner.mine_convos(str(convos), palace, wing="w")
     assert any("Plain answer" in d for d in _docs(palace, "mempalace_drawers"))
     assert _docs(palace, "mempalace_private_drawers") == []
+
+
+def test_a_shared_copy_moved_private_goes_even_when_the_shared_write_fails(session, monkeypatch):
+    """Security review of the 2026-11-17 fix: stale drawers now go only after the write, except the shared copies
+    of chunks this pass filed privately: those leave the shared collection at once, even if the write then fails."""
+    from mempalace.palace import MineFileErrors
+
+    convos, path, palace = session
+    with monkeypatch.context() as m:
+        m.setattr(
+            convo_miner,
+            "sensitive_chunk_flags",
+            lambda contents, extra=(): [False] * len(list(contents)),
+        )
+        convo_miner.mine_convos(str(convos), palace, wing="w")
+    assert any(SECRET in d for d in _docs(palace, "mempalace_drawers"))
+
+    path.write_text(_transcript("\n> One more question about lunch.\nSandwiches are fine.\n"))
+    os.utime(path, (os.path.getmtime(path) + 5,) * 2)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("canceling statement due to statement timeout")
+
+    monkeypatch.setattr(convo_miner, "assert_no_collisions", boom)
+    with pytest.raises((MineFileErrors, RuntimeError)):
+        convo_miner.mine_convos(str(convos), palace, wing="w")
+    assert not any(SECRET in d for d in _docs(palace, "mempalace_drawers")), (
+        "sensitive text left in shared"
+    )
+    assert any(SECRET in d for d in _docs(palace, "mempalace_private_drawers"))
+
+
+def test_private_orphans_are_returned_not_deleted(session):
+    """xreview r2 finding 2: _file_sensitive_chunks no longer deletes the private rows the pass stops filing there;
+    it hands them back, and the caller deletes them only once the shared write has succeeded."""
+    convos, path, palace = session
+    convo_miner.mine_convos(str(convos), palace, wing="w")
+    before = _docs(palace, "mempalace_private_drawers")
+    assert before
+    orphans = convo_miner._file_sensitive_chunks(palace, str(path), [], "w", "a", "exchange", None)
+    assert orphans, "the private rows no longer planned private are returned"
+    assert _docs(palace, "mempalace_private_drawers") == before, "returned, not deleted"

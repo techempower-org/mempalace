@@ -528,3 +528,28 @@ def test_each_committed_slice_gets_its_own_hook_call(collection):
     )
     step = collection.INSERT_STATEMENT_ROWS
     assert calls == [step, step, 7]
+
+
+@pytest.mark.parametrize("update", [False, True])
+def test_duplicate_ids_are_resolved_before_slicing(collection, update):
+    """xreview r2 finding 3: a duplicate id across what would be two slices is resolved over the whole input first
+    (DO NOTHING keeps the first, DO UPDATE the last), so 101 rows with one duplicate are one 100-row statement."""
+    n = collection.INSERT_STATEMENT_ROWS + 1
+    ids = [f"id{i}" for i in range(n - 1)] + ["id0"]
+    calls = []
+    collection.set_kg_writethrough_batch(
+        lambda drawers: calls.append([d["document"] for d in drawers])
+    )
+    conn = pg._load_psycopg2()[0].connect("x")
+    before = len(conn.executed)
+    collection._insert_rows(
+        documents=[f"doc {i}" for i in range(n)],
+        ids=ids,
+        metadatas=[{"wing": "w"}] * n,
+        embeddings=[[0.0] * 384] * n,
+        update_on_conflict=update,
+    )
+    assert len([q for q in conn.executed[before:] if "INSERT INTO" in q]) == 1
+    docs = [d for call in calls for d in call]
+    assert len(docs) == n - 1
+    assert ("doc 100" in docs) is update and ("doc 0" in docs) is (not update)

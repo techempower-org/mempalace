@@ -1647,3 +1647,40 @@ def test_stale_drawers_are_deleted_only_after_the_new_rows_are_written(capsys, m
         assert len(docs) >= before
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_an_already_exists_write_never_lets_stale_drawers_go(capsys, monkeypatch):
+    """xreview r2 finding 1: an upsert error whose text says "already exists" is skipped, but it is not proof the
+    rows were written: when every stored id is stale (a re-key), the stale drawers must stay that pass."""
+    from mempalace import convo_miner
+    from mempalace.palace import get_collection
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        p = _two_exchange_file(tmpdir)
+        palace_path = os.path.join(tmpdir, "palace")
+        mine_convos(tmpdir, palace_path, wing="test")
+        capsys.readouterr()
+
+        real_id = convo_miner.make_convo_drawer_id
+        monkeypatch.setattr(
+            convo_miner, "make_convo_drawer_id", lambda *a, **k: real_id(*a, **k) + "_rekeyed"
+        )
+        col_type = type(get_collection(palace_path))
+
+        def upsert(self, *a, **k):
+            raise RuntimeError("drawer already exists")
+
+        monkeypatch.setattr(col_type, "upsert", upsert)
+        _two_exchange_file(tmpdir, "\n> And then?\nUNIQUE_THIRD_EXCHANGE_MARKER here.\n")
+        _bump(p)
+        try:
+            mine_convos(tmpdir, palace_path, wing="test")
+        except Exception:
+            pass
+        docs = _docs(palace_path)
+        assert any("UNIQUE_FIRST_EXCHANGE_MARKER" in d for d in docs), (
+            "stale drawers deleted after a skipped write"
+        )
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
