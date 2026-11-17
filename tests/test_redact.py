@@ -1638,16 +1638,32 @@ def test_a_pgp_short_last_data_line_before_its_checksum_is_taken():
     [" \n" * 5000 + "!", "\t \n" * 5000 + "!", " \\n" * 5000 + "!", "  7\t \n" * 5000 + "!"],
     ids=["blank-lines", "tab-blank-lines", "escaped-blank-lines", "numbered-blank-lines"],
 )
-def test_runs_of_blank_lines_after_a_header_cannot_stall_the_matcher(tail):
-    # A subprocess with a hard limit: an exponential split would never return.
+@pytest.mark.parametrize("where", ["after-header", "after-a-body-line"])
+def test_runs_of_blank_lines_cannot_stall_the_matcher(tail, where):
+    # A subprocess with a hard limit: an exponential split would never return. Each rule gets its
+    # own input, so the tail really is walked by both.
     import subprocess
     import sys
 
+    body = "\n" + "A" * 64 + "\n" if where == "after-a-body-line" else "\n"
     code = (
         "import re, sys; from mempalace.redact import _PEM, _PPK; "
-        "t = sys.stdin.read(); re.search(_PEM, t); re.search(_PPK, t.replace('-----BEGIN', 'Private-Lines: 3 '))"
+        "t = sys.stdin.read(); a, b = t.split('\\x00'); "
+        "re.search(_PEM, a); re.search(_PPK, b)"
     )
+    pem_text = _HEAD + body + tail
+    ppk_text = "Private-Lines: 3" + body + tail
     r = subprocess.run(
-        [sys.executable, "-c", code], input=_HEAD + "\n" + tail, text=True, timeout=10
+        [sys.executable, "-c", code], input=pem_text + "\x00" + ppk_text, text=True, timeout=10
     )
     assert r.returncode == 0
+
+
+@pytest.mark.parametrize("nl", ["\n", "\\n"], ids=["raw", "json"])
+@pytest.mark.parametrize("blank", [" ", "\t", " \t "], ids=["space", "tab", "mixed"])
+def test_blanks_after_the_begin_and_count_lines_do_not_stop_the_key(nl, blank):
+    line = "Ab+/" * 16
+    out = redact(f"{_HEAD}{blank}{nl}{line}{nl}{_END}")
+    assert line not in out and out.startswith("[redacted pem sha256:")
+    out = redact(f"Private-Lines: 1{blank}{nl}{line}{nl}Private-MAC: 00ff")
+    assert line not in out and out.endswith(f"]{nl}Private-MAC: 00ff")

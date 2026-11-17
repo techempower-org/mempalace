@@ -100,14 +100,16 @@ _PEM_LAST = rf"(?={_PEM_GAP}*(?:=[A-Za-z0-9+/]{{4}}[ \t]*{_PEM_GAP}*)?{_PEM_END}
 _PEM = (
     r"-----BEGIN [A-Z ]{0,40}PRIVATE KEY(?: BLOCK)?-----"
     rf"(?:{_PEM_GAP}[A-Za-z][A-Za-z0-9-]{{0,40}}:(?:(?!{_PEM_SEP})[^\r\n]){{0,1000}})*"
-    rf"(?:{_PEM_GAP}+|[ \t]+){_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL}"
+    # the header line owns its trailing blanks; the body starts on a later line, or on this one
+    # after at least one blank
+    rf"[ \t]*(?:{_PEM_GAP}+|(?<=[ \t])){_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL}"
     rf"(?:{_PEM_GAP}+(?:{_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL}|{_PEM_B64}{{1,15}}[ \t]*{_PEM_LAST}))*"
     rf"(?:{_PEM_GAP}*{_PEM_END})?"
 )
 # A PuTTY private key file's private lines: the count line and the base64 lines after it, each of
 # 16-80 characters or the short last one right before Private-MAC (prose after it stays).
 _PPK = (
-    r"Private-Lines:[ \t]*\d{1,3}"
+    r"Private-Lines:[ \t]*\d{1,3}[ \t]*"
     rf"(?:{_PEM_GAP}(?:{_PEM_B64}{{16,80}}[ \t]*{_PEM_EOL}"
     rf"|{_PEM_B64}{{1,15}}[ \t]*(?={_PEM_GAP}Private-MAC:)))+"
 )
