@@ -1268,19 +1268,21 @@ class TestIncrementalReMine:
 
         assert col.upserted_docs == [], "NUL-stripped storage must not force a re-embed"
 
-    def test_prefetch_failure_falls_back_to_full_rebuild(self):
+    def test_prefetch_failure_aborts_the_file_and_deletes_nothing(self):
+        # 2026-11-17: the old fallback here purged every drawer and rebuilt; when the rebuild then failed, whole
+        # transcripts were left empty. A failed prefetch is now a per-file error the next mine retries.
         col = _IncrementalFakeCol()
         self._mine(col, _chunks(3))
-        ids_before = list(col.upserted_ids)
+        ids_before = set(col.records)
         col.upserted_docs.clear()
         col.fail_get_with_documents = True
 
         drawers, _rooms, skipped = self._mine(col, _chunks(4))
 
-        assert skipped is False
-        assert sorted(col.deleted_ids) == sorted(ids_before), "legacy path purges every drawer"
-        assert drawers == 4, "legacy path rewrites every chunk"
-        assert len(col.records) == 4
+        assert skipped == "purge_failed"
+        assert col.deleted_ids == [], "a failed prefetch must not delete anything"
+        assert drawers == 0
+        assert set(col.records) == ids_before
 
     def test_update_failure_refiles_unchanged_chunks_in_full(self):
         col = _IncrementalFakeCol()
