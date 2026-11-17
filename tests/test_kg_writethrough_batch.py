@@ -553,3 +553,20 @@ def test_duplicate_ids_are_resolved_before_slicing(collection, update):
     docs = [d for call in calls for d in call]
     assert len(docs) == n - 1
     assert ("doc 100" in docs) is update and ("doc 0" in docs) is (not update)
+
+
+def test_duplicates_in_a_small_write_were_already_resolved(collection):
+    """xreview r3 finding 2 (checked, not a defect): a write of at most INSERT_STATEMENT_ROWS rows dedupes its ids
+    before its one statement (rows_by_id), so DO UPDATE never sees one id twice; the last occurrence wins."""
+    calls = []
+    collection.set_kg_writethrough_batch(
+        lambda drawers: calls.append([d["document"] for d in drawers])
+    )
+    collection._insert_rows(
+        documents=["first", "last"],
+        ids=["x", "x"],
+        metadatas=[{"wing": "w"}, {"wing": "w"}],
+        embeddings=[[0.0] * 384] * 2,
+        update_on_conflict=True,
+    )
+    assert calls == [["last"]]

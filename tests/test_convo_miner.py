@@ -1684,3 +1684,37 @@ def test_an_already_exists_write_never_lets_stale_drawers_go(capsys, monkeypatch
         )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def test_a_skipped_write_is_not_a_complete_pass(capsys, monkeypatch):
+    """xreview r3 finding 1: a batch skipped as "already exists" must not let the pass write its manifest or report
+    success; the file is retried on the next mine and the new exchange lands then."""
+    from mempalace.palace import MineFileErrors, get_collection
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        p = _two_exchange_file(tmpdir)
+        palace_path = os.path.join(tmpdir, "palace")
+        mine_convos(tmpdir, palace_path, wing="test")
+        capsys.readouterr()
+
+        col_type = type(get_collection(palace_path))
+        real_upsert = col_type.upsert
+
+        def upsert(self, *a, **k):
+            raise RuntimeError("drawer already exists")
+
+        _two_exchange_file(tmpdir, "\n> And then?\nUNIQUE_THIRD_EXCHANGE_MARKER here.\n")
+        _bump(p)
+        with monkeypatch.context() as m:
+            m.setattr(col_type, "upsert", upsert)
+            with pytest.raises(MineFileErrors):
+                mine_convos(tmpdir, palace_path, wing="test")
+        assert "skipped as already existing" in capsys.readouterr().err
+        assert col_type.upsert is real_upsert
+        mine_convos(tmpdir, palace_path, wing="test")
+        assert any("UNIQUE_THIRD_EXCHANGE_MARKER" in d for d in _docs(palace_path)), (
+            "the retry did not happen"
+        )
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)

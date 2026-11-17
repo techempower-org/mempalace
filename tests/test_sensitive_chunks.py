@@ -290,3 +290,81 @@ def test_private_orphans_are_returned_not_deleted(session):
     orphans = convo_miner._file_sensitive_chunks(palace, str(path), [], "w", "a", "exchange", None)
     assert orphans, "the private rows no longer planned private are returned"
     assert _docs(palace, "mempalace_private_drawers") == before, "returned, not deleted"
+
+
+def test_shared_copies_go_even_when_the_shared_prefetch_fails(session, monkeypatch):
+    """xreview r3 finding 4: the shared copies of the chunks just filed privately leave the shared collection by id,
+    before the shared prefetch, so a prefetch failure cannot keep them searchable."""
+    from mempalace.palace import MineFileErrors
+
+    convos, path, palace = session
+    with monkeypatch.context() as m:
+        m.setattr(
+            convo_miner,
+            "sensitive_chunk_flags",
+            lambda contents, extra=(): [False] * len(list(contents)),
+        )
+        convo_miner.mine_convos(str(convos), palace, wing="w")
+    assert any(SECRET in d for d in _docs(palace, "mempalace_drawers"))
+
+    path.write_text(_transcript("\n> One more question about lunch.\nSandwiches are fine.\n"))
+    os.utime(path, (os.path.getmtime(path) + 5,) * 2)
+    real = convo_miner._source_file_stored_documents
+    real_file = convo_miner._file_sensitive_chunks
+    filed = []
+
+    def file_privately(*a, **k):
+        out = real_file(*a, **k)
+        filed.append(True)
+        return out
+
+    def prefetch(collection, source_file, extract_mode):
+        if not filed:  # the private collection's own reads, before and during the private filing
+            return real(collection, source_file, extract_mode)
+        raise RuntimeError("canceling statement due to statement timeout")
+
+    monkeypatch.setattr(convo_miner, "_file_sensitive_chunks", file_privately)
+    monkeypatch.setattr(convo_miner, "_source_file_stored_documents", prefetch)
+    with pytest.raises((MineFileErrors, RuntimeError)):
+        convo_miner.mine_convos(str(convos), palace, wing="w")
+    assert not any(SECRET in d for d in _docs(palace, "mempalace_drawers")), (
+        "sensitive text left in shared"
+    )
+    assert any(SECRET in d for d in _docs(palace, "mempalace_private_drawers"))
+
+
+def test_a_rekeyed_old_shared_copy_of_sensitive_text_goes_at_once(session, monkeypatch):
+    """xreview r3 finding 3: an old shared copy under an id a re-key retired is not matched by the new sensitive
+    ids; its own stored text is marked, so it leaves the shared collection at once, even if the write then fails."""
+    from mempalace.palace import MineFileErrors
+
+    convos, path, palace = session
+    with monkeypatch.context() as m:
+        m.setattr(
+            convo_miner,
+            "sensitive_chunk_flags",
+            lambda contents, extra=(): [False] * len(list(contents)),
+        )
+        convo_miner.mine_convos(str(convos), palace, wing="w")
+    assert any(SECRET in d for d in _docs(palace, "mempalace_drawers"))
+
+    real_id = convo_miner.make_convo_drawer_id
+    monkeypatch.setattr(
+        convo_miner, "make_convo_drawer_id", lambda *a, **k: real_id(*a, **k) + "_rekeyed"
+    )
+    path.write_text(_transcript("\n> One more question about lunch.\nSandwiches are fine.\n"))
+    os.utime(path, (os.path.getmtime(path) + 5,) * 2)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("canceling statement due to statement timeout")
+
+    monkeypatch.setattr(convo_miner, "assert_no_collisions", boom)
+    with pytest.raises((MineFileErrors, RuntimeError)):
+        convo_miner.mine_convos(str(convos), palace, wing="w")
+    assert not any(SECRET in d for d in _docs(palace, "mempalace_drawers")), (
+        "a re-keyed sensitive copy stayed"
+    )
+    assert any(SECRET in d for d in _docs(palace, "mempalace_private_drawers"))
+    assert any("notes folder holds two files" in d for d in _docs(palace, "mempalace_drawers")), (
+        "non-sensitive lost"
+    )

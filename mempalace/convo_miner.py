@@ -940,6 +940,24 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
         planned_ids = {drawer_id for _chunk, _room, drawer_id in planned}
         sensitive_ids = {drawer_id for _chunk, _room, drawer_id in sensitive}
 
+        # The shared copies of the chunks just filed privately leave the shared
+        # collection now, looked up by id (no source-file prefetch needed), so
+        # neither a failed prefetch nor a failed write below keeps that text
+        # searchable there.
+        try:
+            if sensitive_ids:
+                present = collection.get(ids=sorted(sensitive_ids), include=["metadatas"])["ids"]
+                if present:
+                    collection.delete(ids=list(present))
+        except Exception as exc:
+            print(
+                f"  ! [error] removing the shared copies of private chunks failed for "
+                f"{source_file!r} ({exc!r}); will retry on the next mine",
+                file=sys.stderr,
+            )
+            logger.debug("Shared-copy purge failed for %s", source_file, exc_info=True)
+            return 0, room_counts_delta, PURGE_FAILED
+
         # Prefetch what the palace already holds for this file. On failure stop
         # here, leaving the stored drawers as they are: never purge the whole
         # file to rebuild it (the rebuild can fail as well, and then nothing is
@@ -962,14 +980,25 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
         # deleted first, a write that then fails leaves the file with nothing
         # (2026-11-17). A pass that fails part way leaves them in place, and the
         # next pass, which still sees them as stored and unplanned, deletes them.
-        orphan_ids = [drawer_id for drawer_id in stored if drawer_id not in planned_ids]
-        # Except the shared copies of chunks this pass filed privately: those are written (the private
-        # filing above returned) and must leave the shared collection now, whatever happens to the
-        # write below, or a failed pass would keep sensitive text searchable there.
-        exposed = [drawer_id for drawer_id in orphan_ids if drawer_id in sensitive_ids]
-        orphan_ids = [drawer_id for drawer_id in orphan_ids if drawer_id not in sensitive_ids]
+        orphan_ids = [
+            drawer_id
+            for drawer_id in stored
+            if drawer_id not in planned_ids and drawer_id not in sensitive_ids
+        ]
+        # Except an orphan whose own stored text is marked sensitive (an old shared
+        # copy under an id a re-key retired): it goes now, like the copies above; the
+        # transcript's sensitive chunks were filed privately by this pass.
         all_written = True
         try:
+            marks = (
+                sensitive_chunk_flags(
+                    [stored[drawer_id] or "" for drawer_id in orphan_ids], configured_markers()
+                )
+                if orphan_ids
+                else []
+            )
+            exposed = [drawer_id for drawer_id, mark in zip(orphan_ids, marks) if mark]
+            orphan_ids = [drawer_id for drawer_id, mark in zip(orphan_ids, marks) if not mark]
             if exposed:
                 collection.delete(ids=exposed)
         except Exception as exc:
@@ -1138,15 +1167,24 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
                     exc_info=True,
                 )
             raise
-        # Every row of this pass is written: now the orphans can go (only when no
-        # batch was skipped as "already exists"; then they stay until a pass that
-        # writes everything). A failed delete is an error for this file (the
-        # manifest is not written, so the next pass retries); the rows just
-        # written stay. Private rows the pass no longer files privately go too.
+        if not all_written:
+            # A batch skipped as "already exists" is not proof it was written: the
+            # file is not complete. No orphan delete, no manifest; the next pass
+            # retries.
+            print(
+                f"  ! [error] a write batch for {source_file!r} was skipped as "
+                f"already existing; stale drawers kept, will retry on the next mine",
+                file=sys.stderr,
+            )
+            return drawers_added, room_counts_delta, PURGE_FAILED
+        # Every row of this pass is written: now the orphans can go. A failed
+        # delete is an error for this file (the manifest is not written, so the
+        # next pass retries); the rows just written stay. Private rows the pass
+        # no longer files privately go too.
         try:
-            if orphan_ids and all_written:
+            if orphan_ids:
                 collection.delete(ids=orphan_ids)
-            if private_orphans and all_written:
+            if private_orphans:
                 _delete_private(palace_path, private_orphans)
         except Exception as exc:
             print(
