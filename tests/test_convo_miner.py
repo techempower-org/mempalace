@@ -1581,7 +1581,18 @@ def test_failed_write_never_deletes_drawers_that_existed_before_the_pass(capsys,
         mine_convos(tmpdir, palace_path, wing="test")
         capsys.readouterr()
 
-        _two_exchange_file(tmpdir, "\n> And then?\nUNIQUE_THIRD_EXCHANGE_MARKER here.\n")
+        ids_before = set(
+            chromadb.PersistentClient(path=palace_path)
+            .get_collection("mempalace_drawers")
+            .get()["ids"]
+        )
+        # Every exchange is edited in place (same chunk ids, new content): existing drawers this pass rewrites,
+        # so they are "changed" whatever the refresh path does. The refresh fallback is forced as well.
+        p.write_text(
+            "> What is the plan?\nUNIQUE_FIRST_EXCHANGE_MARKER, edited.\n\n"
+            "> Any risks?\nUNIQUE_SECOND_EXCHANGE_MARKER, edited.\n\n"
+            "> And then?\nUNIQUE_THIRD_EXCHANGE_MARKER here.\n"
+        )
         _bump(p)
         monkeypatch.setattr(convo_miner, "_refresh_unchanged_drawers", lambda *a, **k: False)
 
@@ -1592,11 +1603,14 @@ def test_failed_write_never_deletes_drawers_that_existed_before_the_pass(capsys,
         with pytest.raises((MineFileErrors, RuntimeError)):
             mine_convos(tmpdir, palace_path, wing="test")
 
+        ids_after = set(
+            chromadb.PersistentClient(path=palace_path)
+            .get_collection("mempalace_drawers")
+            .get()["ids"]
+        )
+        assert ids_before - ids_after == set(), "a drawer that existed before the pass was deleted"
         docs = _docs(palace_path)
         assert any("UNIQUE_FIRST_EXCHANGE_MARKER" in d for d in docs), (
-            "an existing drawer was deleted"
-        )
-        assert any("UNIQUE_SECOND_EXCHANGE_MARKER" in d for d in docs), (
             "an existing drawer was deleted"
         )
     finally:
