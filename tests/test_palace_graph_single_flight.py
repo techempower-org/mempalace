@@ -79,7 +79,7 @@ def test_concurrent_callers_share_one_aggregate():
     calls = []
     release = threading.Event()
 
-    def slow_aggregate(_col, _config=None):
+    def slow_aggregate(_col, _config=None, **_kw):
         calls.append(1)
         release.wait(5)
         return GOOD
@@ -138,6 +138,8 @@ def _no_rebuild_state():
     pg._graph_last_good_at = 0.0
     pg._graph_pg_failed_at = 0.0
     pg._graph_refreshing = False
+    pg._graph_bg_outcome = (None, None)
+    pg._graph_pg_last_error = ""
     yield
     _join_rebuild()
     pg._graph_last_good = None
@@ -178,10 +180,8 @@ def test_after_the_window_a_caller_gets_the_last_good_graph_at_once_and_a_backgr
 
 def test_the_background_rebuild_has_its_own_longer_statement_timeout():
     col = _pg_col()
-    with patch.object(pg, "_build_graph_postgres", return_value=GOOD) as cold:
+    with patch.object(pg, "_build_graph_postgres", return_value=GOOD):
         build_graph(col=col)
-    # a caller that waits (no graph yet) keeps the role's limit
-    assert cold.call_args.kwargs.get("statement_timeout_s") is None
     _age_the_good_graph()
     with patch.object(pg, "_build_graph_postgres", return_value=NEWER) as agg:
         build_graph(col=col)
@@ -242,4 +242,55 @@ def test_a_rebuild_whose_thread_cannot_start_is_retried_by_a_later_caller():
     with patch.object(pg, "_build_graph_postgres", return_value=NEWER) as agg:
         build_graph(col=col)
         _join_rebuild()
+    assert agg.call_count == 1
+
+
+def test_a_cold_build_runs_in_the_background_with_the_long_timeout():
+    col = _pg_col()
+    with patch.object(pg, "_build_graph_postgres", return_value=GOOD) as agg:
+        assert build_graph(col=col) == GOOD
+    assert agg.call_args.kwargs["statement_timeout_s"] == pg._GRAPH_PG_BACKGROUND_TIMEOUT_S
+    assert pg._graph_refresh_thread is not None
+
+
+def test_a_cold_caller_waits_at_most_the_cold_wait_and_gets_a_clear_error():
+    col = _pg_col()
+    release = threading.Event()
+
+    def slow(_col, _config=None, statement_timeout_s=None):
+        release.wait(5)
+        return GOOD
+
+    with (
+        patch.object(pg, "_GRAPH_PG_COLD_WAIT_S", 0.2),
+        patch.object(pg, "_build_graph_postgres", side_effect=slow) as agg,
+    ):
+        t0 = time.monotonic()
+        with pytest.raises(GraphUnavailableError, match="being built"):
+            build_graph(col=col)
+        assert time.monotonic() - t0 < 2.0
+        with pytest.raises(GraphUnavailableError, match="being built"):
+            build_graph(col=col)  # a second cold caller joins the same build
+        release.set()
+        _join_rebuild()
+        assert build_graph(col=col) == GOOD  # the build finished: served from the cache
+    assert agg.call_count == 1
+
+
+def test_a_cold_build_of_an_empty_palace_returns_the_empty_graph():
+    col = _pg_col()
+    with patch.object(pg, "_build_graph_postgres", return_value=({}, [])):
+        assert build_graph(col=col) == ({}, [])
+
+
+def test_a_cold_build_that_fails_raises_its_reason_and_is_retried_after_the_short_window():
+    col = _pg_col()
+    with patch.object(pg, "_build_graph_postgres", side_effect=RuntimeError("statement timeout")):
+        with pytest.raises(GraphUnavailableError, match="statement timeout"):
+            build_graph(col=col)
+        with pytest.raises(GraphUnavailableError, match="statement timeout"):
+            build_graph(col=col)  # within _GRAPH_PG_RETRY_AFTER: the reason, no new build
+    pg._graph_pg_failed_at = time.time() - pg._GRAPH_PG_RETRY_AFTER - 1
+    with patch.object(pg, "_build_graph_postgres", return_value=GOOD) as agg:
+        assert build_graph(col=col) == GOOD
     assert agg.call_count == 1
