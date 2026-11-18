@@ -98,6 +98,12 @@ _GRAPH_PG_BACKGROUND_TIMEOUT_S = 300.0
 _GRAPH_PG_BACKGROUND_RETRY_S = 600.0
 _graph_refreshing = False
 _graph_refresh_thread = None  # the running (or last) rebuild thread; tests join it
+# (thread, ("ok", graph) | ("none", None) | ("err", text)): the last finished rebuild's outcome,
+# read by a caller that had no graph and waited on that very thread.
+_graph_bg_outcome = (None, None)
+_graph_pg_last_error = ""
+# How long a caller with no graph at all waits for the first (background) build.
+_GRAPH_PG_COLD_WAIT_S = 25.0
 
 
 class GraphUnavailableError(RuntimeError):
@@ -250,16 +256,33 @@ def _build_graph_postgres_once(col, config=None):
                 _start_background_rebuild(col, config)
             return _graph_last_good
         if time.time() - _graph_pg_failed_at < _GRAPH_PG_RETRY_AFTER:
-            return _last_good_or_raise("failed less than %ds ago" % _GRAPH_PG_RETRY_AFTER)
-        try:
-            pg_result = _build_graph_postgres(col, config)
-        except Exception as e:
-            _graph_pg_failed_at = time.time()
-            return _last_good_or_raise(e)
-        if pg_result is None:
-            return None
-        _store_graph(pg_result)
-        return pg_result
+            return _last_good_or_raise(
+                "failed less than %ds ago (%s)" % (_GRAPH_PG_RETRY_AFTER, _graph_pg_last_error)
+            )
+        # No graph yet (a daemon restart): the first build runs in the background too, with
+        # its own statement timeout, since under load it does not fit the role's 30 s
+        # (familiar 2026-11-18: three graph_stats errors in the first 5 min after a restart).
+        # This caller waits for it at most _GRAPH_PG_COLD_WAIT_S; concurrent callers share it.
+        thread = _start_background_rebuild(col, config, min_gap_s=_GRAPH_PG_RETRY_AFTER)
+    if thread is not None:
+        thread.join(_GRAPH_PG_COLD_WAIT_S)
+    with _graph_cache_lock:
+        outcome_thread, outcome = _graph_bg_outcome
+    if thread is None or thread.is_alive() or outcome_thread is not thread:
+        if _graph_last_good is not None:
+            return _graph_last_good
+        if thread is None:
+            raise GraphUnavailableError("the room graph build could not start; retry shortly")
+        raise GraphUnavailableError(
+            "the room graph is being built in the background (first build after a start); "
+            "retry in a minute"
+        )
+    kind, value = outcome
+    if kind == "ok":
+        return value
+    if kind == "none":
+        return None  # the fast path is unavailable here: the caller walks
+    return _last_good_or_raise(value)
 
 
 def _store_graph(result) -> None:
@@ -277,45 +300,63 @@ def _store_graph(result) -> None:
         _graph_last_good_at = time.time()
 
 
-def _start_background_rebuild(col, config=None) -> None:
+def _start_background_rebuild(col, config=None, min_gap_s=None):
     """Start ONE background rebuild unless one is running or the last one failed within
-    ``_GRAPH_PG_BACKGROUND_RETRY_S``. Best effort: never raises (a thread that cannot start
-    clears the flag, so a later caller retries)."""
+    ``min_gap_s`` (default ``_GRAPH_PG_BACKGROUND_RETRY_S``). Returns the thread a caller may
+    wait on (the running one, or the one just started), or ``None``. Best effort: never raises
+    (a thread that cannot start clears the flag, so a later caller retries)."""
     global _graph_refreshing, _graph_refresh_thread
+    gap = _GRAPH_PG_BACKGROUND_RETRY_S if min_gap_s is None else min_gap_s
     with _graph_cache_lock:
-        if _graph_refreshing or time.time() - _graph_pg_failed_at < _GRAPH_PG_BACKGROUND_RETRY_S:
-            return
+        if _graph_refreshing:
+            return _graph_refresh_thread
+        if time.time() - _graph_pg_failed_at < gap:
+            return None
         _graph_refreshing = True
     try:
         t = threading.Thread(
             target=_background_rebuild, args=(col, config), name="palace-graph-rebuild", daemon=True
         )
         t.start()
-        _graph_refresh_thread = t
     except Exception as e:  # noqa: BLE001 - e.g. "can't start new thread"
         with _graph_cache_lock:
             _graph_refreshing = False
         logger.warning("palace_graph: background rebuild could not start (%s)", type(e).__name__)
+        return None
+    with _graph_cache_lock:
+        _graph_refresh_thread = t
+    return t
 
 
 def _background_rebuild(col, config=None) -> None:
-    global _graph_refreshing, _graph_pg_failed_at
+    global _graph_refreshing, _graph_pg_failed_at, _graph_pg_last_error, _graph_bg_outcome
+    outcome = ("err", "background rebuild did not finish")
     try:
         result = _build_graph_postgres(
             col, config, statement_timeout_s=_GRAPH_PG_BACKGROUND_TIMEOUT_S
         )
-        if result is not None:
+        if result is None:
+            outcome = ("none", None)
+        else:
             _store_graph(result)
+            outcome = ("ok", result)
     except Exception as e:  # noqa: BLE001 - callers keep the last good graph
         _graph_pg_failed_at = time.time()
         try:
+            text = f"{type(e).__name__}: {e}"[:300]
+        except Exception:  # noqa: BLE001
+            text = "unprintable error"
+        _graph_pg_last_error = text
+        outcome = ("err", text)
+        try:
             logger.warning(
-                "palace_graph: background rebuild failed (%s); serving the last good graph.", e
+                "palace_graph: background rebuild failed (%s); serving the last good graph.", text
             )
         except Exception:  # noqa: BLE001
             pass
     finally:
         with _graph_cache_lock:
+            _graph_bg_outcome = (threading.current_thread(), outcome)
             _graph_refreshing = False
 
 
