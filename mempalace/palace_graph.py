@@ -86,7 +86,18 @@ _GRAPH_PG_RETRY_AFTER = 30.0
 # familiar, 2026-10-20) and timed out under load. A new room shows up at most
 # this late.
 _graph_last_good_at = 0.0
-_GRAPH_PG_SERVE_RECENT_S = 300.0
+_GRAPH_PG_SERVE_RECENT_S = 900.0
+# Once a graph exists, a rebuild never runs in a caller: it runs in ONE background
+# thread with its own statement timeout, and callers get the last good graph at
+# once. Measured on familiar 2026-11-18: the aggregate took 100 s (1.46M drawers,
+# a 750 MB on-disk sort) against the role's 30 s statement_timeout, so every
+# synchronous rebuild timed out (55 timeouts in 7 h, 100 s of I/O each) and the
+# graph never refreshed. Only a caller with no graph at all still waits.
+_GRAPH_PG_BACKGROUND_TIMEOUT_S = 300.0
+# After a failed background rebuild, the next one waits this long.
+_GRAPH_PG_BACKGROUND_RETRY_S = 600.0
+_graph_refreshing = False
+_graph_refresh_thread = None  # the running (or last) rebuild thread; tests join it
 
 
 class GraphUnavailableError(RuntimeError):
@@ -233,10 +244,10 @@ def _build_graph_postgres_once(col, config=None):
                 and (time.time() - _graph_cache_time) < _GRAPH_CACHE_TTL
             ):
                 return _graph_cache_nodes, _graph_cache_edges
-        if (
-            _graph_last_good is not None
-            and time.time() - _graph_last_good_at < _GRAPH_PG_SERVE_RECENT_S
-        ):
+        if _graph_last_good is not None:
+            # A graph exists: never make a caller wait on (or time out in) a rebuild.
+            if time.time() - _graph_last_good_at >= _GRAPH_PG_SERVE_RECENT_S:
+                _start_background_rebuild(col, config)
             return _graph_last_good
         if time.time() - _graph_pg_failed_at < _GRAPH_PG_RETRY_AFTER:
             return _last_good_or_raise("failed less than %ds ago" % _GRAPH_PG_RETRY_AFTER)
@@ -247,15 +258,65 @@ def _build_graph_postgres_once(col, config=None):
             return _last_good_or_raise(e)
         if pg_result is None:
             return None
-        pg_nodes, pg_edges = pg_result
-        if pg_nodes:
-            with _graph_cache_lock:
-                _graph_cache_nodes = pg_nodes
-                _graph_cache_edges = pg_edges
-                _graph_cache_time = time.time()
-            _graph_last_good = (pg_nodes, pg_edges)
-            _graph_last_good_at = time.time()
-        return pg_nodes, pg_edges
+        _store_graph(pg_result)
+        return pg_result
+
+
+def _store_graph(result) -> None:
+    """Cache a graph an aggregate produced and keep it as the last good one (an empty one is not kept)."""
+    global _graph_cache_nodes, _graph_cache_edges, _graph_cache_time
+    global _graph_last_good, _graph_last_good_at
+    nodes, edges = result
+    if not nodes:
+        return
+    with _graph_cache_lock:
+        _graph_cache_nodes = nodes
+        _graph_cache_edges = edges
+        _graph_cache_time = time.time()
+        _graph_last_good = (nodes, edges)
+        _graph_last_good_at = time.time()
+
+
+def _start_background_rebuild(col, config=None) -> None:
+    """Start ONE background rebuild unless one is running or the last one failed within
+    ``_GRAPH_PG_BACKGROUND_RETRY_S``. Best effort: never raises (a thread that cannot start
+    clears the flag, so a later caller retries)."""
+    global _graph_refreshing, _graph_refresh_thread
+    with _graph_cache_lock:
+        if _graph_refreshing or time.time() - _graph_pg_failed_at < _GRAPH_PG_BACKGROUND_RETRY_S:
+            return
+        _graph_refreshing = True
+    try:
+        t = threading.Thread(
+            target=_background_rebuild, args=(col, config), name="palace-graph-rebuild", daemon=True
+        )
+        t.start()
+        _graph_refresh_thread = t
+    except Exception as e:  # noqa: BLE001 - e.g. "can't start new thread"
+        with _graph_cache_lock:
+            _graph_refreshing = False
+        logger.warning("palace_graph: background rebuild could not start (%s)", type(e).__name__)
+
+
+def _background_rebuild(col, config=None) -> None:
+    global _graph_refreshing, _graph_pg_failed_at
+    try:
+        result = _build_graph_postgres(
+            col, config, statement_timeout_s=_GRAPH_PG_BACKGROUND_TIMEOUT_S
+        )
+        if result is not None:
+            _store_graph(result)
+    except Exception as e:  # noqa: BLE001 - callers keep the last good graph
+        _graph_pg_failed_at = time.time()
+        try:
+            logger.warning(
+                "palace_graph: background rebuild failed (%s); serving the last good graph.", e
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        with _graph_cache_lock:
+            _graph_refreshing = False
 
 
 def _get_collection(config=None):
@@ -270,7 +331,7 @@ def _get_collection(config=None):
         return None
 
 
-def _build_graph_postgres(col, config=None) -> tuple[dict, list]:
+def _build_graph_postgres(col, config=None, statement_timeout_s=None) -> tuple[dict, list]:
     """Postgres-direct aggregate path for build_graph.
 
     Replaces the chroma walk-and-accumulate pattern with a single SQL
@@ -311,20 +372,29 @@ def _build_graph_postgres(col, config=None) -> tuple[dict, list]:
     # path also drops (empty wing, empty room, room == 'general').
     # array_agg(DISTINCT wing ORDER BY wing) keeps wings sorted to match
     # the chroma path's ``sorted(data["wings"])`` spec.
+    # Two levels: group the narrow (room, wing, hall, date) projection first,
+    # then fold per room. One level sorted every drawer WITH its metadata by
+    # (room, wing): 514 bytes a row, a 750 MB on-disk sort for 1.46M drawers
+    # (familiar 2026-11-18). Same results: every outer array is DISTINCT, and
+    # COUNT(*) becomes the sum of the group counts.
     sql = f"""
+        WITH g AS (
+            SELECT room, wing,
+                   NULLIF(metadata->>'hall', '') AS hall,
+                   NULLIF(metadata->>'date', '') AS d,
+                   COUNT(*) AS n
+            FROM "{table_name}"
+            WHERE wing IS NOT NULL AND wing <> ''
+              AND room IS NOT NULL AND room <> '' AND room <> 'general'
+            GROUP BY 1, 2, 3, 4
+        )
         SELECT
             room,
             array_agg(DISTINCT wing ORDER BY wing) AS wings,
-            array_agg(DISTINCT NULLIF(metadata->>'hall', '')) FILTER (
-                WHERE NULLIF(metadata->>'hall', '') IS NOT NULL
-            ) AS halls,
-            COUNT(*) AS cnt,
-            (array_agg(DISTINCT NULLIF(metadata->>'date', '')) FILTER (
-                WHERE NULLIF(metadata->>'date', '') IS NOT NULL
-            ))[1:5] AS dates_sample
-        FROM "{table_name}"
-        WHERE wing IS NOT NULL AND wing <> ''
-          AND room IS NOT NULL AND room <> '' AND room <> 'general'
+            array_agg(DISTINCT hall) FILTER (WHERE hall IS NOT NULL) AS halls,
+            SUM(n)::bigint AS cnt,
+            (array_agg(DISTINCT d) FILTER (WHERE d IS NOT NULL))[1:5] AS dates_sample
+        FROM g
         GROUP BY room
     """
     conn = psycopg2.connect(dsn)
@@ -333,6 +403,10 @@ def _build_graph_postgres(col, config=None) -> tuple[dict, list]:
     try:
         with conn:
             with conn.cursor() as cur:
+                if statement_timeout_s is not None:
+                    # this transaction only; the role's default (30 s on familiar) stays for the rest
+                    ms = max(1, int(round(float(statement_timeout_s) * 1000)))
+                    cur.execute(f"SET LOCAL statement_timeout = {ms}")
                 cur.execute(sql)
                 for room, wings, halls, cnt, dates in cur.fetchall():
                     wings = list(wings or [])
