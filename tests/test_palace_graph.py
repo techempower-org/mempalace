@@ -459,6 +459,34 @@ class TestPostgresFastPath:
         finally:
             conn.close()
 
+    def test_postgres_aggregate_sets_its_statement_timeout_only_when_asked(self):
+        from mempalace import palace_graph as pg
+
+        col = MagicMock()
+        col.dsn = "postgresql://test@example/test"
+        col.table_name = "mempalace_drawers"
+        fake_cursor = MagicMock()
+        fake_cursor.fetchall.return_value = [("r", ["w1"], None, 1, None)]
+        fake_cursor.__enter__ = lambda s: s
+        fake_cursor.__exit__ = lambda s, *a: None
+        fake_conn = MagicMock()
+        fake_conn.cursor.return_value = fake_cursor
+        fake_conn.__enter__ = lambda s: s
+        fake_conn.__exit__ = lambda s, *a: None
+        fake_psycopg2 = MagicMock()
+        fake_psycopg2.connect.return_value = fake_conn
+        with patch(
+            "mempalace.backends.postgres._load_psycopg2", return_value=(fake_psycopg2, None)
+        ):
+            pg._build_graph_postgres(col)
+            plain = [c.args[0] for c in fake_cursor.execute.call_args_list]
+            fake_cursor.execute.reset_mock()
+            pg._build_graph_postgres(col, statement_timeout_s=300)
+            timed = [c.args[0] for c in fake_cursor.execute.call_args_list]
+        assert not any("statement_timeout" in s for s in plain)
+        assert timed[0] == "SET LOCAL statement_timeout = 300000"
+        assert len(timed) == 2 and "GROUP BY room" in timed[1]
+
     def test_chroma_collection_keeps_walk_path(self):
         """Chroma collections don't have a dsn attribute, so the postgres
         fast path correctly skips. MagicMock collections in unit tests also

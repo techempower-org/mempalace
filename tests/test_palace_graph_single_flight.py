@@ -125,13 +125,121 @@ def test_a_write_within_the_window_does_not_rerun_the_aggregate():
     assert agg.call_count == 1
 
 
-def test_after_the_window_a_write_rebuilds():
+def _join_rebuild():
+    t = pg._graph_refresh_thread
+    if t is not None:
+        t.join(5)
+        assert not t.is_alive(), "background rebuild did not finish"
+
+
+@pytest.fixture(autouse=True)
+def _no_rebuild_state():
+    pg._graph_last_good = None
+    pg._graph_last_good_at = 0.0
+    pg._graph_pg_failed_at = 0.0
+    pg._graph_refreshing = False
+    yield
+    _join_rebuild()
+    pg._graph_last_good = None
+    pg._graph_last_good_at = 0.0
+    pg._graph_pg_failed_at = 0.0
+    pg._graph_refreshing = False
+    pg._graph_refresh_thread = None
+
+
+NEWER = ({"room_b": {"wings": ["w3"], "halls": [], "count": 1, "dates": []}}, [])
+
+
+def _age_the_good_graph():
+    invalidate_graph_cache()  # a mine write
+    pg._graph_last_good_at = time.time() - pg._GRAPH_PG_SERVE_RECENT_S - 1
+
+
+def test_after_the_window_a_caller_gets_the_last_good_graph_at_once_and_a_background_rebuild_replaces_it():
     col = _pg_col()
-    newer = ({"room_b": {"wings": ["w3"], "halls": [], "count": 1, "dates": []}}, [])
     with patch.object(pg, "_build_graph_postgres", return_value=GOOD):
         build_graph(col=col)
-    invalidate_graph_cache()
-    pg._graph_last_good_at = time.time() - pg._GRAPH_PG_SERVE_RECENT_S - 1
-    with patch.object(pg, "_build_graph_postgres", return_value=newer) as agg:
-        assert build_graph(col=col) == newer
+    _age_the_good_graph()
+    release = threading.Event()
+
+    def slow(_col, _config=None, statement_timeout_s=None):
+        release.wait(5)
+        return NEWER
+
+    with patch.object(pg, "_build_graph_postgres", side_effect=slow) as agg:
+        t0 = time.monotonic()
+        assert build_graph(col=col) == GOOD  # did not wait for the rebuild
+        assert time.monotonic() - t0 < 1.0
+        release.set()
+        _join_rebuild()
+        assert build_graph(col=col) == NEWER
+    assert agg.call_count == 1
+
+
+def test_the_background_rebuild_has_its_own_longer_statement_timeout():
+    col = _pg_col()
+    with patch.object(pg, "_build_graph_postgres", return_value=GOOD) as cold:
+        build_graph(col=col)
+    # a caller that waits (no graph yet) keeps the role's limit
+    assert cold.call_args.kwargs.get("statement_timeout_s") is None
+    _age_the_good_graph()
+    with patch.object(pg, "_build_graph_postgres", return_value=NEWER) as agg:
+        build_graph(col=col)
+        _join_rebuild()
+    assert agg.call_args.kwargs["statement_timeout_s"] == pg._GRAPH_PG_BACKGROUND_TIMEOUT_S
+    assert pg._GRAPH_PG_BACKGROUND_TIMEOUT_S > 30
+
+
+def test_callers_during_a_rebuild_start_no_second_one():
+    col = _pg_col()
+    with patch.object(pg, "_build_graph_postgres", return_value=GOOD):
+        build_graph(col=col)
+    _age_the_good_graph()
+    release = threading.Event()
+
+    def slow(_col, _config=None, statement_timeout_s=None):
+        release.wait(5)
+        return NEWER
+
+    with patch.object(pg, "_build_graph_postgres", side_effect=slow) as agg:
+        results = [build_graph(col=col) for _ in range(6)]
+        release.set()
+        _join_rebuild()
+    assert results == [GOOD] * 6
+    assert agg.call_count == 1
+
+
+def test_a_failed_background_rebuild_keeps_the_last_good_graph_and_backs_off():
+    col = _pg_col()
+    with patch.object(pg, "_build_graph_postgres", return_value=GOOD):
+        build_graph(col=col)
+    _age_the_good_graph()
+    with patch.object(
+        pg, "_build_graph_postgres", side_effect=RuntimeError("statement timeout")
+    ) as agg:
+        assert build_graph(col=col) == GOOD
+        _join_rebuild()
+        for _ in range(3):
+            assert build_graph(col=col) == GOOD
+            _join_rebuild()
+    assert agg.call_count == 1  # no retry inside _GRAPH_PG_BACKGROUND_RETRY_S
+    pg._graph_pg_failed_at = time.time() - pg._GRAPH_PG_BACKGROUND_RETRY_S - 1
+    with patch.object(pg, "_build_graph_postgres", return_value=NEWER) as agg2:
+        build_graph(col=col)
+        _join_rebuild()
+    assert agg2.call_count == 1
+    col.get.assert_not_called()
+
+
+def test_a_rebuild_whose_thread_cannot_start_is_retried_by_a_later_caller():
+    col = _pg_col()
+    with patch.object(pg, "_build_graph_postgres", return_value=GOOD):
+        build_graph(col=col)
+    _age_the_good_graph()
+    with patch.object(pg.threading, "Thread", side_effect=RuntimeError("no more threads")):
+        assert build_graph(col=col) == GOOD
+    assert pg._graph_refreshing is False
+    with patch.object(pg, "_build_graph_postgres", return_value=NEWER) as agg:
+        build_graph(col=col)
+        _join_rebuild()
     assert agg.call_count == 1
