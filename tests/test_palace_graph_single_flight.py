@@ -294,3 +294,16 @@ def test_a_cold_build_that_fails_raises_its_reason_and_is_retried_after_the_shor
     with patch.object(pg, "_build_graph_postgres", return_value=GOOD) as agg:
         assert build_graph(col=col) == GOOD
     assert agg.call_count == 1
+
+
+def test_a_twenty_minute_old_graph_is_served_without_a_rebuild():
+    """Rebuilds read the whole drawers table: at most hourly (2026-11-18, familiar's disk)."""
+    col = _pg_col()
+    with patch.object(pg, "_build_graph_postgres", return_value=GOOD):
+        build_graph(col=col)
+    invalidate_graph_cache()  # a mine write
+    pg._graph_last_good_at = time.time() - 20 * 60
+    with patch.object(pg, "_build_graph_postgres", return_value=NEWER) as agg:
+        assert build_graph(col=col) == GOOD
+        _join_rebuild()
+    assert agg.call_count == 0
