@@ -84,9 +84,11 @@ _GRAPH_PG_RETRY_AFTER = 30.0
 # empties the cache above. Every mine write invalidates, so without it the
 # aggregate re-ran on nearly every graph_stats call (about 85 an hour on
 # familiar, 2026-10-20) and timed out under load. A new room shows up at most
-# this late.
+# this late. Hourly since 2026-11-18: each background rebuild reads the whole
+# drawers table (2.8 GB heap on familiar), and at 15 min that was ~3-4 MB/s of
+# steady reads on a disk already stalling interactive work.
 _graph_last_good_at = 0.0
-_GRAPH_PG_SERVE_RECENT_S = 900.0
+_GRAPH_PG_SERVE_RECENT_S = 3600.0
 # Once a graph exists, a rebuild never runs in a caller: it runs in ONE background
 # thread with its own statement timeout, and callers get the last good graph at
 # once. Measured on familiar 2026-11-18: the aggregate took 100 s (1.46M drawers,
