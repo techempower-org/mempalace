@@ -18,6 +18,16 @@ change the configured model — when the two differ it prints how to align
 ``MEMPALACE_EMBEDDING_MODEL``. ``--force`` overwrites an existing,
 differently-named identity.
 
+### `cmd_lookup_indexes`
+
+```python
+def cmd_lookup_indexes(args)
+```
+
+Postgres only: build the missing metadata lookup indexes online, ANALYZE, and check each plan uses its index.
+
+Exit 0 when every key has a valid index whose plan uses it; 1 when a plan does not; 2 for another backend.
+
 ### `cmd_repair_status`
 
 ```python

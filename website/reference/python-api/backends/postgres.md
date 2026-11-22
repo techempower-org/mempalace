@@ -180,6 +180,25 @@ older palace only has it if an operator built it, so ask ``pg_index``
 rather than assume it from the backend type. Only True is cached: a
 palace whose index is built later is found on the next check.
 
+#### `ensure_lookup_indexes`
+
+```python
+def ensure_lookup_indexes(self, *, dry_run: bool = False, plan_check_min_pages: int = 1000) -> list[dict]
+```
+
+Build every missing lookup index (LOOKUP_INDEX_KEYS) on an existing palace, online.
+
+For each key without a valid index: drop an INVALID leftover of a failed build under the lookup name, then
+``CREATE INDEX CONCURRENTLY``. If anything was built, ``ANALYZE`` the table: an expression index has no
+statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
+judged-parent indexes went unused until ANALYZE). Then a plain ``EXPLAIN`` (nothing executes) of each
+key's lookup shape records whether the plan uses its index. All on a side connection with
+``statement_timeout`` lifted for that session only: the role's own timeout would cancel the build.
+
+Returns one dict per key: key, index, state (present | built | missing in a dry run), plan_uses_index. On a
+table smaller than ``plan_check_min_pages`` a scan is cheaper than any index, so the plan is not judged
+there (plan_uses_index None, plan_note "small table").
+
 ### `class PostgresBackend(BaseBackend)`
 
 Factory for optional PostgreSQL collections.
@@ -219,3 +238,13 @@ def health(self, palace: Optional[PalaceRef] = None) -> HealthStatus
 ```python
 def detect(cls, path: str) -> bool
 ```
+
+## Functions
+
+### `lookup_index_name`
+
+```python
+def lookup_index_name(table_name: str, key: str) -> str
+```
+
+source_file keeps its original name; the others are ``&lt;table>_meta_&lt;key>_idx``.

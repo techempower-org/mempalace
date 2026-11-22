@@ -397,3 +397,105 @@ def test_new_collection_indexes_source_file_and_reports_it(tmp_path, caplog):
         with conn.cursor() as cur:
             cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
         conn.close()
+
+
+def _lookup_table(tmp_path, rows=20000):
+    """A new collection plus ``rows`` drawers inserted in SQL: 1 in 50 with parent_drawer_id, 1 in 50 with
+    parent_entry_id, the rest with source_file only (the production mix is ~98.6 % without a parent key)."""
+    import uuid
+
+    import psycopg
+
+    col = get_backend("postgres").get_collection(
+        palace=_palace_ref(str(tmp_path)),
+        collection_name=f"lk_idx_{uuid.uuid4().hex[:8]}",
+        create=True,
+        options={"dsn": POSTGRES_DSN},
+    )
+    col.add(ids=["seed"], documents=["d"], metadatas=[{"wing": "w"}], embeddings=[[0.0] * 384])
+    conn = psycopg.connect(POSTGRES_DSN, autocommit=True)
+    with conn.cursor() as cur:
+        cur.execute(
+            f'INSERT INTO "{col.table_name}" (id, wing, room, document, metadata) '
+            "SELECT 'd' || lpad(g::text, 8, '0'), 'w', 'r', 'x', CASE "
+            "WHEN g %% 50 = 0 THEN jsonb_build_object('parent_drawer_id', 'p' || g) "
+            "WHEN g %% 50 = 1 THEN jsonb_build_object('parent_entry_id', 'e' || g) "
+            "ELSE jsonb_build_object('source_file', '/f/' || (g %% 300)) END "
+            "FROM generate_series(1, %s) g ORDER BY random()",
+            (rows,),
+        )
+    return col, conn
+
+
+def test_a_new_collection_gets_every_lookup_index(tmp_path):
+    """source_file, parent_drawer_id and parent_entry_id each get their expression index at CREATE TABLE."""
+    from mempalace.backends import postgres as pg
+
+    col, conn = _lookup_table(tmp_path, rows=0)
+    try:
+        report = col.ensure_lookup_indexes(dry_run=True)
+        assert [(r["key"], r["state"]) for r in report] == [
+            (k, "present") for k in pg.LOOKUP_INDEX_KEYS
+        ]
+        assert report[1]["index"] == f"{col.table_name}_meta_parent_drawer_id_idx"
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
+
+
+def test_an_existing_palace_builds_the_missing_ones_analyzes_and_its_plans_use_them(tmp_path):
+    """The 2026-11-21 production gap: a palace created before the parent-id indexes. ensure_lookup_indexes builds
+    them CONCURRENTLY, ANALYZEs (an expression index has no statistics until then, and the planner keeps its
+    default guess), and the judged-parent lookup's plan uses each index. A rerun builds nothing."""
+    col, conn = _lookup_table(tmp_path)
+    try:
+        with conn.cursor() as cur:
+            for key in ("parent_drawer_id", "parent_entry_id"):
+                cur.execute(f'DROP INDEX "{col.table_name}_meta_{key}_idx"')
+        dry = col.ensure_lookup_indexes(dry_run=True)
+        assert [r["state"] for r in dry] == ["present", "missing", "missing"]
+
+        report = col.ensure_lookup_indexes(plan_check_min_pages=0)
+        assert [r["state"] for r in report] == ["present", "built", "built"]
+        assert all(r["plan_uses_index"] for r in report), report
+        with conn.cursor() as cur:
+            for r in report[1:]:
+                cur.execute("SELECT count(*) FROM pg_stats WHERE tablename = %s", (r["index"],))
+                assert cur.fetchone()[0] > 0, f"{r['index']} has no statistics: ANALYZE did not run"
+
+        again = col.ensure_lookup_indexes(plan_check_min_pages=0)
+        assert [r["state"] for r in again] == ["present"] * 3
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
+
+
+def test_an_invalid_leftover_is_dropped_and_rebuilt(tmp_path):
+    """A failed CREATE INDEX CONCURRENTLY leaves an INVALID index under the lookup name; it is not counted as
+    present, and the next run drops and rebuilds it."""
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    name = f"{col.table_name}_meta_parent_entry_id_idx"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX "{name}"')
+            cur.execute(
+                f'CREATE INDEX "{name}" ON "{col.table_name}" ((metadata->>\'parent_entry_id\'))'
+            )
+            cur.execute(
+                "UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(%s)", (name,)
+            )
+        assert [r["state"] for r in col.ensure_lookup_indexes(dry_run=True)][2] == "missing"
+        report = col.ensure_lookup_indexes()
+        assert report[2]["state"] == "built"
+        assert report[2]["plan_note"] == "small table"
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(%s)", (name,)
+            )
+            assert cur.fetchone()[0] is True
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()

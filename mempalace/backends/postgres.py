@@ -46,6 +46,23 @@ VECTOR_INDEX_CHECK_INTERVAL_ROWS = 1_000
 # names it once instead of on every prefetch (#567).
 _WARNED_NO_SOURCE_FILE_INDEX: set = set()
 
+# Metadata keys the backend looks rows up by with `metadata->>'<key>' = / IN (…)`, each served by a btree expression
+# index. source_file: the per-file lookups (#567). parent_drawer_id / parent_entry_id: the search path's judged-parent
+# lookup (searcher/query.py _PARENT_ID_KEYS), which asks for ids that are missing by construction, so without an
+# index it walked the primary key over every row until the statement timeout (2026-11-21: 104 cancellations in 24 h,
+# a 64.7 s search).
+LOOKUP_INDEX_KEYS = ("source_file", "parent_drawer_id", "parent_entry_id")
+
+
+def lookup_index_name(table_name: str, key: str) -> str:
+    """source_file keeps its original name; the others are ``<table>_meta_<key>_idx``."""
+    if key not in LOOKUP_INDEX_KEYS:
+        raise ValueError(f"not a lookup index key: {key!r}")
+    return (
+        f"{table_name}_source_file_idx" if key == "source_file" else f"{table_name}_meta_{key}_idx"
+    )
+
+
 # Set once the first time a resolved embedder's width disagrees with the
 # column's, so the mismatch is named on the batch that discovers it rather
 # than on every batch after.
@@ -1507,6 +1524,117 @@ class PostgresCollection(BaseCollection):
             )
         return found
 
+    def _lookup_index_state(self, cur, key: str) -> Optional[bool]:
+        """True: a valid, non-partial btree leads with ``metadata->>'<key>'``. False: only an INVALID one under the
+        lookup name exists (a failed CONCURRENTLY build). None: neither."""
+        cur.execute(
+            """
+            SELECT idx.indisvalid, ix.relname = %s
+            FROM pg_index idx
+            JOIN pg_class t ON t.oid = idx.indrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN pg_class ix ON ix.oid = idx.indexrelid
+            JOIN pg_am am ON am.oid = ix.relam
+            WHERE n.nspname = current_schema()
+              AND t.relname = %s
+              AND am.amname = 'btree'
+              AND idx.indpred IS NULL
+              AND btrim(pg_get_indexdef(idx.indexrelid, 1, false), '()')
+                  = 'metadata ->> ' || quote_literal(%s) || '::text'
+            """,
+            (lookup_index_name(self.table_name, key), self.table_name, key),
+        )
+        rows = cur.fetchall()
+        if any(valid for valid, _ in rows):
+            return True
+        if any(named for _, named in rows):
+            return False
+        return None
+
+    def ensure_lookup_indexes(
+        self, *, dry_run: bool = False, plan_check_min_pages: int = 1000
+    ) -> list[dict]:
+        """Build every missing lookup index (LOOKUP_INDEX_KEYS) on an existing palace, online.
+
+        For each key without a valid index: drop an INVALID leftover of a failed build under the lookup name, then
+        ``CREATE INDEX CONCURRENTLY``. If anything was built, ``ANALYZE`` the table: an expression index has no
+        statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
+        judged-parent indexes went unused until ANALYZE). Then a plain ``EXPLAIN`` (nothing executes) of each
+        key's lookup shape records whether the plan uses its index. All on a side connection with
+        ``statement_timeout`` lifted for that session only: the role's own timeout would cancel the build.
+
+        Returns one dict per key: key, index, state (present | built | missing in a dry run), plan_uses_index. On a
+        table smaller than ``plan_check_min_pages`` a scan is cheaper than any index, so the plan is not judged
+        there (plan_uses_index None, plan_note "small table").
+        """
+        psycopg2, _sql = _load_psycopg2()
+        conn = psycopg2.connect(self.dsn)
+        conn.autocommit = True  # CREATE INDEX CONCURRENTLY cannot run inside a transaction
+        report = []
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SET statement_timeout = 0")
+                cur.execute("SET lock_timeout = '60s'")
+                built = False
+                for key in LOOKUP_INDEX_KEYS:
+                    name = lookup_index_name(self.table_name, key)
+                    state = self._lookup_index_state(cur, key)
+                    if state is True:
+                        report.append({"key": key, "index": name, "state": "present"})
+                        continue
+                    if dry_run:
+                        report.append({"key": key, "index": name, "state": "missing"})
+                        continue
+                    if state is False:
+                        cur.execute(
+                            _sql.SQL("DROP INDEX CONCURRENTLY IF EXISTS {}").format(
+                                _sql.Identifier(name)
+                            )
+                        )
+                    cur.execute(
+                        _sql.SQL(
+                            "CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ((metadata->>{}))"
+                        ).format(
+                            _sql.Identifier(name),
+                            _sql.Identifier(self.table_name),
+                            _sql.Literal(key),
+                        )
+                    )
+                    if self._lookup_index_state(cur, key) is not True:
+                        raise RuntimeError(f"{name} is not valid after CREATE INDEX CONCURRENTLY")
+                    report.append({"key": key, "index": name, "state": "built"})
+                    built = True
+                if built:
+                    cur.execute(_sql.SQL("ANALYZE {}").format(_sql.Identifier(self.table_name)))
+                cur.execute(
+                    "SELECT relpages FROM pg_class WHERE oid = to_regclass(%s)", (self.table_name,)
+                )
+                pages = (cur.fetchone() or [0])[0] or 0
+                small = pages < plan_check_min_pages
+                if not dry_run and small:
+                    for row in report:
+                        row["plan_uses_index"] = None
+                        row["plan_note"] = "small table"
+                if not dry_run and not small:
+                    for row in report:
+                        cur.execute(
+                            _sql.SQL(
+                                "EXPLAIN SELECT id FROM {} WHERE metadata->>{} IN ({}, {}) ORDER BY id LIMIT 256"
+                            ).format(
+                                _sql.Identifier(self.table_name),
+                                _sql.Literal(row["key"]),
+                                _sql.Literal("lookup-index-probe-1"),
+                                _sql.Literal("lookup-index-probe-2"),
+                            )
+                        )
+                        plan = "\n".join(r[0] for r in cur.fetchall())
+                        row["plan_uses_index"] = row["index"] in plan
+        finally:
+            conn.close()
+        if any(r["key"] == "source_file" and r["state"] in ("present", "built") for r in report):
+            self._source_file_indexed = True
+        return report
+
     def _ensure_setup(self, *, create: bool = True) -> None:
         if self._setup_done:
             return
@@ -1608,12 +1736,16 @@ class PostgresCollection(BaseCollection):
         # before a re-file) compiles to `metadata->>'source_file' = %s`. The metadata GIN
         # serves `@>`, not `->>`, so without this each one is a sequential scan: ~24 s on a
         # 1.16M-drawer palace (#567). An existing palace builds it once, CONCURRENTLY.
-        cur.execute(
-            self._sql.SQL("CREATE INDEX {} ON {} ((metadata->>'source_file'))").format(
-                self._sql.Identifier(f"{self.table_name}_source_file_idx"),
-                self._table_id,
+        # The same for the other lookup keys (LOOKUP_INDEX_KEYS). An existing palace builds the missing ones with
+        # ensure_lookup_indexes() (`mempalace lookup-indexes`), CONCURRENTLY and followed by ANALYZE.
+        for key in LOOKUP_INDEX_KEYS:
+            cur.execute(
+                self._sql.SQL("CREATE INDEX {} ON {} ((metadata->>{}))").format(
+                    self._sql.Identifier(lookup_index_name(self.table_name, key)),
+                    self._table_id,
+                    self._sql.Literal(key),
+                )
             )
-        )
 
         logger.info(
             "Created PostgreSQL collection %s (%s, %s)",
