@@ -204,7 +204,8 @@ not raised. Then ``ANALYZE`` the table, on every run that is not a dry run: an e
 statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
 judged-parent indexes went unused until ANALYZE), so a palace whose indexes exist without statistics is
 repaired by a rerun. Then ``EXPLAIN`` (nothing executes) of the statement get() sends for the judged-parent
-lookup records whether its plan uses one of the key's valid indexes, twice: the per-value plan
+lookup (on parent_drawer_id and parent_entry_id; source_file's lookups have other shapes, so its plan is not
+judged with this one) records whether its plan uses one of the key's valid indexes, twice: the per-value plan
 (plan_uses_index) and the generic plan a prepared statement can be given (generic_plan_uses_index). The key
 is inlined in that statement (_field_filter_to_sql), which is what lets the generic plan use the index.
 
