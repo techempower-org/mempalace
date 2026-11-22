@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 from collections import OrderedDict
@@ -52,6 +53,24 @@ _WARNED_NO_SOURCE_FILE_INDEX: set = set()
 # index it walked the primary key over every row until the statement timeout (2026-11-21: 104 cancellations in 24 h,
 # a 64.7 s search).
 LOOKUP_INDEX_KEYS = ("source_file", "parent_drawer_id", "parent_entry_id")
+
+# The plan check EXPLAINs the judged-parent lookup as get() sends it: where={key: {"$in": ids}}, include=["metadatas"],
+# limit = searcher/query.py _JUDGED_PARENT_ROW_LIMIT (a test keeps the two equal). The ids are never real ones.
+_LOOKUP_PROBE_IDS = ("lookup-index-probe-1", "lookup-index-probe-2")
+_LOOKUP_PROBE_LIMIT = 256
+
+
+class LookupIndexesBusy(RuntimeError):
+    """Another ensure_lookup_indexes run holds this table's advisory lock."""
+
+
+def _plan_names_index(plan: str, index: str) -> bool:
+    """True when an EXPLAIN text scans ``index``: "Index Scan using <name> on", "Index Only Scan using <name>",
+    "Bitmap Index Scan on <name>". A whole-word match, so one index name inside a longer one does not count."""
+    quoted = re.escape(index)
+    return (
+        re.search(rf'(?:\busing|Bitmap Index Scan on) "?{quoted}"?(?=\s|$)', plan, re.M) is not None
+    )
 
 
 def lookup_index_name(table_name: str, key: str) -> str:
@@ -935,20 +954,6 @@ class PostgresCollection(BaseCollection):
         self._ensure_setup(create=True)
 
         spec = _IncludeSpec.resolve(include, default_distances=False)
-        clauses = []
-        params: list[Any] = []
-        if ids is not None:
-            placeholders = self._sql.SQL(", ").join(self._sql.Placeholder() for _ in ids)
-            clauses.append(self._sql.SQL("id IN ({})").format(placeholders))
-            params.extend(ids)
-        if where:
-            where_sql, where_params = self._where_to_sql(where)
-            if where_sql:
-                # Parenthesised: a top-level $or compiles to "(a) OR (b)", and
-                # ANDed with another clause unwrapped it would bind as
-                # "(a) OR ((b) AND ...)".
-                clauses.append(self._sql.SQL("({})").format(where_sql))
-                params.extend(where_params)
 
         # Keyset continuation: a page that starts where the previous page of
         # the same filter ended reads ``id > <last id>`` instead of OFFSET.
@@ -965,6 +970,44 @@ class PostgresCollection(BaseCollection):
             page_key = self._page_key(where)
             if offset:
                 resume_after = self._page_resume(page_key, int(offset))
+
+        statement, params = self._get_statement(
+            ids=ids, where=where, limit=limit, offset=offset, spec=spec, resume_after=resume_after
+        )
+        cur = self._cursor()
+        cur.execute(statement, params)
+        rows = cur.fetchall()
+        if page_key is not None and rows:
+            self._page_remember(page_key, int(offset or 0) + len(rows), rows[-1][0])
+
+        result_ids = [row[0] for row in rows]
+        documents = [row[1] for row in rows] if spec.documents else []
+        metadatas = (
+            [self._metadata_dict(row[2], row[3], row[4]) for row in rows] if spec.metadatas else []
+        )
+        embeddings = [_parse_vector_literal(row[5]) for row in rows] if spec.embeddings else None
+        return GetResult(
+            ids=result_ids, documents=documents, metadatas=metadatas, embeddings=embeddings
+        )
+
+    def _get_statement(self, *, ids, where, limit, offset, spec, resume_after):
+        """The SELECT that get() sends, and its parameters. ensure_lookup_indexes EXPLAINs this same statement, so
+        its plan check judges the plan the real lookup gets."""
+        clauses = []
+        params: list[Any] = []
+        if ids is not None:
+            placeholders = self._sql.SQL(", ").join(self._sql.Placeholder() for _ in ids)
+            clauses.append(self._sql.SQL("id IN ({})").format(placeholders))
+            params.extend(ids)
+        if where:
+            where_sql, where_params = self._where_to_sql(where)
+            if where_sql:
+                # Parenthesised: a top-level $or compiles to "(a) OR (b)", and
+                # ANDed with another clause unwrapped it would bind as
+                # "(a) OR ((b) AND ...)".
+                clauses.append(self._sql.SQL("({})").format(where_sql))
+                params.extend(where_params)
+
         if resume_after is not None:
             clauses.append(self._sql.SQL("id > %s"))
             params.append(resume_after)
@@ -999,33 +1042,18 @@ class PostgresCollection(BaseCollection):
         document_select = (
             self._sql.SQL("document") if spec.documents else self._sql.SQL("NULL::text")
         )
-
-        cur = self._cursor()
-        cur.execute(
-            self._sql.SQL("SELECT id, {}, wing, room, metadata{} FROM {} {} {} {} {}").format(
-                document_select,
-                embedding_select,
-                self._table_id,
-                where_clause,
-                order_clause,
-                limit_clause,
-                offset_clause,
-            ),
-            params,
+        statement = self._sql.SQL(
+            "SELECT id, {}, wing, room, metadata{} FROM {} {} {} {} {}"
+        ).format(
+            document_select,
+            embedding_select,
+            self._table_id,
+            where_clause,
+            order_clause,
+            limit_clause,
+            offset_clause,
         )
-        rows = cur.fetchall()
-        if page_key is not None and rows:
-            self._page_remember(page_key, int(offset or 0) + len(rows), rows[-1][0])
-
-        result_ids = [row[0] for row in rows]
-        documents = [row[1] for row in rows] if spec.documents else []
-        metadatas = (
-            [self._metadata_dict(row[2], row[3], row[4]) for row in rows] if spec.metadatas else []
-        )
-        embeddings = [_parse_vector_literal(row[5]) for row in rows] if spec.embeddings else None
-        return GetResult(
-            ids=result_ids, documents=documents, metadatas=metadatas, embeddings=embeddings
-        )
+        return statement, params
 
     def delete(
         self,
@@ -1524,12 +1552,14 @@ class PostgresCollection(BaseCollection):
             )
         return found
 
-    def _lookup_index_state(self, cur, key: str) -> Optional[bool]:
-        """True: a valid, non-partial btree leads with ``metadata->>'<key>'``. False: only an INVALID one under the
-        lookup name exists (a failed CONCURRENTLY build). None: neither."""
+    def _lookup_index_state(self, cur, key: str) -> tuple[Optional[bool], list[str]]:
+        """Discovery for one lookup key. (True, names): these valid, non-partial btrees lead with
+        ``metadata->>'<key>'``, whatever they are called. (False, []): no valid one, but an INVALID one sits under
+        the lookup name (a failed CONCURRENTLY build). (None, []): neither. The plan check accepts exactly the names
+        returned here, so discovery and the plan check use one rule."""
         cur.execute(
             """
-            SELECT idx.indisvalid, ix.relname = %s
+            SELECT ix.relname, idx.indisvalid
             FROM pg_index idx
             JOIN pg_class t ON t.oid = idx.indrelid
             JOIN pg_namespace n ON n.oid = t.relnamespace
@@ -1541,94 +1571,167 @@ class PostgresCollection(BaseCollection):
               AND idx.indpred IS NULL
               AND btrim(pg_get_indexdef(idx.indexrelid, 1, false), '()')
                   = 'metadata ->> ' || quote_literal(%s) || '::text'
+            ORDER BY ix.relname = %s DESC, ix.relname
             """,
-            (lookup_index_name(self.table_name, key), self.table_name, key),
+            (self.table_name, key, lookup_index_name(self.table_name, key)),
         )
         rows = cur.fetchall()
-        if any(valid for valid, _ in rows):
-            return True
-        if any(named for _, named in rows):
-            return False
-        return None
+        valid = [name for name, ok in rows if ok]
+        if valid:
+            return True, valid
+        if any(name == lookup_index_name(self.table_name, key) for name, _ in rows):
+            return False, []
+        return None, []
+
+    def _named_index_valid(self, cur, name: str) -> Optional[bool]:
+        """indisvalid of the index called ``name`` on this table, or None when there is none."""
+        cur.execute(
+            """
+            SELECT idx.indisvalid
+            FROM pg_index idx
+            JOIN pg_class ix ON ix.oid = idx.indexrelid
+            JOIN pg_class t ON t.oid = idx.indrelid
+            JOIN pg_namespace n ON n.oid = ix.relnamespace
+            WHERE n.nspname = current_schema() AND ix.relname = %s AND t.relname = %s
+            """,
+            (name, self.table_name),
+        )
+        row = cur.fetchone()
+        return None if row is None else bool(row[0])
+
+    def _build_lookup_index(self, cur, _sql, key: str, state: Optional[bool]) -> dict:
+        """Build one missing lookup index with CREATE INDEX CONCURRENTLY. A failure is reported, never raised: the
+        row gets state "failed" and the error, and an INVALID leftover under the lookup name is dropped in the same
+        run (``leftover``), so a rerun starts clean."""
+        name = lookup_index_name(self.table_name, key)
+        drop = _sql.SQL("DROP INDEX CONCURRENTLY IF EXISTS {}").format(_sql.Identifier(name))
+        try:
+            if state is False:
+                cur.execute(drop)
+            cur.execute(
+                _sql.SQL(
+                    "CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ((metadata->>{}))"
+                ).format(_sql.Identifier(name), _sql.Identifier(self.table_name), _sql.Literal(key))
+            )
+            now, valid = self._lookup_index_state(cur, key)
+            if now is not True:
+                raise RuntimeError(
+                    f"{name} is not a valid lookup index after CREATE INDEX CONCURRENTLY"
+                )
+        except Exception as exc:
+            row = {
+                "key": key,
+                "index": name,
+                "state": "failed",
+                "error": f"{type(exc).__name__}: {exc}".strip(),
+            }
+            try:
+                if self._named_index_valid(cur, name) is False:
+                    cur.execute(drop)
+                    row["leftover"] = "dropped"
+            except Exception as drop_exc:
+                row["leftover"] = (
+                    f"still there, drop failed: {type(drop_exc).__name__}: {drop_exc}".strip()
+                )
+            logger.error(
+                "lookup index %s failed: %s (leftover: %s)",
+                name,
+                row["error"],
+                row.get("leftover", "none"),
+            )
+            return row
+        return {
+            "key": key,
+            "index": name if name in valid else valid[0],
+            "state": "built",
+            "valid_indexes": valid,
+        }
 
     def ensure_lookup_indexes(
         self, *, dry_run: bool = False, plan_check_min_pages: int = 1000
     ) -> list[dict]:
         """Build every missing lookup index (LOOKUP_INDEX_KEYS) on an existing palace, online.
 
-        For each key without a valid index: drop an INVALID leftover of a failed build under the lookup name, then
-        ``CREATE INDEX CONCURRENTLY``. If anything was built, ``ANALYZE`` the table: an expression index has no
-        statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
-        judged-parent indexes went unused until ANALYZE). Then a plain ``EXPLAIN`` (nothing executes) of each
-        key's lookup shape records whether the plan uses its index. All on a side connection with
-        ``statement_timeout`` lifted for that session only: the role's own timeout would cancel the build.
+        All on a side connection with ``statement_timeout`` lifted for that session only (the role's own timeout
+        would cancel the build), holding a per-table advisory lock for the whole run, so two runs never drop or build
+        under each other; every state read happens under it. Raises LookupIndexesBusy when another run holds it.
 
-        Returns one dict per key: key, index, state (present | built | missing in a dry run), plan_uses_index. On a
-        table smaller than ``plan_check_min_pages`` a scan is cheaper than any index, so the plan is not judged
-        there (plan_uses_index None, plan_note "small table").
+        For each key without a valid index: drop an INVALID leftover under the lookup name, ``CREATE INDEX
+        CONCURRENTLY``, confirm it is valid. A failed build is reported (state "failed", ``error``, ``leftover``),
+        not raised. Then ``ANALYZE`` the table, on every run that is not a dry run: an expression index has no
+        statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
+        judged-parent indexes went unused until ANALYZE), so a palace whose indexes exist without statistics is
+        repaired by a rerun. Then a plain ``EXPLAIN`` (nothing executes) of the statement get() sends for the
+        judged-parent lookup records whether the plan uses one of the key's valid indexes.
+
+        Returns one dict per key: key, index, state (present | built | failed | missing in a dry run),
+        plan_uses_index. On a table smaller than ``plan_check_min_pages`` a scan is cheaper than any index, so the
+        plan is not judged there (plan_uses_index None, plan_note "small table").
         """
         psycopg2, _sql = _load_psycopg2()
         conn = psycopg2.connect(self.dsn)
         conn.autocommit = True  # CREATE INDEX CONCURRENTLY cannot run inside a transaction
         report = []
         try:
+            # The plan check below plans what get() sends; plan it under the same session settings get() has.
+            self._apply_session_settings(conn)
             with conn.cursor() as cur:
                 cur.execute("SET statement_timeout = 0")
                 cur.execute("SET lock_timeout = '60s'")
-                built = False
-                for key in LOOKUP_INDEX_KEYS:
-                    name = lookup_index_name(self.table_name, key)
-                    state = self._lookup_index_state(cur, key)
-                    if state is True:
-                        report.append({"key": key, "index": name, "state": "present"})
-                        continue
-                    if dry_run:
-                        report.append({"key": key, "index": name, "state": "missing"})
-                        continue
-                    if state is False:
-                        cur.execute(
-                            _sql.SQL("DROP INDEX CONCURRENTLY IF EXISTS {}").format(
-                                _sql.Identifier(name)
-                            )
-                        )
+                if not dry_run:
+                    # Session-level: held across the autocommit statements, released when the connection closes.
                     cur.execute(
-                        _sql.SQL(
-                            "CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ((metadata->>{}))"
-                        ).format(
-                            _sql.Identifier(name),
-                            _sql.Identifier(self.table_name),
-                            _sql.Literal(key),
-                        )
+                        "SELECT pg_try_advisory_lock(hashtextextended(%s, 0))",
+                        (f"mempalace.lookup_indexes:{self.table_name}",),
                     )
-                    if self._lookup_index_state(cur, key) is not True:
-                        raise RuntimeError(f"{name} is not valid after CREATE INDEX CONCURRENTLY")
-                    report.append({"key": key, "index": name, "state": "built"})
-                    built = True
-                if built:
-                    cur.execute(_sql.SQL("ANALYZE {}").format(_sql.Identifier(self.table_name)))
-                cur.execute(
-                    "SELECT relpages FROM pg_class WHERE oid = to_regclass(%s)", (self.table_name,)
-                )
-                pages = (cur.fetchone() or [0])[0] or 0
-                small = pages < plan_check_min_pages
-                if not dry_run and small:
-                    for row in report:
-                        row["plan_uses_index"] = None
-                        row["plan_note"] = "small table"
-                if not dry_run and not small:
-                    for row in report:
-                        cur.execute(
-                            _sql.SQL(
-                                "EXPLAIN SELECT id FROM {} WHERE metadata->>{} IN ({}, {}) ORDER BY id LIMIT 256"
-                            ).format(
-                                _sql.Identifier(self.table_name),
-                                _sql.Literal(row["key"]),
-                                _sql.Literal("lookup-index-probe-1"),
-                                _sql.Literal("lookup-index-probe-2"),
-                            )
+                    if not cur.fetchone()[0]:
+                        raise LookupIndexesBusy(
+                            f"another lookup-indexes run holds the lock on {self.table_name}; try again when it ends"
                         )
+                for key in LOOKUP_INDEX_KEYS:
+                    state, valid = self._lookup_index_state(cur, key)
+                    if state is True:
+                        report.append(
+                            {
+                                "key": key,
+                                "index": valid[0],
+                                "state": "present",
+                                "valid_indexes": valid,
+                            }
+                        )
+                    elif dry_run:
+                        name = lookup_index_name(self.table_name, key)
+                        report.append({"key": key, "index": name, "state": "missing"})
+                    else:
+                        report.append(self._build_lookup_index(cur, _sql, key, state))
+                if not dry_run:
+                    cur.execute(_sql.SQL("ANALYZE {}").format(_sql.Identifier(self.table_name)))
+                    cur.execute(
+                        "SELECT relpages FROM pg_class WHERE oid = to_regclass(%s)",
+                        (self.table_name,),
+                    )
+                    pages = (cur.fetchone() or [0])[0] or 0
+                    probe_spec = _IncludeSpec.resolve(["metadatas"], default_distances=False)
+                    for row in report:
+                        if row["state"] not in ("present", "built"):
+                            continue
+                        if pages < plan_check_min_pages:
+                            row["plan_uses_index"] = None
+                            row["plan_note"] = "small table"
+                            continue
+                        statement, params = self._get_statement(
+                            ids=None,
+                            where={row["key"]: {"$in": list(_LOOKUP_PROBE_IDS)}},
+                            limit=_LOOKUP_PROBE_LIMIT,
+                            offset=None,
+                            spec=probe_spec,
+                            resume_after=None,
+                        )
+                        cur.execute(_sql.SQL("EXPLAIN {}").format(statement), params)
                         plan = "\n".join(r[0] for r in cur.fetchall())
-                        row["plan_uses_index"] = row["index"] in plan
+                        row["plan_uses_index"] = any(
+                            _plan_names_index(plan, name) for name in row["valid_indexes"]
+                        )
         finally:
             conn.close()
         if any(r["key"] == "source_file" and r["state"] in ("present", "built") for r in report):

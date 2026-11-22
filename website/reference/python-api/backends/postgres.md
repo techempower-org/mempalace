@@ -10,6 +10,10 @@ install remains zero-config.
 
 ## Classes
 
+### `class LookupIndexesBusy(RuntimeError)`
+
+Another ensure_lookup_indexes run holds this table's advisory lock.
+
 ### `class PostgresCollection(BaseCollection)`
 
 PostgreSQL collection adapter implementing the RFC 001 collection contract.
@@ -188,16 +192,21 @@ def ensure_lookup_indexes(self, *, dry_run: bool = False, plan_check_min_pages: 
 
 Build every missing lookup index (LOOKUP_INDEX_KEYS) on an existing palace, online.
 
-For each key without a valid index: drop an INVALID leftover of a failed build under the lookup name, then
-``CREATE INDEX CONCURRENTLY``. If anything was built, ``ANALYZE`` the table: an expression index has no
-statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
-judged-parent indexes went unused until ANALYZE). Then a plain ``EXPLAIN`` (nothing executes) of each
-key's lookup shape records whether the plan uses its index. All on a side connection with
-``statement_timeout`` lifted for that session only: the role's own timeout would cancel the build.
+All on a side connection with ``statement_timeout`` lifted for that session only (the role's own timeout
+would cancel the build), holding a per-table advisory lock for the whole run, so two runs never drop or build
+under each other; every state read happens under it. Raises LookupIndexesBusy when another run holds it.
 
-Returns one dict per key: key, index, state (present | built | missing in a dry run), plan_uses_index. On a
-table smaller than ``plan_check_min_pages`` a scan is cheaper than any index, so the plan is not judged
-there (plan_uses_index None, plan_note "small table").
+For each key without a valid index: drop an INVALID leftover under the lookup name, ``CREATE INDEX
+CONCURRENTLY``, confirm it is valid. A failed build is reported (state "failed", ``error``, ``leftover``),
+not raised. Then ``ANALYZE`` the table, on every run that is not a dry run: an expression index has no
+statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
+judged-parent indexes went unused until ANALYZE), so a palace whose indexes exist without statistics is
+repaired by a rerun. Then a plain ``EXPLAIN`` (nothing executes) of the statement get() sends for the
+judged-parent lookup records whether the plan uses one of the key's valid indexes.
+
+Returns one dict per key: key, index, state (present | built | failed | missing in a dry run),
+plan_uses_index. On a table smaller than ``plan_check_min_pages`` a scan is cheaper than any index, so the
+plan is not judged there (plan_uses_index None, plan_note "small table").
 
 ### `class PostgresBackend(BaseBackend)`
 

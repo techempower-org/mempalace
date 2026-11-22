@@ -26,7 +26,8 @@ def cmd_lookup_indexes(args)
 
 Postgres only: build the missing metadata lookup indexes online, ANALYZE, and check each plan uses its index.
 
-Exit 0 when every key has a valid index whose plan uses it; 1 when a plan does not; 2 for another backend.
+Exit 0 when every key has a valid index whose plan uses it; 1 when a build failed (the index is named) or a plan
+does not use its index; 2 for another backend; 3 when another lookup-indexes run holds the table's lock.
 
 ### `cmd_repair_status`
 

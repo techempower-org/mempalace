@@ -17,11 +17,15 @@ body: |
   A new palace now creates both indexes, as it does
   metadata->>'source_file'. An existing palace runs `mempalace
   lookup-indexes`, which works on a side connection with statement_timeout
-  lifted for that session:
+  lifted for that session, holding a per-table advisory lock so two runs
+  never build or drop under each other:
   - it builds each missing lookup index with CREATE INDEX CONCURRENTLY,
-    dropping an INVALID leftover first;
-  - it ANALYZEs the table. An expression index has no statistics until
-    then, and the planner keeps its default guess and the old plan;
-  - it checks with a plain EXPLAIN that each lookup's plan uses its index.
+    dropping an INVALID leftover first. A failed build is reported by
+    index name (exit 1), and its INVALID leftover is dropped in the same run;
+  - it ANALYZEs the table on every run. An expression index has no
+    statistics until then, and the planner keeps its default guess and the
+    old plan;
+  - it EXPLAINs the exact statement the judged-parent lookup sends and
+    checks that the plan uses one of the key's valid indexes.
   On the palace it was measured on, the first search fell from 64.7 s to
   2.3 s.

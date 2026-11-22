@@ -67,6 +67,21 @@ uv run pytest tests/ -v
 
 All tests must pass before submitting a PR. Tests should run without API keys or network access.
 
+### Running the suite outside CI
+
+Two things CI gives you for free and a local or lane-host run doesn't:
+
+- **A venv of its own.** CI runs `pip install -e ".[dev]"` into a clean venv. Don't build a test venv by layering
+  another environment's site-packages onto it (a `.pth` file pointing at a second venv). The `tests/test_init.py`
+  checks of how `mempalace` filters `sys.path` then see the foreign entries and fail. On 2026-11-21 a layered venv
+  produced 21 false failures, all of which passed in a clean `.[dev]` venv on the same commit.
+- **Enough file descriptors.** The full suite holds more than 1,024 files open at once. GitHub's runners allow
+  65,536, but a non-interactive ssh session often gets 1,024, and the run dies a few percent in with
+  `OSError: [Errno 24] Too many open files`. Raise the soft limit first: `ulimit -n 65536`.
+
+The postgres backend's live tests (`tests/test_backends_postgres.py`) skip unless `TEST_POSTGRES_DSN` points at a
+throwaway database with the `vector` and `pg_trgm` extensions.
+
 ### Property-based tests (optional)
 
 `hypothesis` is available in the dev extras for property-based tests:
