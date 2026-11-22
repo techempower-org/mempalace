@@ -194,19 +194,23 @@ Build every missing lookup index (LOOKUP_INDEX_KEYS) on an existing palace, onli
 
 All on a side connection with ``statement_timeout`` lifted for that session only (the role's own timeout
 would cancel the build), holding a per-table advisory lock for the whole run, so two runs never drop or build
-under each other; every state read happens under it. Raises LookupIndexesBusy when another run holds it.
+under each other; every state read of a run that changes anything happens under it (a dry run reads without
+it). Raises LookupIndexesBusy when another run holds it. The lock protects lookup-indexes runs from each
+other, not from an index someone builds by hand at the same moment.
 
 For each key without a valid index: drop an INVALID leftover under the lookup name, ``CREATE INDEX
 CONCURRENTLY``, confirm it is valid. A failed build is reported (state "failed", ``error``, ``leftover``),
 not raised. Then ``ANALYZE`` the table, on every run that is not a dry run: an expression index has no
 statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
 judged-parent indexes went unused until ANALYZE), so a palace whose indexes exist without statistics is
-repaired by a rerun. Then a plain ``EXPLAIN`` (nothing executes) of the statement get() sends for the
-judged-parent lookup records whether the plan uses one of the key's valid indexes.
+repaired by a rerun. Then ``EXPLAIN`` (nothing executes) of the statement get() sends for the judged-parent
+lookup records whether its plan uses one of the key's valid indexes, twice: the per-value plan
+(plan_uses_index) and the generic plan a prepared statement can be given (generic_plan_uses_index). The key
+is inlined in that statement (_field_filter_to_sql), which is what lets the generic plan use the index.
 
 Returns one dict per key: key, index, state (present | built | failed | missing in a dry run),
-plan_uses_index. On a table smaller than ``plan_check_min_pages`` a scan is cheaper than any index, so the
-plan is not judged there (plan_uses_index None, plan_note "small table").
+plan_uses_index, generic_plan_uses_index. On a table smaller than ``plan_check_min_pages`` a scan is cheaper
+than any index, so the plans are not judged there (plan_uses_index None, plan_note "small table").
 
 ### `class PostgresBackend(BaseBackend)`
 

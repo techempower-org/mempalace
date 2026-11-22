@@ -45,7 +45,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     statistics until then, and the planner keeps its default guess and the
     old plan;
   - it EXPLAINs the exact statement the judged-parent lookup sends and
-    checks that the plan uses one of the key's valid indexes.
+    checks that both its per-value plan and its generic plan use one of the
+    key's valid indexes.
+
+  A where-filter on source_file, parent_drawer_id or parent_entry_id now
+  names its key literally (metadata->>'parent_drawer_id') instead of binding
+  it as a parameter. psycopg prepares a statement after a few runs, and a
+  generic plan for metadata->>$1 can't use an expression index on one key.
   On the palace it was measured on, the first search fell from 64.7 s to
   2.3 s.
 

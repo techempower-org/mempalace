@@ -108,6 +108,10 @@ class _FakeSql:
     def Placeholder():
         return _FakeComposable("%s")
 
+    @staticmethod
+    def Literal(value):
+        return _FakeComposable("'" + str(value).replace("'", "''") + "'")
+
 
 def test_chroma_collection_returns_typed_query_result():
     fake = _FakeCollection()
@@ -504,9 +508,15 @@ def test_postgres_where_supports_required_operators_without_psycopg2(monkeypatch
     assert str(clause) == '("wing" = %s) OR ("room" <> %s)'
     assert params == ["a", "b"]
 
+    # A lookup-index key is inlined, so a generic (prepared) plan still matches its expression index (#655 r2).
     clause, params = collection._where_to_sql({"source_file": {"$in": ["a.py", "b.py"]}})
+    assert str(clause) == "metadata->>'source_file' IN (%s, %s)"
+    assert params == ["a.py", "b.py"]
+
+    # Any other key stays a bound parameter.
+    clause, params = collection._where_to_sql({"topic": {"$in": ["a", "b"]}})
     assert str(clause) == "metadata->>%s IN (%s, %s)"
-    assert params == ["source_file", "a.py", "b.py"]
+    assert params == ["topic", "a", "b"]
 
 
 def test_postgres_where_rejects_unsupported_filters_without_psycopg2(monkeypatch):

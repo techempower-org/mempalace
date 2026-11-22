@@ -458,7 +458,9 @@ def test_an_existing_palace_builds_the_missing_ones_analyzes_and_its_plans_use_t
 
         report = col.ensure_lookup_indexes(plan_check_min_pages=0)
         assert [r["state"] for r in report] == ["present", "built", "built"]
-        assert all(r["plan_uses_index"] for r in report), report
+        assert all(r["plan_uses_index"] for r in report[1:]), report
+        assert all(r["generic_plan_uses_index"] for r in report[1:]), report
+        assert report[0]["plan_note"] == "no judged-parent lookup on this key"
         with conn.cursor() as cur:
             for r in report[1:]:
                 cur.execute("SELECT count(*) FROM pg_stats WHERE tablename = %s", (r["index"],))
@@ -568,11 +570,14 @@ def test_the_plan_check_explains_the_statement_the_judged_parent_lookup_sends(
     """#655 r1 (1): the probe must be the real lookup, not a look-alike. The searcher calls
     get(where={key: {"$in": ids}}, include=["metadatas"], limit=_JUDGED_PARENT_ROW_LIMIT); the plan check EXPLAINs
     exactly the statement text get() sends for that call, with the same bound parameters (psycopg binds them
-    server-side, so the key itself is $1 in both)."""
+    server-side). Since round 2 the lookup key is inlined, so it is no parameter at all."""
+    import re
+
     from mempalace import searcher
     from mempalace.backends import postgres as pg
 
     assert pg._LOOKUP_PROBE_LIMIT == searcher._JUDGED_PARENT_ROW_LIMIT
+    assert pg._JUDGED_PARENT_KEYS == searcher._PARENT_ID_KEYS
     col, conn = _lookup_table(tmp_path, rows=2000)
     try:
         sent = []
@@ -595,10 +600,62 @@ def test_the_plan_check_explains_the_statement_the_judged_parent_lookup_sends(
 
         log = _record_side_connection(monkeypatch)
         col.ensure_lookup_indexes(plan_check_min_pages=0)
-        explains = [
-            (t, p) for t, p in log if t.startswith("EXPLAIN ") and p and "parent_drawer_id" in p
-        ]
+        explains = [(t, p) for t, p in log if t.startswith("EXPLAIN ") and "parent_drawer_id" in t]
         assert explains == [("EXPLAIN " + get_text, list(get_params))], (explains, get_text)
+        # The generic-plan check prepares that same text, its placeholders numbered.
+        numbers = iter(range(1, len(get_params) + 1))
+        numbered = re.sub(r"%s", lambda _m: f"${next(numbers)}", get_text)
+        assert ("PREPARE mempalace_lookup_probe AS " + numbered, None) in log
+    finally:
+        _drop_lookup_table(col, conn)
+
+
+def test_a_warmed_production_connection_keeps_using_the_index_under_a_generic_plan(tmp_path):
+    """#655 r2 (1, 2): the lookup on the backend's own connection, prepared by psycopg (prepare_threshold=0, so from
+    the first call) and run repeatedly under plan_cache_mode = force_generic_plan: the plan postgres reuses for every
+    value must still use the parent index. A key bound as $1 can't match the expression index; an inlined one can."""
+    from mempalace import searcher
+    from mempalace.backends import postgres as pg
+
+    col, conn = _lookup_table(tmp_path)
+    try:
+        col.ensure_lookup_indexes(
+            plan_check_min_pages=0
+        )  # ANALYZE, so the planner has the index's statistics
+        live = col._get_conn()
+        live.prepare_threshold = 0
+        col._cursor().execute("SET plan_cache_mode = force_generic_plan")
+        sent = []
+        real_execute = pg._RetryingCursor.execute
+
+        def spy(self, q, params=None):
+            sent.append(params)
+            return real_execute(self, q, params)
+
+        lookup = {
+            "where": {"parent_drawer_id": {"$in": ["p50", "p100"]}},
+            "include": ["metadatas"],
+            "limit": searcher._JUDGED_PARENT_ROW_LIMIT,
+        }
+        pg._RetryingCursor.execute = spy
+        try:
+            for _ in range(6):
+                assert len(col.get(**lookup)["ids"]) == 2
+        finally:
+            pg._RetryingCursor.execute = real_execute
+        cur = col._cursor()
+        cur.execute(
+            # Matched by table and shape, not by key: a bound key never appears in the statement text.
+            "SELECT name, generic_plans FROM pg_prepared_statements "
+            "WHERE statement LIKE %s AND statement LIKE %s AND statement NOT LIKE %s",
+            (f'%"{col.table_name}" WHERE%', "%ORDER BY id LIMIT%", "%pg_prepared_statements%"),
+        )
+        prepared = cur.fetchall()
+        assert len(prepared) == 1 and prepared[0][1] >= 6, prepared
+        args = ", ".join("'" + str(v).replace("'", "''") + "'" for v in sent[-1])
+        cur.execute(f'EXPLAIN EXECUTE "{prepared[0][0]}"({args})')
+        plan = "\n".join(r[0] for r in cur.fetchall())
+        assert pg._plan_names_index(plan, f"{col.table_name}_meta_parent_drawer_id_idx"), plan
     finally:
         _drop_lookup_table(col, conn)
 
@@ -698,7 +755,7 @@ def test_a_rerun_analyzes_a_palace_whose_indexes_exist_without_statistics(tmp_pa
             for r in report[1:]:
                 cur.execute("SELECT count(*) FROM pg_stats WHERE tablename = %s", (r["index"],))
                 assert cur.fetchone()[0] > 0, f"{r['index']} still has no statistics"
-        assert all(r["plan_uses_index"] for r in report), report
+        assert all(r["plan_uses_index"] for r in report[1:]), report
     finally:
         _drop_lookup_table(col, conn)
 

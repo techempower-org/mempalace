@@ -58,6 +58,9 @@ LOOKUP_INDEX_KEYS = ("source_file", "parent_drawer_id", "parent_entry_id")
 # limit = searcher/query.py _JUDGED_PARENT_ROW_LIMIT (a test keeps the two equal). The ids are never real ones.
 _LOOKUP_PROBE_IDS = ("lookup-index-probe-1", "lookup-index-probe-2")
 _LOOKUP_PROBE_LIMIT = 256
+# The keys that lookup runs on (searcher/query.py _PARENT_ID_KEYS; a test keeps them equal). source_file's own
+# lookups have other shapes (per-file, paged), so the judged-parent probe is not a fair test of its plan.
+_JUDGED_PARENT_KEYS = ("parent_drawer_id", "parent_entry_id")
 
 
 class LookupIndexesBusy(RuntimeError):
@@ -1654,19 +1657,24 @@ class PostgresCollection(BaseCollection):
 
         All on a side connection with ``statement_timeout`` lifted for that session only (the role's own timeout
         would cancel the build), holding a per-table advisory lock for the whole run, so two runs never drop or build
-        under each other; every state read happens under it. Raises LookupIndexesBusy when another run holds it.
+        under each other; every state read of a run that changes anything happens under it (a dry run reads without
+        it). Raises LookupIndexesBusy when another run holds it. The lock protects lookup-indexes runs from each
+        other, not from an index someone builds by hand at the same moment.
 
         For each key without a valid index: drop an INVALID leftover under the lookup name, ``CREATE INDEX
         CONCURRENTLY``, confirm it is valid. A failed build is reported (state "failed", ``error``, ``leftover``),
         not raised. Then ``ANALYZE`` the table, on every run that is not a dry run: an expression index has no
         statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
         judged-parent indexes went unused until ANALYZE), so a palace whose indexes exist without statistics is
-        repaired by a rerun. Then a plain ``EXPLAIN`` (nothing executes) of the statement get() sends for the
-        judged-parent lookup records whether the plan uses one of the key's valid indexes.
+        repaired by a rerun. Then ``EXPLAIN`` (nothing executes) of the statement get() sends for the judged-parent
+        lookup (on parent_drawer_id and parent_entry_id; source_file's lookups have other shapes, so its plan is not
+        judged with this one) records whether its plan uses one of the key's valid indexes, twice: the per-value plan
+        (plan_uses_index) and the generic plan a prepared statement can be given (generic_plan_uses_index). The key
+        is inlined in that statement (_field_filter_to_sql), which is what lets the generic plan use the index.
 
         Returns one dict per key: key, index, state (present | built | failed | missing in a dry run),
-        plan_uses_index. On a table smaller than ``plan_check_min_pages`` a scan is cheaper than any index, so the
-        plan is not judged there (plan_uses_index None, plan_note "small table").
+        plan_uses_index, generic_plan_uses_index. On a table smaller than ``plan_check_min_pages`` a scan is cheaper
+        than any index, so the plans are not judged there (plan_uses_index None, plan_note "small table").
         """
         psycopg2, _sql = _load_psycopg2()
         conn = psycopg2.connect(self.dsn)
@@ -1715,6 +1723,10 @@ class PostgresCollection(BaseCollection):
                     for row in report:
                         if row["state"] not in ("present", "built"):
                             continue
+                        if row["key"] not in _JUDGED_PARENT_KEYS:
+                            row["plan_uses_index"] = None
+                            row["plan_note"] = "no judged-parent lookup on this key"
+                            continue
                         if pages < plan_check_min_pages:
                             row["plan_uses_index"] = None
                             row["plan_note"] = "small table"
@@ -1729,14 +1741,48 @@ class PostgresCollection(BaseCollection):
                         )
                         cur.execute(_sql.SQL("EXPLAIN {}").format(statement), params)
                         plan = "\n".join(r[0] for r in cur.fetchall())
+                        generic = self._explain_generic(cur, _sql, statement, params)
                         row["plan_uses_index"] = any(
                             _plan_names_index(plan, name) for name in row["valid_indexes"]
+                        )
+                        row["generic_plan_uses_index"] = any(
+                            _plan_names_index(generic, name) for name in row["valid_indexes"]
                         )
         finally:
             conn.close()
         if any(r["key"] == "source_file" and r["state"] in ("present", "built") for r in report):
             self._source_file_indexed = True
         return report
+
+    def _explain_generic(self, cur, _sql, statement, params) -> str:
+        """EXPLAIN the generic plan of ``statement``: the plan a prepared statement gets when postgres stops
+        planning per call. psycopg prepares a statement after a few runs on one connection, and postgres may then
+        reuse one plan for every value, so a lookup must be served by its index under that plan too, not only under
+        the per-value plan a plain EXPLAIN shows. Prepared here with numbered parameters under
+        ``plan_cache_mode = force_generic_plan``, explained with the probe's values, then deallocated."""
+        text = statement.as_string(cur.connection)
+        if text.count("%") != len(
+            params
+        ):  # each placeholder is one "%s"; any other "%" would be misnumbered
+            raise ValueError(
+                "the lookup statement has a literal '%'; its placeholders can't be numbered"
+            )
+        numbers = iter(range(1, len(params) + 1))
+        text = re.sub(r"%s", lambda _m: f"${next(numbers)}", text)
+        cur.execute("SET plan_cache_mode = force_generic_plan")
+        try:
+            cur.execute("PREPARE mempalace_lookup_probe AS " + text)
+            try:
+                cur.execute(
+                    _sql.SQL("EXPLAIN EXECUTE mempalace_lookup_probe({})").format(
+                        _sql.SQL(", ").join(_sql.Literal(p) for p in params)
+                    )
+                )
+                return "\n".join(r[0] for r in cur.fetchall())
+            finally:
+                cur.execute("DEALLOCATE mempalace_lookup_probe")
+        finally:
+            cur.execute("RESET plan_cache_mode")
 
     def _ensure_setup(self, *, create: bool = True) -> None:
         if self._setup_done:
@@ -2031,6 +2077,13 @@ class PostgresCollection(BaseCollection):
 
         if key in ("wing", "room"):
             lhs = self._sql.SQL("{}").format(self._sql.Identifier(key))
+            lhs_params = []
+        elif key in LOOKUP_INDEX_KEYS:
+            # Inlined, never bound: an expression index on metadata->>'<key>' matches only a statement that names
+            # the same key literally. psycopg binds parameters server-side and prepares a statement after a few
+            # runs on a connection; if postgres then picks the generic plan, a bound key is an unknown $1 and the
+            # index can't serve it. The keys are a fixed allowlist, so one statement per key costs nothing.
+            lhs = self._sql.SQL("metadata->>{}").format(self._sql.Literal(key))
             lhs_params = []
         else:
             lhs = self._sql.SQL("metadata->>%s")

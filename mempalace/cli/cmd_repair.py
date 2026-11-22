@@ -60,8 +60,9 @@ def cmd_palace_set_embedder(args):
 def cmd_lookup_indexes(args):
     """Postgres only: build the missing metadata lookup indexes online, ANALYZE, and check each plan uses its index.
 
-    Exit 0 when every key has a valid index whose plan uses it; 1 when a build failed (the index is named) or a plan
-    does not use its index; 2 for another backend; 3 when another lookup-indexes run holds the table's lock.
+    Exit 0 when every key has a valid index that both its per-value and its generic (prepared) plan use; 1 when a
+    build failed (the index is named) or either plan does not use its index; 2 for another backend; 3 when another
+    lookup-indexes run holds the table's lock.
     """
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     if _selected_backend_for_palace(palace_path) != "postgres":
@@ -81,14 +82,16 @@ def cmd_lookup_indexes(args):
     bad = False
     for row in report:
         uses = row.get("plan_uses_index")
+        generic = row.get("generic_plan_uses_index")
         if row["state"] == "failed":
             plan = f"  BUILD FAILED: {row['error']} (leftover: {row.get('leftover', 'none')})"
         elif uses is None:
             plan = f"  plan not judged ({row['plan_note']})" if row.get("plan_note") else ""
         else:
             plan = "  plan uses it" if uses else "  plan does NOT use it"
+            plan += "; generic plan uses it" if generic else "; generic plan does NOT use it"
         print(f"  {row['key']:<18} {row['state']:<8} {row['index']}{plan}")
-        bad = bad or uses is False or row["state"] == "failed"
+        bad = bad or uses is False or generic is False or row["state"] == "failed"
     if bad:
         raise SystemExit(1)
 
