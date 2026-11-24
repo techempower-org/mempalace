@@ -38,6 +38,12 @@ def _load_psycopg2():
     return psycopg
 
 
+# SQLSTATE for lock_not_available, raised when ``lock_timeout`` expires.
+_LOCK_NOT_AVAILABLE = "55P03"
+# How long KG setup waits for the Drawer table before it skips the index build.
+_INDEX_LOCK_TIMEOUT = "2s"
+
+
 # Unique dollar-quote tag for the cypher() outer SQL boundary. Picked so
 # it can't appear inside a sanitized Cypher literal (we reject the tag
 # substring in ``_cypher_literal``). Hex-suffixed at module load so
@@ -335,9 +341,24 @@ class KnowledgeGraphAGE:
         (no writethrough or backfill has fired), or (b) the table still
         has duplicate ids (cleanup hasn't run). Logs at debug for both.
         Callers can re-invoke after dedup to install the index then.
+        Also skips (c) when a writer holds the Drawer table past the lock
+        timeout, logged at info; the next setup retries (#556).
         """
-        with self._conn.cursor() as cur:
-            self._drawer_unique_index_step(cur, self.GRAPH_NAME)
+        try:
+            with self._conn.cursor() as cur:
+                self._drawer_unique_index_step(cur, self.GRAPH_NAME)
+        except Exception as exc:  # noqa: BLE001 - only a lock timeout is swallowed
+            if getattr(exc, "sqlstate", None) != _LOCK_NOT_AVAILABLE:
+                raise
+            # A writer holds the Drawer table (#556). The rollback leaves the
+            # connection clean; the next KG setup tries again.
+            self._conn.rollback()
+            logger.info(
+                "Drawer unique index not installed: the Drawer table is busy (%s); "
+                "the next KG setup retries",
+                exc,
+            )
+            return
         # Every path commits, the early returns included. Without it the setup
         # connection sat "idle in transaction" holding a snapshot, which blocks
         # CREATE INDEX CONCURRENTLY and holds back vacuum (familiar, 2026-10-20).
@@ -372,6 +393,14 @@ class KnowledgeGraphAGE:
                 dup_excess,
             )
             return
+        # Never queue behind a writer (#556). CREATE INDEX takes a SHARE lock,
+        # which waits for every open write transaction on Drawer (a KG
+        # write-through mid-batch), and while it waits every later writer
+        # queues behind it. Every KnowledgeGraphAGE init ran this, the
+        # daemon's kg_stats among them, so each sat blocked until
+        # statement_timeout cancelled it and the init failed. A short wait,
+        # then give up: the caller rolls back and a later setup retries.
+        cur.execute(f"SET LOCAL lock_timeout = '{_INDEX_LOCK_TIMEOUT}'")
         cur.execute(
             f"CREATE UNIQUE INDEX IF NOT EXISTS drawer_id_unique "
             f'ON "{graph}"."Drawer" (((properties::text)::jsonb->>\'id\'))'
