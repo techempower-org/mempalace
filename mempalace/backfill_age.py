@@ -31,12 +31,17 @@ Three layers populated:
 CLI entry point (registered as ``mempalace-backfill-age``):
 
     mempalace-backfill-age \\
-        --dsn "$MEMPALACE_POSTGRES_DSN" \\
+        [--dsn <dsn>] \\
         --table mempalace_drawers \\
         [--wing <name>]  \\
         [--skip-palace] \\
         [--skip-entities] \\
         [--restart]
+
+``--dsn`` is optional: without it the DSN comes from
+``MEMPALACE_POSTGRES_DSN`` (or ``MEMPALACE_PG_DSN``), so a password in
+the DSN never shows up in the process list (#583). A DSN with no
+password also works with libpq's own ``PGPASSWORD`` / ``~/.pgpass``.
 """
 
 from __future__ import annotations
@@ -44,6 +49,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from typing import Optional
@@ -400,7 +406,14 @@ def backfill(
 def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="Backfill AGE graph from drawer table")
-    parser.add_argument("--dsn", required=True, help="Postgres DSN")
+    parser.add_argument(
+        "--dsn",
+        default=None,
+        help=(
+            "Postgres DSN (env: MEMPALACE_POSTGRES_DSN or MEMPALACE_PG_DSN; prefer the env "
+            "so a password never appears in the process list)"
+        ),
+    )
     parser.add_argument("--table", default="mempalace_drawers", help="Drawer table name")
     parser.add_argument("--wing", default=None, help="Restrict to a single wing")
     parser.add_argument(
@@ -422,9 +435,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Batch KG commits every N drawers (default 100)",
     )
     args = parser.parse_args(argv)
+    dsn = args.dsn or os.environ.get("MEMPALACE_POSTGRES_DSN") or os.environ.get("MEMPALACE_PG_DSN")
+    if not dsn:
+        parser.error("--dsn is required (or set MEMPALACE_POSTGRES_DSN)")
 
     counters = backfill(
-        dsn=args.dsn,
+        dsn=dsn,
         table_name=args.table,
         wing_filter=args.wing,
         skip_palace=args.skip_palace,
