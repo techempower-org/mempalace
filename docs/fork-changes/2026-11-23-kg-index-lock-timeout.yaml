@@ -1,0 +1,27 @@
+seq: 213
+id: kg-index-lock-timeout
+date: '2026-11-23'
+bucket: Fixed
+commit: HEAD
+area: Knowledge graph
+summary: AGE knowledge-graph setup waits at most 2 s for the Drawer table before building its unique index, so a busy write-through no longer blocks every KG init until statement_timeout
+body: |
+  When the `drawer_id_unique` index was missing, every KnowledgeGraphAGE
+  init issued `CREATE UNIQUE INDEX IF NOT EXISTS` on the Drawer table.
+  That takes a SHARE lock, so it waited behind any open write-through
+  transaction, and while it waited every later writer queued behind it.
+  On familiar (2026-09-28, #556) the daemon's kg_stats init sat there until
+  statement_timeout cancelled it: "KnowledgeGraphAGE init failed".
+
+  The build now runs under `SET LOCAL lock_timeout = '2s'`. When the
+  lock is not free in time, setup rolls back, logs at info and carries on;
+  the next setup tries again. Any other error still raises.
+
+  The rest of #556 had already landed: the write-through commits once per
+  batch (#491) of at most 100 drawers (#644), each drawer's mentions go in
+  one UNWIND (#581), and setup skips the index work entirely once the
+  index exists (#570, #574).
+tests: 'test_the_index_build_waits_for_the_drawer_table_only_briefly and test_a_busy_drawer_table_skips_the_index_and_rolls_back fail on the previous code; test_other_index_errors_still_raise keeps every other error loud'
+files:
+- mempalace/knowledge_graph_age.py
+- tests/test_knowledge_graph_age_drawer_index.py

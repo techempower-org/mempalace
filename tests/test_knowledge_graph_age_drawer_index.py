@@ -7,6 +7,8 @@ long been installed.
 
 from __future__ import annotations
 
+import pytest
+
 from mempalace.knowledge_graph_age import KnowledgeGraphAGE
 
 
@@ -94,3 +96,63 @@ def test_every_path_commits_so_setup_never_sits_idle_in_transaction():
         kg = _kg(answers)
         kg._ensure_drawer_unique_index()
         assert kg._conn.commits == 1, answers
+
+
+class _LockTimeout(Exception):
+    """Stands in for psycopg's LockNotAvailable: only the SQLSTATE is read."""
+
+    sqlstate = "55P03"
+
+
+class _BusyCur(_Cur):
+    def __init__(self, answers, exc):
+        super().__init__(answers)
+        self.exc = exc
+
+    def execute(self, sql, params=None):
+        super().execute(sql, params)
+        if "CREATE UNIQUE INDEX" in sql:
+            raise self.exc
+
+
+class _BusyConn(_Conn):
+    def __init__(self, answers, exc):
+        self.cur = _BusyCur(answers, exc)
+        self.commits = 0
+        self.rollbacks = 0
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+def _busy_kg(exc):
+    kg = KnowledgeGraphAGE.__new__(KnowledgeGraphAGE)
+    kg._conn = _BusyConn({TABLE: (1,), INDEX: None, COUNT: (0,)}, exc)
+    return kg
+
+
+def test_the_index_build_waits_for_the_drawer_table_only_briefly():
+    """#556: the CREATE UNIQUE INDEX queued behind a write-through transaction
+    that was minutes old, so every KG init (kg_stats among them) blocked until
+    statement_timeout cancelled it. A lock_timeout is set before the build."""
+    kg = _kg({TABLE: (1,), INDEX: None, COUNT: (0,)})
+    kg._ensure_drawer_unique_index()
+    executed = kg._conn.cur.executed
+    create = next(i for i, q in enumerate(executed) if "CREATE UNIQUE INDEX" in q)
+    timeout = next(i for i, q in enumerate(executed) if "SET LOCAL lock_timeout" in q)
+    assert timeout < create
+
+
+def test_a_busy_drawer_table_skips_the_index_and_rolls_back():
+    """The lock timeout costs the index build, not the KG init: setup returns,
+    and the rollback leaves the connection out of the aborted transaction."""
+    kg = _busy_kg(_LockTimeout("canceling statement due to lock timeout"))
+    kg._ensure_drawer_unique_index()
+    assert kg._conn.rollbacks == 1
+    assert kg._conn.commits == 0
+
+
+def test_other_index_errors_still_raise():
+    kg = _busy_kg(RuntimeError("disk full"))
+    with pytest.raises(RuntimeError):
+        kg._ensure_drawer_unique_index()
