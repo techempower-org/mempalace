@@ -211,9 +211,15 @@ per-value plan (plan_uses_index) and the generic plan a prepared statement can b
 (generic_plan_uses_index). The key is inlined in that statement (_field_filter_to_sql), which is what lets the
 generic plan use the index.
 
-Returns one dict per key: key, index, state (present | built | failed | missing in a dry run),
-plan_uses_index, generic_plan_uses_index. On a table smaller than ``plan_check_min_pages`` a scan is cheaper
-than any index, so the plans are not judged there (plan_uses_index None, plan_note "small table").
+Returns one dict per key: key, index, state (present | built | failed | missing in a dry run), and, only
+where they apply:
+- valid_indexes: on present and built rows;
+- error and leftover: on failed rows (leftover only when a leftover or a name conflict was found);
+- plan_uses_index: on present and built rows of a run that is not a dry run. None with a plan_note when the
+  plan is not judged: "no judged-parent lookup on this key" (source_file), or "small table" below
+  ``plan_check_min_pages``, where a scan is cheaper than any index;
+- generic_plan_uses_index: only where plan_uses_index is True or False.
+Read the optional ones with ``row.get()``.
 
 ### `class PostgresBackend(BaseBackend)`
 

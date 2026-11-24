@@ -399,9 +399,10 @@ def test_new_collection_indexes_source_file_and_reports_it(tmp_path, caplog):
         conn.close()
 
 
-def _lookup_table(tmp_path, rows=20000):
+def _lookup_table(tmp_path, rows=20000, autovacuum=True):
     """A new collection plus ``rows`` drawers inserted in SQL: 1 in 50 with parent_drawer_id, 1 in 50 with
-    parent_entry_id, the rest with source_file only (the production mix is ~98.6 % without a parent key)."""
+    parent_entry_id, the rest with source_file only (the production mix is ~98.6 % without a parent key).
+    ``autovacuum=False`` turns it off before the insert, so no autoanalyze can add statistics behind a test."""
     import uuid
 
     import psycopg
@@ -415,6 +416,8 @@ def _lookup_table(tmp_path, rows=20000):
     col.add(ids=["seed"], documents=["d"], metadatas=[{"wing": "w"}], embeddings=[[0.0] * 384])
     conn = psycopg.connect(POSTGRES_DSN, autocommit=True)
     with conn.cursor() as cur:
+        if not autovacuum:
+            cur.execute(f'ALTER TABLE "{col.table_name}" SET (autovacuum_enabled = false)')
         cur.execute(
             f'INSERT INTO "{col.table_name}" (id, wing, room, document, metadata) '
             "SELECT 'd' || lpad(g::text, 8, '0'), 'w', 'r', 'x', CASE "
@@ -742,10 +745,9 @@ def test_a_rerun_analyzes_a_palace_whose_indexes_exist_without_statistics(tmp_pa
     """#655 r1 (4): the 2026-11-21 production case. The indexes exist and are valid, but nothing has ANALYZEd them,
     so the planner keeps its default guess and walks the primary key. A rerun that builds nothing must still
     ANALYZE, and the plans then use the indexes."""
-    col, conn = _lookup_table(tmp_path)
+    col, conn = _lookup_table(tmp_path, autovacuum=False)
     try:
         with conn.cursor() as cur:
-            cur.execute(f'ALTER TABLE "{col.table_name}" SET (autovacuum_enabled = false)')
             cur.execute(
                 "SELECT count(*) FROM pg_stats WHERE tablename LIKE %s",
                 (f"{col.table_name}_meta_%",),
@@ -856,6 +858,8 @@ def test_the_table_is_found_where_the_collections_own_statements_find_it(tmp_pat
     current_schema() (CodeRabbit on #655): a dry run reports the indexes present, and a run builds nothing."""
     import uuid
 
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
     from mempalace.backends import postgres as pg
 
     col, conn = _lookup_table(tmp_path, rows=1000)
@@ -863,8 +867,10 @@ def test_the_table_is_found_where_the_collections_own_statements_find_it(tmp_pat
     try:
         with conn.cursor() as cur:
             cur.execute(f'CREATE SCHEMA "{other}"')
-        sep = "&" if "?" in POSTGRES_DSN else "?"
-        dsn = f"{POSTGRES_DSN}{sep}options=-csearch_path%3D{other}%2Cpublic"
+        # make_conninfo works for a URI or a keyword DSN, and keeps any options already set.
+        parts = conninfo_to_dict(POSTGRES_DSN)
+        parts["options"] = f"{parts.get('options', '')} -csearch_path={other},public".strip()
+        dsn = make_conninfo(**parts)
         elsewhere = pg.PostgresCollection(dsn, table_name=col.table_name)
         assert [r["state"] for r in elsewhere.ensure_lookup_indexes(dry_run=True)] == [
             "present"
@@ -897,5 +903,31 @@ def test_an_unrelated_index_under_the_lookup_name_is_never_dropped(tmp_path):
                 "SELECT indisunique FROM pg_index WHERE indexrelid = to_regclass(%s)", (name,)
             )
             assert cur.fetchone() == (True,), "the unrelated index was dropped"
+    finally:
+        _drop_lookup_table(col, conn)
+
+
+def test_an_invalid_index_of_another_definition_is_not_dropped_as_a_leftover(tmp_path):
+    """Discovery matches the leading expression only, so an INVALID two-column index on
+    ((metadata->>'parent_entry_id'), id) under the lookup name looks like a leftover. The first drop must check the
+    exact definition too: it is somebody else's index, reported as a name conflict and left intact (CodeRabbit on
+    #655)."""
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    name = f"{col.table_name}_meta_parent_entry_id_idx"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX "{name}"')
+            cur.execute(
+                f'CREATE INDEX "{name}" ON "{col.table_name}" ((metadata->>\'parent_entry_id\'), id)'
+            )
+            cur.execute(
+                "UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(%s)", (name,)
+            )
+        row = col.ensure_lookup_indexes()[2]
+        assert row["state"] == "failed", row
+        assert row["leftover"].startswith("name conflict"), row
+        with conn.cursor() as cur:
+            cur.execute("SELECT indnatts FROM pg_index WHERE indexrelid = to_regclass(%s)", (name,))
+            assert cur.fetchone() == (2,), "the two-column index was dropped"
     finally:
         _drop_lookup_table(col, conn)

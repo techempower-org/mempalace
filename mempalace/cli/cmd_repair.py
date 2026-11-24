@@ -60,9 +60,11 @@ def cmd_palace_set_embedder(args):
 def cmd_lookup_indexes(args):
     """Postgres only: build the missing metadata lookup indexes online, ANALYZE, and check each plan uses its index.
 
-    Exit 0 when every key has a valid index that both its per-value and its generic (prepared) plan use; 1 when a
-    build failed (the index is named) or either plan does not use its index; 2 for another backend; 3 when another
-    lookup-indexes run holds the table's lock.
+    Exit 0 when no build failed and no judged plan missed its index. A dry run never builds or judges plans, so it
+    exits 0 even with indexes missing (it lists them), and keys whose plans are not judged (source_file, a small
+    table) don't affect the exit. 1 when a build failed (the index is named) or a judged per-value or generic
+    (prepared) plan does not use its index; 2 for another backend; 3 when another lookup-indexes run holds the
+    table's lock.
     """
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     if _selected_backend_for_palace(palace_path) != "postgres":
