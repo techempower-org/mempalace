@@ -35,12 +35,17 @@ Three layers populated:
 CLI entry point (registered as ``mempalace-backfill-age``):
 
     mempalace-backfill-age \
-        --dsn "$MEMPALACE_POSTGRES_DSN" \
+        [--dsn &lt;dsn>] \
         --table mempalace_drawers \
         [--wing &lt;name>]  \
         [--skip-palace] \
         [--skip-entities] \
         [--restart]
+
+``--dsn`` is optional: without it the DSN comes from
+``MEMPALACE_POSTGRES_DSN`` (or ``MEMPALACE_PG_DSN``), so a password in
+the DSN never shows up in the process list (#583). A DSN with no
+password also works with libpq's own ``PGPASSWORD`` / ``~/.pgpass``.
 
 ## Functions
 
