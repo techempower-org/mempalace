@@ -18,7 +18,20 @@ def cmd_instructions(args):
 
 
 def cmd_rules(args):
-    """Output the shared-brain agent rules block for a given agent identity."""
+    """Output the shared-brain agent rules block for a given agent identity,
+    or with ``--since`` the rule candidates flagged at mining time (#584)."""
+    if getattr(args, "since", None):
+        from ..rule_candidates import run_list
+
+        sys.exit(run_list(args.since))
+    missing = [f"--{n}" for n in ("host", "harness", "project") if not getattr(args, n, None)]
+    if missing:
+        print(
+            f"mempalace rules: the following arguments are required: {', '.join(missing)} "
+            "(or use --since YYYY-MM-DD to list rule candidates)",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     from ..instructions_cli import run_rules
 
     run_rules(host=args.host, harness=args.harness, project=args.project, mcp=args.mcp)

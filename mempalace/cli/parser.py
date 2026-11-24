@@ -1402,22 +1402,23 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         "rules",
         help=(
             "Output the canonical shared-brain agent rules block for a system "
-            "prompt (CLAUDE.md, GEMINI.md, AGENTS.md, ...)"
+            "prompt (CLAUDE.md, GEMINI.md, AGENTS.md, ...), or with --since list "
+            "the user lines flagged as rule candidates at mining time"
         ),
     )
     p_rules.add_argument(
         "--host",
-        required=True,
-        help="Stable machine label (lowercase), e.g. windows, mac, blade",
+        help=(
+            "Stable machine label (lowercase), e.g. windows, mac, blade. "
+            "--host, --harness and --project are required unless --since is given"
+        ),
     )
     p_rules.add_argument(
         "--harness",
-        required=True,
         help="Runtime family (lowercase), e.g. claude, codex, grok, antigravity",
     )
     p_rules.add_argument(
         "--project",
-        required=True,
         help=(
             "Example workspace/repo name (lowercase). The rendered block tells "
             "the agent to compose host:harness:<project> from the current workspace"
@@ -1430,6 +1431,14 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         help=(
             "Tool names in the block: 'full' (default, the 52-tool mempalace-mcp) or "
             "'light' (palace_query / palace_exec / palace_coordinate)"
+        ),
+    )
+    p_rules.add_argument(
+        "--since",
+        metavar="YYYY-MM-DD",
+        help=(
+            "List the per-day rule-candidate review lists dated on or after this day "
+            "(user lines that read as standing rules, flagged at mining time; #584)"
         ),
     )
 

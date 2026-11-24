@@ -20,12 +20,14 @@ No API key. No internet. Everything local.
 """
 
 import errno
+import contextvars
 import json
 import os
 import re
 import stat
 from pathlib import Path
 from typing import Optional
+from contextlib import contextmanager
 
 
 class UnparsedCodexTranscriptError(ValueError):
@@ -1110,6 +1112,35 @@ def _format_tool_result(content, tool_name: str, verbatim: bool = False) -> str:
     return "→ " + text
 
 
+# Where the user's turns go while a caller collects them (#584). The
+# transcript marks only the FIRST line of a user message with ``> ``, so once
+# it is rendered the later lines of that message are indistinguishable from
+# the assistant's reply. A caller that needs the user's words with their role
+# still attached (the rule-candidate flagger) opens
+# :func:`collect_user_messages`; the sink stays ``None`` otherwise, so the
+# normal path neither pays for nor keeps a second copy.
+USER_MESSAGE_SINK: "contextvars.ContextVar[Optional[list]]" = contextvars.ContextVar(
+    "mempalace_user_message_sink", default=None
+)
+
+
+@contextmanager
+def collect_user_messages():
+    """Collect every user message text that :func:`_messages_to_transcript`
+    renders inside the block, after spellcheck, exactly as it stands in the
+    transcript minus the leading ``> `` marker.
+
+    A format with no role record (a plain ``>``-quoted text file) leaves the
+    list empty.
+    """
+    messages: list = []
+    token = USER_MESSAGE_SINK.set(messages)
+    try:
+        yield messages
+    finally:
+        USER_MESSAGE_SINK.reset(token)
+
+
 def _messages_to_transcript(messages: list, spellcheck: bool = True) -> str:
     """Convert [(role, text), ...] to transcript format with > markers."""
     if spellcheck:
@@ -1122,6 +1153,7 @@ def _messages_to_transcript(messages: list, spellcheck: bool = True) -> str:
     else:
         _fix = None
 
+    sink = USER_MESSAGE_SINK.get()
     lines = []
     i = 0
     while i < len(messages):
@@ -1129,6 +1161,8 @@ def _messages_to_transcript(messages: list, spellcheck: bool = True) -> str:
         if role == "user":
             if _fix is not None:
                 text = _fix(text)
+            if sink is not None:
+                sink.append(text)
             lines.append(f"> {text}")
             if i + 1 < len(messages) and messages[i + 1][0] == "assistant":
                 lines.append(messages[i + 1][1])
