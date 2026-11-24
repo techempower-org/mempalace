@@ -39,12 +39,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   lifted for that session, on the table the collection's own statements
   reach. It holds a per-table advisory lock, so two runs never build or drop
   under each other:
-  - it builds each missing lookup index with CREATE INDEX CONCURRENTLY,
-    dropping an INVALID leftover of its own build first. A failed build is
-    reported by index name (exit 1), and the run tries to drop its INVALID
-    leftover; the `leftover` field says whether that worked. An index of
-    another definition under the lookup name is reported as a name conflict
-    and left alone;
+  - it builds each missing lookup index with CREATE INDEX CONCURRENTLY and
+    marks it as its own (COMMENT ON INDEX with a build id). It drops an
+    INVALID index only when it is provably its own: marked by an earlier
+    run, or made by this run's CREATE. A failed build is reported by index
+    name (exit 1), and the run tries to drop its own INVALID leftover; if
+    that fails it marks the leftover for the next run, and the `leftover`
+    field says what happened. Any other index under the lookup name,
+    including an unmarked one of the same shape, is reported and left
+    alone;
   - every run except --dry-run ANALYZEs the table. An expression index has
     no statistics until then, and the planner keeps its default guess and the
     old plan;

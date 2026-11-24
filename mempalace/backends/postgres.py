@@ -62,6 +62,9 @@ _LOOKUP_PROBE_LIMIT = 256
 # The keys that lookup runs on (searcher/query.py _PARENT_ID_KEYS; a test keeps them equal). source_file's own
 # lookups have other shapes (per-file, paged), so the judged-parent probe is not a fair test of its plan.
 _JUDGED_PARENT_KEYS = ("parent_drawer_id", "parent_entry_id")
+# Every index ensure_lookup_indexes builds gets this comment plus the run's build id. Only an INVALID index that
+# carries it (or that this run's own CREATE made) is ever dropped: a definition alone doesn't prove who built it.
+_LOOKUP_BUILD_MARK = "mempalace lookup-indexes build "
 
 
 class LookupIndexesBusy(RuntimeError):
@@ -1621,51 +1624,75 @@ class PostgresCollection(BaseCollection):
 
     def _named_lookup_index(
         self, cur, table_oid: int, name: str, key: str
-    ) -> Optional[tuple[bool, bool]]:
-        """(valid, is_lookup) for the index called ``name`` on this table, or None when there is none. is_lookup:
-        it is exactly a lookup index for ``key`` (a single-column, non-unique, non-partial btree on
-        ``metadata->>'<key>'``). Only such an index is ever dropped here; any other index under the name is left."""
+    ) -> Optional[tuple[bool, bool, bool]]:
+        """(valid, is_lookup, marked) for the index called ``name`` on this table, or None when there is none.
+        is_lookup: it is exactly a lookup index for ``key`` (a single-column, non-unique, non-partial btree on
+        ``metadata->>'<key>'``). marked: its comment carries this tool's build mark (_LOOKUP_BUILD_MARK), which only
+        ensure_lookup_indexes writes. A definition alone never proves the tool built an index: a person can build
+        the same shape by hand."""
         cur.execute(
             """
             SELECT idx.indisvalid,
                    am.amname = 'btree' AND idx.indpred IS NULL AND NOT idx.indisunique AND idx.indnatts = 1
                    AND btrim(pg_get_indexdef(idx.indexrelid, 1, false), '()')
-                       = 'metadata ->> ' || quote_literal(%s) || '::text'
+                       = 'metadata ->> ' || quote_literal(%s) || '::text',
+                   coalesce(obj_description(idx.indexrelid, 'pg_class'), '') LIKE %s
             FROM pg_index idx
             JOIN pg_class ix ON ix.oid = idx.indexrelid
             JOIN pg_am am ON am.oid = ix.relam
             WHERE idx.indrelid = %s AND ix.relname = %s
             """,
-            (key, table_oid, name),
+            (key, _LOOKUP_BUILD_MARK + "%", table_oid, name),
         )
         row = cur.fetchone()
-        return None if row is None else (bool(row[0]), bool(row[1]))
+        return None if row is None else (bool(row[0]), bool(row[1]), bool(row[2]))
 
     def _build_lookup_index(
-        self, cur, _sql, table_oid: int, schema: str, key: str, state: Optional[bool]
+        self,
+        cur,
+        _sql,
+        table_oid: int,
+        schema: str,
+        key: str,
+        state: Optional[bool],
+        build_id: str,
     ) -> dict:
-        """Build one missing lookup index with CREATE INDEX CONCURRENTLY. A failure is reported, never raised: the
-        row gets state "failed" and the error. An INVALID leftover of our own build is dropped in the same run
-        (``leftover`` says whether that worked); an index of any other definition under the lookup name is a name
-        conflict, reported and left intact."""
+        """Build one missing lookup index with CREATE INDEX CONCURRENTLY and mark it as this tool's (COMMENT ON
+        INDEX, _LOOKUP_BUILD_MARK + build id). A failure is reported, never raised: the row gets state "failed" and
+        the error.
+
+        An INVALID index is dropped only when it is provably this tool's: it carries the build mark (a leftover of
+        an earlier run), or this run's own CREATE made it (nothing held the name before). A failed build whose
+        leftover can't be dropped is marked, so the next run can drop it. Any other index under the lookup name,
+        including a hand-built one of the same shape, is reported (``leftover``) and left intact."""
         name = lookup_index_name(self.table_name, key)
-        drop = _sql.SQL("DROP INDEX CONCURRENTLY IF EXISTS {}").format(
-            _sql.Identifier(schema, name)
+        index_id = _sql.Identifier(schema, name)
+        drop = _sql.SQL("DROP INDEX CONCURRENTLY IF EXISTS {}").format(index_id)
+        mark = _sql.SQL("COMMENT ON INDEX {} IS {}").format(
+            index_id, _sql.Literal(_LOOKUP_BUILD_MARK + build_id)
         )
+        before = self._named_lookup_index(cur, table_oid, name, key)
+
+        def not_ours(named) -> str:
+            if not named[1]:
+                return f"name conflict: {name} is another index; left intact"
+            return (
+                f"{name} is an INVALID index this tool did not build (no build mark); left intact"
+            )
+
+        if state is False and not (before is not None and before[1] and before[2]):
+            reason = not_ours(before)
+            return {
+                "key": key,
+                "index": name,
+                "state": "failed",
+                "error": reason,
+                "leftover": reason,
+            }
         try:
             if state is False:
-                # Discovery matched the leading expression only; drop nothing but an exact leftover of our own
-                # build (a two-column index on (metadata->>'<key>', id) under this name is somebody else's).
-                named = self._named_lookup_index(cur, table_oid, name, key)
-                if named is not None and not named[1]:
-                    return {
-                        "key": key,
-                        "index": name,
-                        "state": "failed",
-                        "error": f"name conflict: {name} is an INVALID index of another definition",
-                        "leftover": f"name conflict: {name} is another index; left intact",
-                    }
-                cur.execute(drop)
+                cur.execute(drop)  # our own marked leftover
+                before = None
             cur.execute(
                 _sql.SQL(
                     "CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ((metadata->>{}))"
@@ -1689,15 +1716,24 @@ class PostgresCollection(BaseCollection):
             }
             try:
                 named = self._named_lookup_index(cur, table_oid, name, key)
-                if named is not None and not named[1]:
-                    row["leftover"] = f"name conflict: {name} is another index; left intact"
+                ours = named is not None and named[1] and (named[2] or before is None)
+                if named is not None and not ours:
+                    row["leftover"] = not_ours(named)
                 elif named is not None and not named[0]:
-                    cur.execute(drop)
-                    row["leftover"] = "dropped"
-            except Exception as drop_exc:
-                row["leftover"] = (
-                    f"still there, drop failed: {type(drop_exc).__name__}: {drop_exc}".strip()
-                )
+                    try:
+                        cur.execute(drop)
+                        row["leftover"] = "dropped"
+                    except Exception as drop_exc:
+                        try:
+                            cur.execute(mark)  # so the next run knows this leftover is the tool's
+                            marked = "marked for the next run"
+                        except Exception:
+                            marked = "and could not be marked"
+                        row["leftover"] = (
+                            f"still there ({marked}), drop failed: {type(drop_exc).__name__}: {drop_exc}"
+                        ).strip()
+            except Exception as check_exc:
+                row["leftover"] = f"not checked: {type(check_exc).__name__}: {check_exc}".strip()
             logger.error(
                 "lookup index %s failed: %s (leftover: %s)",
                 name,
@@ -1705,12 +1741,20 @@ class PostgresCollection(BaseCollection):
                 row.get("leftover", "none"),
             )
             return row
-        return {
+        row = {
             "key": key,
             "index": name if name in valid else valid[0],
             "state": "built",
             "valid_indexes": valid,
         }
+        if name in valid:
+            try:
+                cur.execute(mark)
+                row["marked"] = True
+            except Exception:
+                logger.warning("lookup index %s built but not marked", name, exc_info=True)
+                row["marked"] = False
+        return row
 
     def ensure_lookup_indexes(
         self, *, dry_run: bool = False, plan_check_min_pages: int = 1000
@@ -1724,9 +1768,10 @@ class PostgresCollection(BaseCollection):
         other, not from an index someone builds by hand at the same moment. The table is the one the collection's
         own statements reach through search_path, resolved once to its oid.
 
-        For each key without a valid index: drop an INVALID leftover of our own build under the lookup name, ``CREATE
-        INDEX CONCURRENTLY``, confirm it is valid. A failed build is reported (state "failed", ``error``,
-        ``leftover``), not raised. Then ``ANALYZE`` the table, on every run that is not a dry run: an expression index
+        For each key without a valid index: drop an INVALID leftover under the lookup name only if it carries this
+        tool's build mark, ``CREATE INDEX CONCURRENTLY``, confirm it is valid, and mark it (COMMENT ON INDEX,
+        _LOOKUP_BUILD_MARK + this run's build id). An unmarked INVALID index, even of the same shape, is a person's:
+        reported, never dropped. A failed build is reported (state "failed", ``error``, ``leftover``), not raised. Then ``ANALYZE`` the table, on every run that is not a dry run: an expression index
         has no statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
         judged-parent indexes went unused until ANALYZE), so a palace whose indexes exist without statistics is
         repaired by a rerun. Then ``EXPLAIN (FORMAT JSON)`` (nothing executes) of the statement get() sends for the
@@ -1767,6 +1812,7 @@ class PostgresCollection(BaseCollection):
                             f"another lookup-indexes run holds the lock on {self.table_name}; try again when it ends"
                         )
                 table_oid, schema = self._resolve_lookup_table(cur)
+                build_id = f"{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
                 for key in LOOKUP_INDEX_KEYS:
                     state, valid = self._lookup_index_state(cur, table_oid, key)
                     if state is True:
@@ -1783,7 +1829,9 @@ class PostgresCollection(BaseCollection):
                         report.append({"key": key, "index": name, "state": "missing"})
                     else:
                         report.append(
-                            self._build_lookup_index(cur, _sql, table_oid, schema, key, state)
+                            self._build_lookup_index(
+                                cur, _sql, table_oid, schema, key, state, build_id
+                            )
                         )
                 if not dry_run:
                     cur.execute(

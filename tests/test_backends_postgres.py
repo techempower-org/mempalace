@@ -461,6 +461,7 @@ def test_an_existing_palace_builds_the_missing_ones_analyzes_and_its_plans_use_t
 
         report = col.ensure_lookup_indexes(plan_check_min_pages=0)
         assert [r["state"] for r in report] == ["present", "built", "built"]
+        assert all(r["marked"] for r in report[1:]), report
         assert all(r["plan_uses_index"] for r in report[1:]), report
         assert all(r["generic_plan_uses_index"] for r in report[1:]), report
         assert report[0]["plan_note"] == "no judged-parent lookup on this key"
@@ -477,29 +478,66 @@ def test_an_existing_palace_builds_the_missing_ones_analyzes_and_its_plans_use_t
         conn.close()
 
 
+def _invalid_lookup_index(conn, table, name, *, marked):
+    """An INVALID single-column lookup index on parent_entry_id under ``name``, as a failed CONCURRENTLY build
+    leaves it; ``marked`` adds this tool's build mark, as a run does when it can't drop its own leftover."""
+    from mempalace.backends import postgres as pg
+
+    with conn.cursor() as cur:
+        cur.execute(f'DROP INDEX IF EXISTS "{name}"')
+        cur.execute(f'CREATE INDEX "{name}" ON "{table}" ((metadata->>\'parent_entry_id\'))')
+        cur.execute(
+            "UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(%s)", (name,)
+        )
+        if marked:
+            cur.execute(f"COMMENT ON INDEX \"{name}\" IS '{pg._LOOKUP_BUILD_MARK}earlier-run'")
+
+
 def test_an_invalid_leftover_is_dropped_and_rebuilt(tmp_path):
     """A failed CREATE INDEX CONCURRENTLY leaves an INVALID index under the lookup name; it is not counted as
-    present, and the next run drops and rebuilds it."""
+    present, and when it carries this tool's build mark the next run drops and rebuilds it (and marks the new one)."""
+    from mempalace.backends import postgres as pg
+
     col, conn = _lookup_table(tmp_path, rows=1000)
     name = f"{col.table_name}_meta_parent_entry_id_idx"
     try:
-        with conn.cursor() as cur:
-            cur.execute(f'DROP INDEX "{name}"')
-            cur.execute(
-                f'CREATE INDEX "{name}" ON "{col.table_name}" ((metadata->>\'parent_entry_id\'))'
-            )
-            cur.execute(
-                "UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(%s)", (name,)
-            )
+        _invalid_lookup_index(conn, col.table_name, name, marked=True)
         assert [r["state"] for r in col.ensure_lookup_indexes(dry_run=True)][2] == "missing"
         report = col.ensure_lookup_indexes()
         assert report[2]["state"] == "built"
+        assert report[2]["marked"] is True
         assert report[2]["plan_note"] == "small table"
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT indisvalid, obj_description(indexrelid, 'pg_class') FROM pg_index "
+                "WHERE indexrelid = to_regclass(%s)",
+                (name,),
+            )
+            valid, comment = cur.fetchone()
+            assert valid is True
+            assert comment.startswith(pg._LOOKUP_BUILD_MARK) and not comment.endswith("earlier-run")
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
+
+
+def test_an_unmarked_invalid_index_of_the_same_shape_is_reported_not_dropped(tmp_path):
+    """#655 r3 ruling: the definition alone (name, table, validity, expression) doesn't prove this tool built an
+    index; a person can build the same shape by hand. An INVALID one without the build mark is reported and left
+    intact, never dropped."""
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    name = f"{col.table_name}_meta_parent_entry_id_idx"
+    try:
+        _invalid_lookup_index(conn, col.table_name, name, marked=False)
+        row = col.ensure_lookup_indexes()[2]
+        assert row["state"] == "failed", row
+        assert "did not build" in row["leftover"], row
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(%s)", (name,)
             )
-            assert cur.fetchone()[0] is True
+            assert cur.fetchone() == (False,), "the hand-built index was dropped"
     finally:
         with conn.cursor() as cur:
             cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')

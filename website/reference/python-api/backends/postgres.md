@@ -199,9 +199,10 @@ it). Raises LookupIndexesBusy when another run holds it. The lock protects looku
 other, not from an index someone builds by hand at the same moment. The table is the one the collection's
 own statements reach through search_path, resolved once to its oid.
 
-For each key without a valid index: drop an INVALID leftover of our own build under the lookup name, ``CREATE
-INDEX CONCURRENTLY``, confirm it is valid. A failed build is reported (state "failed", ``error``,
-``leftover``), not raised. Then ``ANALYZE`` the table, on every run that is not a dry run: an expression index
+For each key without a valid index: drop an INVALID leftover under the lookup name only if it carries this
+tool's build mark, ``CREATE INDEX CONCURRENTLY``, confirm it is valid, and mark it (COMMENT ON INDEX,
+_LOOKUP_BUILD_MARK + this run's build id). An unmarked INVALID index, even of the same shape, is a person's:
+reported, never dropped. A failed build is reported (state "failed", ``error``, ``leftover``), not raised. Then ``ANALYZE`` the table, on every run that is not a dry run: an expression index
 has no statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
 judged-parent indexes went unused until ANALYZE), so a palace whose indexes exist without statistics is
 repaired by a rerun. Then ``EXPLAIN (FORMAT JSON)`` (nothing executes) of the statement get() sends for the
