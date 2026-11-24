@@ -538,9 +538,11 @@ def refresh_vault_needles(stop: Optional[threading.Event] = None) -> Dict[str, s
                 report[label] = "ok"
             except SecretPatternsUnavailable as exc:
                 report[label] = str(exc)
-        if stop is not None and stop.is_set():
-            return {label: "not kept: the refresher was stopped" for _i, label in pairs}
         with _lock:
+            # Decided under _lock, where stop_vault_refresher() sets ``stop``: a refresh stopped while it
+            # waited for the lock keeps nothing (xreview r2 #2).
+            if stop is not None and stop.is_set():
+                return {label: "not kept: the refresher was stopped" for _i, label in pairs}
             published = [_publish(i, v, t) for i, (v, t) in fetched.items()]
             now = time.monotonic()
             for item_id, label in pairs:
@@ -593,7 +595,10 @@ def stop_vault_refresher(timeout: float = 5.0) -> bool:
     with _refresher_lock:
         stop, t = _refresher["stop"], _refresher["thread"]
         if stop is not None:
-            stop.set()
+            with (
+                _lock
+            ):  # see refresh_vault_needles: publication and stop are decided under one lock
+                stop.set()
         if t is not None:
             t.join(timeout)
             if t.is_alive():
@@ -641,6 +646,15 @@ def patterns() -> List[Pass]:
                 else None
             )
             _cache["key"] = key
+        # xreview r2 #1: one item's slow fetch inside the reload can carry another, already accepted, past
+        # the cap. Checked on the finished set, at return: this write fails closed, and the next call
+        # fetches the over-age item again.
+        expires_at = _cache.get("expires_at")
+        if expires_at is not None and time.monotonic() >= expires_at:
+            _cache["key"] = None
+            raise SecretPatternsUnavailable(
+                f"a vault needle passed the {_VAULT_MAX_KEEP:.0f} s limit while the needles reloaded"
+            )
         return _cache["patterns"]
 
 
