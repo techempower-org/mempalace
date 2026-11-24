@@ -853,6 +853,7 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
     content_hash=None,
     source_dir_ino=None,
     palace_path=None,
+    progress=None,
 ):
     """Lock the source file, reconcile it against what the palace already
     holds, and upsert only the chunks that are new or changed.
@@ -899,13 +900,22 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
     the metadata refresh fails, the affected chunks are simply re-filed in full
     (wasteful, never lossy).
 
+    Each step reports its own phase to ``MEMPALACE_MINE_PHASE_FILE``
+    (``lock``, ``reconcile``, ``refresh``, ``write``, ``purge``) with
+    ``progress`` and the chunk counts, so a mine that sits in one file for
+    hours says which step it is in (#548). ``lock`` is reported *before* the
+    blocking per-file flock, so a wait on another holder reads as ``lock``.
+
     Returns (drawers_added, room_counts_delta, skipped). ``skipped`` is
     :data:`PURGE_FAILED` when the stale-drawer purge raised, which the mine
     counts as an error rather than a skip.
     """
     room_counts_delta: dict = defaultdict(int)
     drawers_added = 0
+    counts = dict(progress or {}, chunks=len(chunks))
+    report_phase("lock", **counts)
     with mine_lock(source_file):
+        report_phase("reconcile", **counts)
         # Re-check after lock — another agent may have just finished this file
         # at the current schema/mtime. A stale hit here returns False, so we
         # still fall through to the reconcile path below.
@@ -1083,6 +1093,7 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
             collection, unchanged, extract_mode, content_hash
         )
         if to_refresh:
+            report_phase("refresh", refreshing=len(to_refresh), **counts)
             refreshed = _refresh_unchanged_drawers(
                 collection,
                 to_refresh,
@@ -1112,6 +1123,9 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
         # the embedding speedup without one huge Chroma/SQLite request.
         try:
             for batch_start in range(0, len(changed), DRAWER_UPSERT_BATCH_SIZE):
+                # Novelty lookups, embedding and the upsert all run in this
+                # phase; ``written`` stops advancing when one batch hangs.
+                report_phase("write", written=drawers_added, changed=len(changed), **counts)
                 batch_docs: list = []
                 batch_ids: list = []
                 batch_metas: list = []
@@ -1216,6 +1230,8 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
         # delete is an error for this file (the manifest is not written, so the
         # next pass retries); the rows just written stay. Private rows the pass
         # no longer files privately go too.
+        if orphan_ids or private_orphans:
+            report_phase("purge", orphans=len(orphan_ids) + len(private_orphans), **counts)
         try:
             if orphan_ids:
                 collection.delete(ids=orphan_ids)
@@ -2138,6 +2154,7 @@ def _mine_convos_impl(
             content_hash=content_hash,
             source_dir_ino=source_directory_identity(filepath),
             palace_path=palace_path,
+            progress=progress,
         )
         if skipped == PURGE_FAILED:
             files_failed.append(source_file)

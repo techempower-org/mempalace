@@ -110,6 +110,9 @@ def test_convo_mine_walks_its_phases_in_order(tmp_path, monkeypatch, capsys):
         "normalize",
         "chunk",
         "file",
+        "lock",
+        "reconcile",
+        "write",
         "hallways",
         "validate",
         "done",
@@ -117,3 +120,75 @@ def test_convo_mine_walks_its_phases_in_order(tmp_path, monkeypatch, capsys):
     rec = _read(target)
     assert rec["phase"] == "done"
     assert rec["drawers_filed"] >= 2
+
+
+def _write_convo(convos, exchanges):
+    (convos / "chat.txt").write_text(
+        "".join(f"> Question {i}?\nAnswer number {i} is persistence.\n\n" for i in exchanges)
+    )
+
+
+def test_a_lock_wait_reads_as_lock_with_the_file_counts(tmp_path, monkeypatch, capsys):
+    """The phase is written BEFORE the blocking per-file flock (#548)."""
+    import contextlib
+
+    import mempalace.convo_miner as convo_miner
+
+    convos = tmp_path / "convos"
+    convos.mkdir()
+    _write_convo(convos, range(3))
+    target = tmp_path / "phase.json"
+    monkeypatch.setenv(mine_phase.ENV_VAR, str(target))
+
+    at_lock = []
+    real_lock = convo_miner.mine_lock
+
+    @contextlib.contextmanager
+    def watching_lock(source_file):
+        at_lock.append(_read(target))
+        with real_lock(source_file):
+            yield
+
+    monkeypatch.setattr(convo_miner, "mine_lock", watching_lock)
+    mine_convos(str(convos), str(tmp_path / "palace"), wing="test_phase")
+    capsys.readouterr()
+
+    assert len(at_lock) == 1
+    rec = at_lock[0]
+    assert rec["phase"] == "lock"
+    assert (rec["file"], rec["files_total"]) == (1, 1)
+    assert rec["chunks"] >= 2
+
+
+def test_a_re_mine_of_a_shrunk_file_reports_its_purge(tmp_path, monkeypatch, capsys):
+    convos = tmp_path / "convos"
+    convos.mkdir()
+    palace = str(tmp_path / "palace")
+    _write_convo(convos, range(4))
+    mine_convos(str(convos), palace, wing="test_phase")
+
+    # Shrink the file and move its mtime, so the second pass re-mines it
+    # with fewer chunks and leaves orphans to delete.
+    _write_convo(convos, range(2))
+    st = os.stat(convos / "chat.txt")
+    os.utime(convos / "chat.txt", (st.st_atime, st.st_mtime + 10))
+
+    seen = []
+    real = mine_phase.report
+
+    def spy(phase, **counts):
+        seen.append((phase, counts))
+        real(phase, **counts)
+
+    monkeypatch.setattr("mempalace.convo_miner.report_phase", spy)
+    monkeypatch.setenv(mine_phase.ENV_VAR, str(tmp_path / "phase.json"))
+    mine_convos(str(convos), palace, wing="test_phase")
+    capsys.readouterr()
+
+    phases = [p for p, _ in seen]
+    assert "refresh" in phases
+    assert phases.index("lock") < phases.index("reconcile") < phases.index("refresh")
+    assert phases.index("refresh") < phases.index("purge") < phases.index("hallways")
+    purge = dict(seen)["purge"]
+    assert purge["orphans"] >= 1
+    assert purge["file"] == 1
