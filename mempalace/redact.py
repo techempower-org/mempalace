@@ -165,6 +165,10 @@ DEFAULT_PATTERNS: Dict[str, str] = {
     "blob": r"(?:(?<![A-Za-z0-9+])|(?<=\\[nrt]))e[wy][A-Za-z0-9+/]{98,}={0,2}",
     # A TOTP or HOTP provisioning URI: its secret= is the second factor's seed.
     "otpauth": r"otpauth://[A-Za-z]{4}/[^\s\"'\\<>]+",
+    # A bcrypt password hash ($2a$/$2b$/$2y$, a two-digit cost, 53 characters of salt and digest). 2026-11-24:
+    # Caddy basic_auth lines and an app's admin user row reached 14 drawers; a hash of a person's password can
+    # be attacked offline, and no other rule took it. Exactly 53, not followed by more of its alphabet.
+    "bcrypt": r"\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}(?![./A-Za-z0-9])",
     # A PEM private key (OpenSSH, RSA, EC, DSA, PKCS#8, encrypted or not): see _PEM.
     "pem": _PEM,
     # A PuTTY (.ppk) key's private lines: see _PPK.

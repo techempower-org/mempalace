@@ -23,6 +23,8 @@ FAKE = {
     "litellm": "sk-" + "Xq7" * 7 + "B",
     # A DigitalOcean GenAI key ("sk-do-"); one-case letters, which the litellm shape alone leaves raw.
     "digitalocean": "sk-" + "do-" + "qz" * 24,
+    # A bcrypt hash: "$2b$12$" and 53 characters of its alphabet (a fake, built in pieces).
+    "bcrypt": "$2" + "b$12$" + ("Ab3./Xy9Qe" * 6)[:53],
 }
 
 
@@ -2047,6 +2049,36 @@ def test_a_digitalocean_key_is_named_and_never_left_raw(body):
             "api_key=" not in text
         ):  # a named query value goes whole to the assignment rule, which is redacted too
             assert _placeholder("digitalocean", value) in out
+
+
+@pytest.mark.parametrize("prefix", ["$2a$10$", "$2b$12$", "$2y$14$"])
+def test_a_bcrypt_hash_is_named_and_never_left_raw(prefix):
+    """2026-11-24: Caddy basic_auth lines and an app's admin user row put bcrypt hashes into 14 drawers, and no
+    rule took them. Every variant is caught as its own kind, in the contexts a transcript holds."""
+    value = prefix + ("Zq8./Wm4Tn" * 6)[:53]
+    for text in (
+        f"    cassandra {value}",  # a Caddyfile basic_auth line
+        f"admin:{value}",  # an htpasswd line
+        '{"password": "' + value + '"}',
+        "INSERT INTO users VALUES ('admin', '" + value + "');",
+        "line one\\n" + value + "\\nline two",  # a raw JSONL escape right before and after
+    ):
+        out = redact(text)
+        assert value not in out, text
+        if "password" not in text:  # a named value goes whole to the assignment rule, redacted too
+            assert _placeholder("bcrypt", value) in out, text
+
+
+def test_bcrypt_lookalikes_are_left():
+    body = ("Zq8./Wm4Tn" * 6)[:53]
+    for text in (
+        "the $2a$ prefix marks bcrypt",
+        "$2b$12$" + body[:52] + " short by one",
+        "$2b$12$" + body + "Q",  # one more of its alphabet: not a bcrypt hash
+        "$2x$12$" + body,  # not a bcrypt variant
+        "$2b$1$" + body,  # one cost digit
+    ):
+        assert "[redacted bcrypt" not in redact(text), text
 
 
 def test_identity_fields_are_never_rewritten_but_content_fields_still_are():
