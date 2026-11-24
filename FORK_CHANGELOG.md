@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **redaction takes bcrypt password hashes ($2a$/$2b$/$2y$) as their own strong kind** (`HEAD` — pending resolution)
+- **redaction takes bcrypt password hashes ($2a$/$2b$/$2y$) as their own strong kind** ([`9929cad`](https://github.com/techempower-org/mempalace/commit/9929cad))
   Caddy basic_auth lines and an app's admin user row put bcrypt hashes into
   14 drawers, and no rule took them: a hash of a person's password can be
   attacked offline. The strong passes now include a `bcrypt` kind: every

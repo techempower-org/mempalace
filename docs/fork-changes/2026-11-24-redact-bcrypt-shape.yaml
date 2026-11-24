@@ -2,7 +2,7 @@ seq: 215
 id: redact-bcrypt-shape
 date: '2026-11-24'
 bucket: Changed
-commit: HEAD
+commit: 9929cad
 area: Reliability
 summary: redaction takes bcrypt password hashes ($2a$/$2b$/$2y$) as their own strong kind
 body: |
