@@ -297,7 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
-| index the judged-parent lookup keys; `mempalace lookup-indexes` builds missing ones online | — | `HEAD` — pending resolution |
+| index the judged-parent lookup keys; `mempalace lookup-indexes` builds missing ones online | — | [`2423c26`](https://github.com/techempower-org/mempalace/commit/2423c26) |
 | a dream run reads its keys from 0600 env files named by --key-file, so a unit needs no EnvironmentFile= on a secrets file | — | [`2bd76b0`](https://github.com/techempower-org/mempalace/commit/2bd76b0) |
 | a re-mine asks which drawers exist by id, never by source_file, and redaction never rewrites a source_file or an id with the broad shapes | — | [`42dfd33`](https://github.com/techempower-org/mempalace/commit/42dfd33) |
 | a DigitalOcean GenAI key (sk-do-) is redacted on every write as its own kind, whatever the case of its body | — | [`2b200e4`](https://github.com/techempower-org/mempalace/commit/2b200e4) |

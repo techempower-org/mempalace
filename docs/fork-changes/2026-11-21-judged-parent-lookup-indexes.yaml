@@ -2,7 +2,7 @@ seq: 213
 id: judged-parent-lookup-indexes
 date: '2026-11-21'
 bucket: Changed
-commit: HEAD
+commit: 2423c26
 area: Performance
 summary: index the judged-parent lookup keys; `mempalace lookup-indexes` builds missing ones online
 body: |

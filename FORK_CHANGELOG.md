@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **index the judged-parent lookup keys; `mempalace lookup-indexes` builds missing ones online** (`HEAD` — pending resolution)
+- **index the judged-parent lookup keys; `mempalace lookup-indexes` builds missing ones online** ([`2423c26`](https://github.com/techempower-org/mempalace/commit/2423c26))
   The search path hides results whose logical parent is judged out. For ids
   it cannot find directly, it runs get(where={key: {"$in": missing}},
   limit=256) for parent_drawer_id and parent_entry_id. Those ids are missing
