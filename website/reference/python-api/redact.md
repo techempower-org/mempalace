@@ -83,7 +83,8 @@ def refresh_vault_needles() -> Dict[str, str]
 
 Fetch every configured vault item now, outside the write lock, and keep each good value; a write
 never waits on the vault for an item with a good value. Returns &#123;label: "ok" | "kept (&lt;age> s): &lt;why>"
-| "none: &lt;why>"}, labels and reasons only. The next patterns() call recompiles from the new values.
+| "expired (&lt;age> s): &lt;why>" | "none: &lt;why>"}, labels and reasons only (expired: kept past
+``_VAULT_MAX_KEEP``, so writes fail closed). The next patterns() call recompiles from the new values.
 
 ### `start_vault_refresher`
 

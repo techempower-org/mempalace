@@ -12,9 +12,10 @@ body: |
 
   Each item's last good value is now kept in memory. A fetch that fails
   keeps it (logged by label and age, never the value); only an item with no
-  good value fails closed, as before. A config change still fetches every
+  good value fails closed, as before, and so does an item whose last good
+  fetch is more than 24 h old. A config change still fetches every
   value again. `start_vault_refresher()` runs the fetches on a timer thread
   every half TTL, outside the write lock, and while it runs a write never
   waits on the vault. palace-daemon starts it at startup.
-  `refresh_vault_needles()` and `vault_status()` report each label as ok,
-  kept (with its age) or none.
+  `refresh_vault_needles()` reports each label as ok, kept, expired or
+  none; `vault_status()` gives each label's age.

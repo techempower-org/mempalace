@@ -333,6 +333,10 @@ def _load(refetch: bool = False) -> List[Tuple[str, re.Pattern]]:
 _VAULT_LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 _VAULT_MAX_ITEMS = 5
 _VAULT_TTL = 600.0  # a rotated vault value is picked up within 10 minutes
+# A value kept after failed fetches is trusted this long after its last good fetch, then the item fails
+# closed again: a vault that cannot answer for a day is an outage, not a transient timeout, and a value
+# rotated meanwhile would otherwise never be matched.
+_VAULT_MAX_KEEP = 86400.0
 
 
 def _vault_fetch(item_id: str) -> str:
@@ -441,23 +445,29 @@ def _fetch_checked(item_id: str, label: str) -> str:
 
 
 def _vault_value(item_id: str, label: str, now: float, refetch: bool = False) -> str:
-    """The value to match for one item (call under _lock). While the refresher runs, any cached value is
+    """The value to match for one item (call under _lock). While the refresher runs, a cached value is
     used (it fetches off the write path, every half TTL). Without it, a cached value younger than the TTL
     is used unless ``refetch`` (the config changed). Otherwise fetch; if that fails, keep the last good
-    value (logged by label and age, never the value), and fail closed only when there is none."""
+    value (logged by label and age, never the value). Fail closed when there is none, or when it is older
+    than ``_VAULT_MAX_KEEP``, refresher or not."""
     cached = _vault_values.get(item_id)
-    if cached is not None and (
-        _refresher_alive() or (not refetch and now - cached[1] <= _VAULT_TTL)
+    age = now - cached[1] if cached is not None else None
+    if (
+        age is not None
+        and age <= _VAULT_MAX_KEEP
+        and (_refresher_alive() or (not refetch and age <= _VAULT_TTL))
     ):
         return cached[0]
     try:
         value = _fetch_checked(item_id, label)
     except SecretPatternsUnavailable as exc:
-        if cached is None:
+        if age is None:
             raise
-        logger.warning(
-            "redact: %s; keeping the last good value (fetched %.0f s ago)", exc, now - cached[1]
-        )
+        if age > _VAULT_MAX_KEEP:
+            raise SecretPatternsUnavailable(
+                f"{exc}; its last good value is {age:.0f} s old, past the {_VAULT_MAX_KEEP:.0f} s limit"
+            ) from exc
+        logger.warning("redact: %s; keeping the last good value (fetched %.0f s ago)", exc, age)
         return cached[0]
     _vault_values[item_id] = (value, now)
     return value
@@ -481,7 +491,8 @@ def _vault_passes(items: Any, now: Optional[float] = None, refetch: bool = False
 def refresh_vault_needles() -> Dict[str, str]:
     """Fetch every configured vault item now, outside the write lock, and keep each good value; a write
     never waits on the vault for an item with a good value. Returns {label: "ok" | "kept (<age> s): <why>"
-    | "none: <why>"}, labels and reasons only. The next patterns() call recompiles from the new values."""
+    | "expired (<age> s): <why>" | "none: <why>"}, labels and reasons only (expired: kept past
+    ``_VAULT_MAX_KEEP``, so writes fail closed). The next patterns() call recompiles from the new values."""
     from .config import MempalaceConfig
 
     config = MempalaceConfig()
@@ -504,9 +515,12 @@ def refresh_vault_needles() -> Dict[str, str]:
                 continue
             cached = _vault_values.get(item_id)
             why = report[label]
-            report[label] = (
-                f"kept ({now - cached[1]:.0f} s): {why}" if cached is not None else f"none: {why}"
-            )
+            if cached is None:
+                report[label] = f"none: {why}"
+            elif now - cached[1] > _VAULT_MAX_KEEP:
+                report[label] = f"expired ({now - cached[1]:.0f} s): {why}"
+            else:
+                report[label] = f"kept ({now - cached[1]:.0f} s): {why}"
             logger.warning("redact: needle refresh: %s %s", label, report[label])
         if fetched:
             # recompile from the new values on the next call, fetching nothing

@@ -1358,6 +1358,14 @@ def test_619_vault_values_refresh_after_the_ttl_and_a_failed_refresh_keeps_the_l
     assert redact(f"a {rotated} b") == "a [redacted vault rot] b"
     assert R.vault_status() == [("rot", pytest.approx(4 * R._VAULT_TTL + 1))]
 
+    # Kept only for _VAULT_MAX_KEEP after the last good fetch: a day-long outage fails closed again.
+    state["now"] += R._VAULT_MAX_KEEP
+    with pytest.raises(SecretPatternsUnavailable, match="past the 86400 s limit"):
+        redact("anything")
+    monkeypatch.setattr(R, "_vault_fetch", lambda _i: rotated)  # the vault answers again
+    assert redact(f"a {rotated} b") == "a [redacted vault rot] b"
+    monkeypatch.setattr(R, "_vault_fetch", locked)
+
     # An item with no good value still fails closed, and so does every write while it is listed.
     (_config / "config.json").write_text(
         _json.dumps(
@@ -1409,6 +1417,34 @@ def test_619_refresh_vault_needles_reports_ok_kept_and_none(_config, monkeypatch
     R._vault_values.clear()
     report = R.refresh_vault_needles()
     assert report["flaky"].startswith("none: ") and report["good"] == "ok"
+
+    R._vault_values["b"] = ("flaky" + "secret", R.time.monotonic() - R._VAULT_MAX_KEEP - 5)
+    report = R.refresh_vault_needles()
+    assert report["flaky"].startswith("expired (")
+
+
+def test_619_the_refresher_does_not_keep_a_value_past_the_max_keep(_config, monkeypatch):
+    import json as _json
+
+    import mempalace.redact as R
+
+    (_config / "config.json").write_text(
+        _json.dumps({"secret_vault_items": [{"id": "i", "label": "old"}]})
+    )
+
+    def locked(_i):
+        raise SecretPatternsUnavailable("vault unreachable (TimeoutExpired)")
+
+    monkeypatch.setattr(R, "_vault_fetch", locked)
+    monkeypatch.setattr(R, "_refresher_alive", lambda: True)  # a refresher that keeps failing
+    now = R.time.monotonic()
+    R._vault_values["i"] = (VAULT_VALUE, now - R._VAULT_MAX_KEEP + 60)
+    R._cache["key"] = None
+    assert redact(f"pw {VAULT_VALUE}") == "pw [redacted vault old]"
+    R._vault_values["i"] = (VAULT_VALUE, now - R._VAULT_MAX_KEEP - 60)
+    R._cache["key"] = None
+    with pytest.raises(SecretPatternsUnavailable, match="past the"):
+        redact("anything")
 
 
 def test_619_with_the_refresher_running_a_write_never_waits_on_the_vault(_config, monkeypatch):
