@@ -75,15 +75,57 @@ store a credential they would have caught, so the write stops instead.
 
 ## Functions
 
+### `refresh_vault_needles`
+
+```python
+def refresh_vault_needles(stop: Optional[threading.Event] = None) -> Dict[str, str]
+```
+
+Fetch every configured vault item now, outside the write lock, and keep each good value; a write
+never waits on the vault for an item with a good value. One refresh runs at a time, and a fetch is
+kept only if it is newer than the kept one. With ``stop`` set by the time the fetches return, nothing
+is kept. Returns &#123;label: "ok" | "kept (&lt;age> s)" | "expired (&lt;age> s)" | "none"}, each failure followed
+by this module's own reason (no CLI output); expired: kept past ``_VAULT_MAX_KEEP``, so writes fail
+closed. The next patterns() call recompiles from the new values.
+
+### `start_vault_refresher`
+
+```python
+def start_vault_refresher(interval: float = _VAULT_TTL / 2) -> bool
+```
+
+Start (once per process) a daemon thread that runs refresh_vault_needles() now and every
+``interval`` seconds, so a long-lived writer (palace-daemon) never fetches on the write path. False
+when one is already tracked (running, or told to stop and not yet exited).
+
+### `stop_vault_refresher`
+
+```python
+def stop_vault_refresher(timeout: float = 5.0) -> bool
+```
+
+Tell the refresher to stop and wait up to ``timeout``. True when no refresher thread is left;
+False when it is still inside a fetch: it stays tracked, and it keeps nothing it fetches.
+
+### `vault_status`
+
+```python
+def vault_status() -> List[Tuple[str, Optional[float]]]
+```
+
+(label, seconds since its last good fetch, or None if it has none) per configured item.
+
 ### `patterns`
 
 ```python
 def patterns() -> List[Pass]
 ```
 
-The compiled patterns, re-read when the config file changes, and also every ``_VAULT_TTL``
-seconds while vault needles are configured, so a rotated value is picked up; a refresh that
-fails raises (fails closed) rather than keep matching a stale value.
+The compiled patterns, re-read when the config file changes (every vault value fetched again),
+every ``_VAULT_TTL`` seconds while vault needles are configured (a value older than that fetched
+again, unless the refresher keeps them), after the refresher brings new values, and when the oldest
+kept value reaches ``_VAULT_MAX_KEEP``. A vault fetch that fails keeps that item's last good value
+until then; an item with none fails closed, and so does an unreadable or invalid config.
 
 ### `redact`
 

@@ -67,11 +67,14 @@ from __future__ import annotations
 
 import bisect
 import hashlib
+import logging
 import os
 import re
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 # Kind -> pattern. Each matches a credential's shape only.
 # A PEM private key, taken line by line (2026-11-17: four OpenSSH private keys sat in drawers and no
@@ -313,7 +316,7 @@ def _config_signature() -> Tuple[str, Optional[Tuple[int, ...]]]:
     return path, (st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
 
 
-def _load() -> List[Tuple[str, re.Pattern]]:
+def _load(refetch: bool = False) -> List[Tuple[str, re.Pattern]]:
     from .config import MempalaceConfig
 
     config = MempalaceConfig()
@@ -322,12 +325,18 @@ def _load() -> List[Tuple[str, re.Pattern]]:
     raw = config._file_config.get("secret_patterns", [])
     if not isinstance(raw, list) or not all(isinstance(p, str) and p for p in raw):
         raise SecretPatternsUnavailable("secret_patterns must be a list of non-empty strings")
-    return _compile(tuple(raw)) + _vault_passes(config._file_config.get("secret_vault_items", []))
+    return _compile(tuple(raw)) + _vault_passes(
+        config._file_config.get("secret_vault_items", []), refetch=refetch
+    )
 
 
 _VAULT_LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
 _VAULT_MAX_ITEMS = 5
 _VAULT_TTL = 600.0  # a rotated vault value is picked up within 10 minutes
+# A value kept after failed fetches is trusted this long after its last good fetch, then the item fails
+# closed again: a vault that cannot answer for a day is an outage, not a transient timeout, and a value
+# rotated meanwhile would otherwise never be matched.
+_VAULT_MAX_KEEP = 86400.0
 
 
 def _vault_fetch(item_id: str) -> str:
@@ -339,6 +348,10 @@ def _vault_fetch(item_id: str) -> str:
     bw = shutil.which("bw") or os.path.expanduser("~/.local/bin/bw")
     env = dict(os.environ)
     env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    # Each failure is raised OUTSIDE its except block, so the exception carries no __cause__ or
+    # __context__: a TimeoutExpired holds the CLI's partial output, and a UnicodeDecodeError's .object
+    # IS the answer, the secret's bytes. Chained, a traceback or a logger could print them.
+    failed = None
     try:
         r = subprocess.run(
             [bw, "--nointeraction", "get", "password", item_id],
@@ -347,11 +360,15 @@ def _vault_fetch(item_id: str) -> str:
             env=env,  # bytes: text mode would turn "\r" into "\n"
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise SecretPatternsUnavailable(f"vault unreachable ({type(exc).__name__})") from exc
+        failed = type(exc).__name__
+    if failed is not None:
+        raise SecretPatternsUnavailable(f"vault unreachable ({failed})")
     try:
         value = (r.stdout or b"").decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise SecretPatternsUnavailable("vault answered undecodable bytes") from exc
+    except UnicodeDecodeError:
+        value = None
+    if value is None:
+        raise SecretPatternsUnavailable("vault answered undecodable bytes")
     if value.endswith("\n"):  # the CLI's line terminator, if any; the value itself is kept as is
         value = value[:-1]
     if r.returncode != 0 or not value.strip():
@@ -389,17 +406,15 @@ def _needle_pattern(value: str) -> str:
     return "(?:" + "|".join(alts) + ")"
 
 
-def _vault_passes(items: Any) -> List[Pass]:
-    """One pass per configured vault item: its current value, on alphanumeric word boundaries, becomes
-    ``[redacted vault <label>]`` (no hash: the value may be guessable). The config holds item ids and
-    labels only. Any item that cannot be fetched fails closed, like an unreadable config."""
+def _vault_items(items: Any) -> List[Tuple[str, str]]:
+    """The configured vault items as (id, label), checked; a malformed list fails closed."""
     if not isinstance(items, list):
         raise SecretPatternsUnavailable("secret_vault_items must be a list")
     if len(items) > _VAULT_MAX_ITEMS:  # each fetch may take its 30 s timeout; keep a load bounded
         raise SecretPatternsUnavailable(
             f"secret_vault_items lists more than {_VAULT_MAX_ITEMS} items"
         )
-    out: List[Pass] = []
+    out = []
     for it in items:
         if not (
             isinstance(it, dict)
@@ -411,33 +426,235 @@ def _vault_passes(items: Any) -> List[Pass]:
             raise SecretPatternsUnavailable(
                 "secret_vault_items entries need an id and a label [a-z0-9-]"
             )
-        try:
-            value = _vault_fetch(it["id"])
-        except SecretPatternsUnavailable as exc:
-            raise SecretPatternsUnavailable(f"vault item {it['label']}: {exc}") from exc
-        if len(value.strip()) < 6:
-            raise SecretPatternsUnavailable(
-                f"vault item {it['label']}: value too short to match safely"
-            )
-        out.append(_pass([(f"vault {it['label']}", _needle_pattern(value))]))
+        out.append((it["id"], it["label"]))
     return out
 
 
+# The last good value of each vault item: {item id: (value, time.monotonic() when its fetch returned)}.
+# Held in memory only, under _lock, and only ever replaced by a newer fetch (_publish). A fetch that fails
+# keeps it: one slow or locked vault answer must not refuse every palace write while a good value is known.
+# It counts for _VAULT_MAX_KEEP after that fetch; an item with no good value, or an older one, fails closed.
+_vault_values: Dict[str, Tuple[str, float]] = {}
+# The refresher thread and its stop event; changed only under _refresher_lock. A thread that has not
+# exited stays tracked (so no second one starts beside it) and, once stopped, never publishes.
+_refresher: Dict[str, Any] = {"thread": None, "stop": None}
+_refresher_lock = threading.Lock()
+_refresh_lock = (
+    threading.Lock()
+)  # one refresh_vault_needles() at a time: fetch order = publish order
+
+
+def _refresher_alive() -> bool:
+    """A refresher is running and has not been told to stop: only then may a write trust any cached
+    value younger than _VAULT_MAX_KEEP without fetching."""
+    t, stop = _refresher["thread"], _refresher["stop"]
+    return t is not None and t.is_alive() and stop is not None and not stop.is_set()
+
+
+def _fetch_checked(item_id: str, label: str) -> str:
+    why = None
+    try:
+        value = _vault_fetch(item_id)
+    except SecretPatternsUnavailable as exc:
+        why = str(exc)  # this module's own wording, raised with no chained exception
+    if why is not None:
+        raise SecretPatternsUnavailable(f"vault item {label}: {why}")
+    if len(value.strip()) < 6:
+        raise SecretPatternsUnavailable(f"vault item {label}: value too short to match safely")
+    return value
+
+
+def _publish(item_id: str, value: str, fetched_at: float) -> bool:
+    """Keep ``value`` unless a newer fetch is already kept (call under _lock)."""
+    cached = _vault_values.get(item_id)
+    if cached is not None and cached[1] >= fetched_at:
+        return False
+    _vault_values[item_id] = (value, fetched_at)
+    return True
+
+
+def _vault_value(item_id: str, label: str, refetch: bool = False) -> str:
+    """The value to match for one item (call under _lock). While the refresher runs, a cached value is
+    used (it fetches off the write path, every half TTL). Without it, a cached value younger than the TTL
+    is used unless ``refetch`` (the config changed). Otherwise fetch; if that fails, keep the last good
+    value (logged by label and age, never the value). Fail closed when there is none, or when it is older
+    than ``_VAULT_MAX_KEEP`` (measured after the failed fetch), refresher or not."""
+    cached = _vault_values.get(item_id)
+    if cached is not None:
+        age = time.monotonic() - cached[1]
+        if age <= _VAULT_MAX_KEEP and (_refresher_alive() or (not refetch and age <= _VAULT_TTL)):
+            return cached[0]
+    try:
+        value = _fetch_checked(item_id, label)
+    except SecretPatternsUnavailable as exc:
+        if cached is None:
+            raise
+        age = time.monotonic() - cached[1]  # after the fetch: a 30 s timeout can cross the limit
+        if age > _VAULT_MAX_KEEP:
+            raise SecretPatternsUnavailable(
+                f"{exc}; its last good value is {age:.0f} s old, past the {_VAULT_MAX_KEEP:.0f} s limit"
+            ) from None
+        logger.warning("redact: %s; keeping the last good value (fetched %.0f s ago)", exc, age)
+        return cached[0]
+    _publish(item_id, value, time.monotonic())
+    return _vault_values[item_id][0]
+
+
+def _vault_passes(items: Any, refetch: bool = False) -> List[Pass]:
+    """One pass per configured vault item: its value, on alphanumeric word boundaries, becomes
+    ``[redacted vault <label>]`` (no hash: the value may be guessable). The config holds item ids and
+    labels only. An item with no good value (never fetched, fetched too short, or kept past
+    ``_VAULT_MAX_KEEP``) fails closed, like an unreadable config; an item no longer configured leaves
+    the cache."""
+    pairs = _vault_items(items)
+    for gone in set(_vault_values) - {i for i, _l in pairs}:
+        del _vault_values[gone]
+    return [
+        _pass([(f"vault {label}", _needle_pattern(_vault_value(item_id, label, refetch)))])
+        for item_id, label in pairs
+    ]
+
+
+def refresh_vault_needles(stop: Optional[threading.Event] = None) -> Dict[str, str]:
+    """Fetch every configured vault item now, outside the write lock, and keep each good value; a write
+    never waits on the vault for an item with a good value. One refresh runs at a time, and a fetch is
+    kept only if it is newer than the kept one. With ``stop`` set by the time the fetches return, nothing
+    is kept. Returns {label: "ok" | "kept (<age> s)" | "expired (<age> s)" | "none"}, each failure followed
+    by this module's own reason (no CLI output); expired: kept past ``_VAULT_MAX_KEEP``, so writes fail
+    closed. The next patterns() call recompiles from the new values."""
+    from .config import MempalaceConfig
+
+    with _refresh_lock:
+        config = MempalaceConfig()
+        if getattr(config, "_file_config_state", "read") in ("unread", "unparsed"):
+            raise SecretPatternsUnavailable("palace config unreadable; secret_vault_items unknown")
+        pairs = _vault_items(config._file_config.get("secret_vault_items", []))
+        fetched: Dict[str, Tuple[str, float]] = {}
+        report: Dict[str, str] = {}
+        for item_id, label in pairs:
+            try:
+                value = _fetch_checked(item_id, label)
+                fetched[item_id] = (value, time.monotonic())
+                report[label] = "ok"
+            except SecretPatternsUnavailable as exc:
+                report[label] = str(exc)
+        with _lock:
+            # Decided under _lock, where stop_vault_refresher() sets ``stop``: a refresh stopped while it
+            # waited for the lock keeps nothing (xreview r2 #2).
+            if stop is not None and stop.is_set():
+                return {label: "not kept: the refresher was stopped" for _i, label in pairs}
+            published = [_publish(i, v, t) for i, (v, t) in fetched.items()]
+            now = time.monotonic()
+            for item_id, label in pairs:
+                if report[label] == "ok":
+                    continue
+                cached = _vault_values.get(item_id)
+                why = report[label]
+                if cached is None:
+                    report[label] = f"none: {why}"
+                elif now - cached[1] > _VAULT_MAX_KEEP:
+                    report[label] = f"expired ({now - cached[1]:.0f} s): {why}"
+                else:
+                    report[label] = f"kept ({now - cached[1]:.0f} s): {why}"
+                logger.warning("redact: needle refresh: %s %s", label, report[label])
+            if any(published):
+                # recompile from the new values on the next call, fetching nothing
+                _cache["dirty"] = True
+        return report
+
+
+def start_vault_refresher(interval: float = _VAULT_TTL / 2) -> bool:
+    """Start (once per process) a daemon thread that runs refresh_vault_needles() now and every
+    ``interval`` seconds, so a long-lived writer (palace-daemon) never fetches on the write path. False
+    when one is already tracked (running, or told to stop and not yet exited)."""
+    with _refresher_lock:
+        t = _refresher["thread"]
+        if t is not None and t.is_alive():
+            return False
+        stop = threading.Event()
+
+        def run() -> None:
+            while not stop.is_set():
+                try:
+                    refresh_vault_needles(stop)
+                except SecretPatternsUnavailable as exc:
+                    logger.warning("redact: needle refresh failed: %s", exc)
+                except Exception as exc:  # noqa: BLE001 -- the timer must outlive one bad refresh
+                    logger.warning("redact: needle refresh failed (%s)", type(exc).__name__)
+                stop.wait(interval)
+
+        t = threading.Thread(target=run, name="mempalace-vault-refresh", daemon=True)
+        _refresher.update(thread=t, stop=stop)
+        t.start()
+        return True
+
+
+def stop_vault_refresher(timeout: float = 5.0) -> bool:
+    """Tell the refresher to stop and wait up to ``timeout``. True when no refresher thread is left;
+    False when it is still inside a fetch: it stays tracked, and it keeps nothing it fetches."""
+    with _refresher_lock:
+        stop, t = _refresher["stop"], _refresher["thread"]
+        if stop is not None:
+            with (
+                _lock
+            ):  # see refresh_vault_needles: publication and stop are decided under one lock
+                stop.set()
+        if t is not None:
+            t.join(timeout)
+            if t.is_alive():
+                return False
+        _refresher.update(thread=None, stop=None)
+        return True
+
+
+def vault_status() -> List[Tuple[str, Optional[float]]]:
+    """(label, seconds since its last good fetch, or None if it has none) per configured item."""
+    from .config import MempalaceConfig
+
+    pairs = _vault_items(MempalaceConfig()._file_config.get("secret_vault_items", []))
+    with _lock:
+        now = time.monotonic()
+        return [
+            (label, now - _vault_values[i][1] if i in _vault_values else None) for i, label in pairs
+        ]
+
+
 def patterns() -> List[Pass]:
-    """The compiled patterns, re-read when the config file changes, and also every ``_VAULT_TTL``
-    seconds while vault needles are configured, so a rotated value is picked up; a refresh that
-    fails raises (fails closed) rather than keep matching a stale value."""
+    """The compiled patterns, re-read when the config file changes (every vault value fetched again),
+    every ``_VAULT_TTL`` seconds while vault needles are configured (a value older than that fetched
+    again, unless the refresher keeps them), after the refresher brings new values, and when the oldest
+    kept value reaches ``_VAULT_MAX_KEEP``. A vault fetch that fails keeps that item's last good value
+    until then; an item with none fails closed, and so does an unreadable or invalid config."""
     key = _config_signature()
     with _lock:
         now = time.monotonic()
         stale = _cache.get("vault") and now - _cache.get("loaded_at", 0.0) > _VAULT_TTL
-        if _cache["key"] != key or stale:
-            _cache["key"] = None  # a failed reload leaves nothing cached
-            loaded = _load()
+        expires_at = _cache.get("expires_at")
+        expired = expires_at is not None and now >= expires_at
+        changed = _cache["key"] != key
+        if changed or stale or expired or _cache.get("dirty"):
+            _cache["key"] = None  # a failed reload leaves no compiled patterns
+            _cache["dirty"] = False
+            loaded = _load(refetch=changed)
             _cache["patterns"] = loaded
             _cache["vault"] = any(k.startswith("vault ") for _rx, kinds in loaded for k in kinds)
             _cache["loaded_at"] = now
+            # every configured item is in _vault_values now (_vault_passes pruned the rest)
+            _cache["expires_at"] = (
+                min(t for _v, t in _vault_values.values()) + _VAULT_MAX_KEEP
+                if _vault_values
+                else None
+            )
             _cache["key"] = key
+        # xreview r2 #1: one item's slow fetch inside the reload can carry another, already accepted, past
+        # the cap. Checked on the finished set, at return: this write fails closed, and the next call
+        # fetches the over-age item again.
+        expires_at = _cache.get("expires_at")
+        if expires_at is not None and time.monotonic() >= expires_at:
+            _cache["key"] = None
+            raise SecretPatternsUnavailable(
+                f"a vault needle passed the {_VAULT_MAX_KEEP:.0f} s limit while the needles reloaded"
+            )
         return _cache["patterns"]
 
 
