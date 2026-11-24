@@ -2085,12 +2085,17 @@ def test_a_bcrypt_hash_is_named_and_never_left_raw(value):
 
 @pytest.mark.parametrize("value", BCRYPT_VECTORS[:4])
 def test_a_bcrypt_hash_in_an_encoded_spelling_is_taken(value):
-    """xreview r1 on #661: JSON may write "$" as \\u0024 and "/" as \\/, a URL writes "$" as %24."""
+    """xreview r1/r2 on #661: JSON may write "$" as \\u0024 and "/" as \\/; a URL component writes "$" as %24
+    and "/" as %2F (or %2f)."""
+    import urllib.parse
+
     for encoded in (
         value.replace("$", "\\u0024"),
         value.replace("/", "\\/"),
         value.replace("$", "%24"),
         value.replace("$", "\\u0024").replace("/", "\\/"),
+        urllib.parse.quote(value, safe=""),  # a URL component: %24 and %2F
+        urllib.parse.quote(value, safe="").replace("%2F", "%2f"),
     ):
         out = redact(f"x {encoded} y")
         assert "[redacted bcrypt sha256:" in out, encoded
