@@ -1215,6 +1215,7 @@ def _fresh_vault_cache():
     R.stop_vault_refresher()
     R._vault_values.clear()
     R._cache["key"] = None
+    R._cache["expires_at"] = None
 
 
 @pytest.fixture
@@ -1423,7 +1424,9 @@ def test_619_refresh_vault_needles_reports_ok_kept_and_none(_config, monkeypatch
     assert report["flaky"].startswith("expired (")
 
 
-def test_619_the_refresher_does_not_keep_a_value_past_the_max_keep(_config, monkeypatch):
+def test_619_compiled_patterns_never_serve_a_needle_past_the_max_keep(_config, monkeypatch):
+    """xreview r1 #1, #6: a refresher that keeps failing, and nothing invalidates the compiled patterns
+    (no config change, no new value): crossing _VAULT_MAX_KEEP alone must fail the write closed."""
     import json as _json
 
     import mempalace.redact as R
@@ -1431,20 +1434,127 @@ def test_619_the_refresher_does_not_keep_a_value_past_the_max_keep(_config, monk
     (_config / "config.json").write_text(
         _json.dumps({"secret_vault_items": [{"id": "i", "label": "old"}]})
     )
+    clock = {"now": 1000.0}
+    calls = []
 
-    def locked(_i):
-        raise SecretPatternsUnavailable("vault unreachable (TimeoutExpired)")
+    def fetch(_i):
+        calls.append(clock["now"])
+        if len(calls) > 1:
+            raise SecretPatternsUnavailable("vault unreachable (TimeoutExpired)")
+        return VAULT_VALUE
 
-    monkeypatch.setattr(R, "_vault_fetch", locked)
-    monkeypatch.setattr(R, "_refresher_alive", lambda: True)  # a refresher that keeps failing
-    now = R.time.monotonic()
-    R._vault_values["i"] = (VAULT_VALUE, now - R._VAULT_MAX_KEEP + 60)
+    monkeypatch.setattr(R, "_vault_fetch", fetch)
+    monkeypatch.setattr(R.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(R, "_refresher_alive", lambda: True)  # running, and failing every fetch
     R._cache["key"] = None
     assert redact(f"pw {VAULT_VALUE}") == "pw [redacted vault old]"
-    R._vault_values["i"] = (VAULT_VALUE, now - R._VAULT_MAX_KEEP - 60)
+    clock["now"] += R._VAULT_MAX_KEEP - 1  # inside the cap: compiled patterns, no fetch
+    assert redact(f"pw {VAULT_VALUE}") == "pw [redacted vault old]"
+    assert len(calls) == 1
+    clock["now"] += 2  # past it; the config and the cache are untouched
+    with pytest.raises(SecretPatternsUnavailable, match="past the 86400 s limit"):
+        redact("anything")
+
+
+def test_619_a_failing_fetch_that_crosses_the_max_keep_fails_closed(_config, monkeypatch):
+    """xreview r1 #2: the age is measured after the failed fetch, not before it."""
+    import json as _json
+
+    import mempalace.redact as R
+
+    (_config / "config.json").write_text(
+        _json.dumps({"secret_vault_items": [{"id": "i", "label": "slow"}]})
+    )
+    clock = {"now": 1000.0}
+    monkeypatch.setattr(R.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(R, "_vault_fetch", lambda _i: VAULT_VALUE)
     R._cache["key"] = None
+    assert redact(f"pw {VAULT_VALUE}") == "pw [redacted vault slow]"
+
+    def slow_timeout(_i):
+        clock["now"] += 30  # bw's 30 s timeout runs out
+        raise SecretPatternsUnavailable("vault unreachable (TimeoutExpired)")
+
+    monkeypatch.setattr(R, "_vault_fetch", slow_timeout)
+    clock["now"] += R._VAULT_MAX_KEEP - 10  # 10 s inside the cap when the fetch starts
     with pytest.raises(SecretPatternsUnavailable, match="past the"):
         redact("anything")
+
+
+def test_619_an_older_fetch_never_replaces_a_newer_one():
+    """xreview r1 #3: publication keeps the newest fetch, whatever order the fetches finish in."""
+    import mempalace.redact as R
+
+    with R._lock:
+        assert R._publish("i", "newer" + "value", 200.0) is True
+        assert R._publish("i", "older" + "value", 100.0) is False
+        assert R._vault_values["i"] == ("newer" + "value", 200.0)
+
+
+def test_619_a_stopped_refresher_stays_tracked_and_keeps_nothing(_config, monkeypatch):
+    """xreview r1 #4: a stop that times out leaves the thread tracked (no second one starts), and the
+    fetch it was stuck in is not kept when it returns."""
+    import json as _json
+    import threading as _threading
+    import time as _time
+
+    import mempalace.redact as R
+
+    (_config / "config.json").write_text(
+        _json.dumps({"secret_vault_items": [{"id": "i", "label": "late"}]})
+    )
+    entered, release = _threading.Event(), _threading.Event()
+
+    def stuck(_i):
+        entered.set()
+        release.wait(10)
+        return VAULT_VALUE
+
+    monkeypatch.setattr(R, "_vault_fetch", stuck)
+    try:
+        assert R.start_vault_refresher(interval=3600) is True
+        assert entered.wait(5)
+        assert R.stop_vault_refresher(timeout=0.1) is False
+        assert R._refresher_alive() is False  # told to stop: writes no longer trust it
+        assert R.start_vault_refresher(interval=3600) is False  # still tracked
+        release.set()
+        assert R.stop_vault_refresher(timeout=5) is True
+        assert R._vault_values == {}
+        assert R.start_vault_refresher(interval=3600) is True
+        deadline = _time.monotonic() + 5
+        while "i" not in R._vault_values and _time.monotonic() < deadline:
+            _time.sleep(0.01)
+        assert R._vault_values["i"][0] == VAULT_VALUE
+    finally:
+        release.set()
+        R.stop_vault_refresher()
+
+
+def test_619_a_vault_failure_carries_no_chained_exception(monkeypatch):
+    """xreview r1 #5: an undecodable answer's UnicodeDecodeError holds the answer's bytes, and a
+    TimeoutExpired the CLI's output; neither may ride along as __cause__ or __context__."""
+    import subprocess as _sp
+
+    import mempalace.redact as R
+
+    class Undecodable:
+        returncode, stdout = 0, b"\xffsecret-bytes"
+
+    monkeypatch.setattr(_sp, "run", lambda *a, **k: Undecodable())
+    for fn in (R._vault_fetch, lambda i: R._fetch_checked(i, "x")):  # each layer on its own
+        with pytest.raises(SecretPatternsUnavailable) as e1:
+            fn("i")
+        assert e1.value.__cause__ is None and e1.value.__context__ is None
+
+    def timeout(*a, **k):
+        raise _sp.TimeoutExpired(a[0], 30, output=b"partial-secret")
+
+    monkeypatch.setattr(_sp, "run", timeout)
+    for fn in (R._vault_fetch, lambda i: R._fetch_checked(i, "x")):
+        with pytest.raises(SecretPatternsUnavailable, match=r"TimeoutExpired") as e2:
+            fn("i")
+        assert e2.value.__cause__ is None and e2.value.__context__ is None
+    assert "secret" not in str(e1.value) + str(e2.value)
 
 
 def test_619_with_the_refresher_running_a_write_never_waits_on_the_vault(_config, monkeypatch):
