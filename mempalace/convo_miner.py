@@ -29,7 +29,11 @@ from .ids import (
     make_convo_sentinel_id,
     make_exchange_drawer_id,
 )
-from .normalize import UnparsedCodexTranscriptError, normalize_conversations
+from .normalize import (
+    UnparsedCodexTranscriptError,
+    collect_user_messages,
+    normalize_conversations,
+)
 from .rule_candidates import flag_chunks as flag_rule_candidates
 from .source_identity import identity_metadata, source_directory_identity
 from .entities import entities_metadata
@@ -854,6 +858,7 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
     content_hash=None,
     source_dir_ino=None,
     palace_path=None,
+    user_messages=None,
 ):
     """Lock the source file, reconcile it against what the palace already
     holds, and upsert only the chunks that are new or changed.
@@ -1234,9 +1239,11 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
         _write_source_manifest(
             use_manifest, collection, source_file, extract_mode, source_mtime, chunk_total
         )
-        # User lines that read as standing rules go to a per-day review list
-        # (#584). Only this pass's new/changed chunks; never raises.
-        flag_rule_candidates(changed, wing, source_file)
+        # Lines of the user's that read as standing rules go to a per-day
+        # review list (#584): checked on the user's messages (role still
+        # known), listed under this pass's new/changed chunks only; never
+        # raises.
+        flag_rule_candidates(changed, wing, source_file, user_messages=user_messages)
         if unchanged:
             print(
                 f"    = {len(unchanged)} unchanged drawer(s) kept, "
@@ -2041,16 +2048,20 @@ def _mine_convos_impl(
 
         progress = {"file": i, "files_total": len(files), "drawers_filed": total_drawers}
         report_phase("normalize", **progress)
-        conversations = _normalize_convo_conversations(
-            filepath,
-            source_file,
-            collection,
-            wing,
-            agent,
-            extract_mode,
-            dry_run,
-            verbatim=cfg_verbatim,
-        )
+        # The user's messages, with their role still attached, for the
+        # rule-candidate flagger (#584); the rendered transcript marks only
+        # the first line of each.
+        with collect_user_messages() as user_messages:
+            conversations = _normalize_convo_conversations(
+                filepath,
+                source_file,
+                collection,
+                wing,
+                agent,
+                extract_mode,
+                dry_run,
+                verbatim=cfg_verbatim,
+            )
         if conversations is None:
             continue
 
@@ -2142,6 +2153,7 @@ def _mine_convos_impl(
             content_hash=content_hash,
             source_dir_ino=source_directory_identity(filepath),
             palace_path=palace_path,
+            user_messages=user_messages,
         )
         if skipped == PURGE_FAILED:
             files_failed.append(source_file)

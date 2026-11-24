@@ -376,6 +376,10 @@
         "link": "/reference/python-api/rrf"
       },
       {
+        "text": "mempalace.rule_candidates",
+        "link": "/reference/python-api/rule_candidates"
+      },
+      {
         "text": "mempalace.searcher",
         "link": "/reference/python-api/searcher"
       },

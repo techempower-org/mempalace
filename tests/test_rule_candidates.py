@@ -45,6 +45,71 @@ def test_candidate_lines_only_user_rule_lines():
     ]
 
 
+def test_rule_lines_checks_every_line_of_a_user_message_and_no_assistant_blockquote():
+    from mempalace import normalize as n
+
+    messages = [
+        (
+            "user",
+            "first line of the ask\nmore context\nFrom now on always use the Dragon HD voices.",
+        ),
+        ("assistant", "> never use Piper for recorded video\nUnderstood."),
+        ("user", "<task-notification> always restart </task-notification>\nok, every time"),
+        ("user", "We should use the good dragon voices."),
+    ]
+    with n.collect_user_messages() as got:
+        transcript = n._messages_to_transcript(messages, spellcheck=False)
+    assert got == [text for role, text in messages if role == "user"]
+    # The rendered transcript marks only the first line of each user message.
+    assert "> first line of the ask\nmore context\nFrom now on" in transcript
+    assert rc.rule_lines(got) == [
+        "From now on always use the Dragon HD voices.",  # third line: bare in the transcript
+        "ok, every time",
+        "> We should use the good dragon voices.",  # first line: carries the marker
+    ]
+    # The fallback cannot tell the third line from the reply, and takes the
+    # assistant's blockquote for the user's: that is why the messages are used.
+    assert rc.candidate_lines(transcript) == [
+        "> never use Piper for recorded video",
+        "> We should use the good dragon voices.",
+    ]
+    # Outside the block nothing is collected and nothing is kept.
+    assert n.USER_MESSAGE_SINK.get() is None
+
+
+def test_flag_chunks_with_user_messages_lists_under_the_holding_drawer(rc_env):
+    out, _mem = rc_env
+    user_messages = [
+        "first line of the ask\nFrom now on always use the Dragon HD voices.",
+        "We should use the good dragon voices.",
+        "never mind, this drawer did not change",
+    ]
+    items = [
+        (
+            _chunk(
+                "> first line of the ask\nFrom now on always use the Dragon HD voices.\n"
+                "> never use Piper for recorded video\nUnderstood."
+            ),
+            "planning",
+            "drawer_a",
+        ),
+        (_chunk("> We should use the good dragon voices.\nok"), "planning", "drawer_b"),
+    ]
+    n = rc.flag_chunks(items, "money", "/x/session.jsonl", today=DAY, user_messages=user_messages)
+    assert n == 2
+    text = (out / "rule-candidates-2026-10-27.md").read_text()
+    assert (
+        "`drawer_a` · money/planning · session.jsonl\n  From now on always use the Dragon HD voices.\n"
+        in text
+    )
+    assert (
+        "`drawer_b` · money/planning · session.jsonl\n  > We should use the good dragon voices.\n"
+        in text
+    )
+    assert "Piper" not in text  # the assistant's blockquote
+    assert "never mind" not in text  # the user's, but no changed chunk holds it
+
+
 def test_flag_chunks_writes_verbatim_with_drawer_id(rc_env):
     out, _mem = rc_env
     items = [
@@ -147,6 +212,66 @@ def test_cli_rules_without_since_still_needs_identity():
     result = _cli("rules", "--host", "mac")
     assert result.returncode == 2
     assert "--harness" in result.stderr and "--project" in result.stderr
+
+
+def _claude_code_jsonl(turns):
+    import json
+
+    lines = []
+    for i, (role, text) in enumerate(turns):
+        lines.append(
+            json.dumps(
+                {
+                    "type": role,
+                    "uuid": f"u{i}",
+                    "timestamp": f"2026-10-27T12:0{i}:00Z",
+                    "sessionId": "s1",
+                    "message": {"role": role, "content": [{"type": "text", "text": text}]},
+                }
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
+def test_mining_a_transcript_flags_a_rule_on_a_later_line_of_a_user_message(rc_env, tmp_path):
+    import chromadb
+
+    from mempalace.convo_miner import mine_convos
+
+    out, _mem = rc_env
+    convo_dir = tmp_path / "convos"
+    convo_dir.mkdir()
+    (convo_dir / "session.jsonl").write_text(
+        _claude_code_jsonl(
+            [
+                ("user", "What voice did the video use?"),
+                ("assistant", "Piper, the local one."),
+                (
+                    "user",
+                    "That was the Nebius contest video.\nIt went out already.\n"
+                    "From now on every recorded video uses the Dragon HD voices.",
+                ),
+                ("assistant", "> never use Piper for recorded video\nNoted, filed."),
+                ("user", "How long is it?"),
+                ("assistant", "Ninety seconds."),
+            ]
+        )
+    )
+    palace_path = str(tmp_path / "palace")
+    mine_convos(str(convo_dir), palace_path, wing="money")
+
+    files = rc.list_files()
+    assert len(files) == 1
+    text = files[0].read_text()
+    assert "  From now on every recorded video uses the Dragon HD voices.\n" in text
+    assert "Piper" not in text  # the assistant's blockquote is not the user's
+
+    col = chromadb.PersistentClient(path=palace_path).get_collection("mempalace_drawers")
+    ids = col.get()["ids"]
+    listed = [i for i in ids if f"`{i}`" in text]
+    assert len(listed) == 1
+    doc = col.get(ids=listed)["documents"][0]
+    assert "From now on every recorded video uses the Dragon HD voices." in doc
 
 
 def test_mining_a_conversation_flags_its_rule_lines(rc_env, tmp_path):

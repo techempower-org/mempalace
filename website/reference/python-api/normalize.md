@@ -81,3 +81,16 @@ conversation too.
 Non-bundle formats (a single Claude Code session, plain text, ...)
 always normalize to one conversation, so this returns a one-element
 list for those — identical dedup granularity to before.
+
+### `collect_user_messages`
+
+```python
+def collect_user_messages()
+```
+
+Collect every user message text that :func:`_messages_to_transcript`
+renders inside the block, after spellcheck, exactly as it stands in the
+transcript minus the leading ``> `` marker.
+
+A format with no role record (a plain ``>``-quoted text file) leaves the
+list empty.

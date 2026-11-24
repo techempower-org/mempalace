@@ -26,7 +26,8 @@ Output skill instructions to stdout.
 def cmd_rules(args)
 ```
 
-Output the shared-brain agent rules block for a given agent identity.
+Output the shared-brain agent rules block for a given agent identity,
+or with ``--since`` the rule candidates flagged at mining time (#584).
 
 ### `cmd_mcp`
 

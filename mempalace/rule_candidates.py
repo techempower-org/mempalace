@@ -2,12 +2,20 @@
 
 A rule said once in a session ("we should use the good dragon voices") is in
 the palace verbatim, but nobody searches for it until it has already been
-broken. At mining time the convo miner hands every newly filed chunk to
-:func:`flag_chunks`; each user line (the ``>`` turn of an exchange) that
-reads like a standing rule is appended, verbatim and with its drawer id, to a
-per-day review list ``rule-candidates-YYYY-MM-DD.md``. A reviewer turns each
-one into a memory plus a mechanism, or ticks it off. ``mempalace rules
+broken. At mining time the convo miner hands every newly filed chunk, and the
+user's messages as :func:`mempalace.normalize.collect_user_messages` gathered
+them, to :func:`flag_chunks`; each line of a user message that reads like a
+standing rule is appended, verbatim and with the id of the drawer holding it,
+to a per-day review list ``rule-candidates-YYYY-MM-DD.md``. A reviewer turns
+each one into a memory plus a mechanism, or ticks it off. ``mempalace rules
 --since YYYY-MM-DD`` prints the lists.
+
+The check runs on the messages, not on the rendered chunk text, because the
+transcript marks only the first line of a user message with ``>``: a rule on
+its third line sits next to the assistant's reply with nothing to tell them
+apart, and an assistant blockquote starts with ``>`` without being the
+user's. A format with no role record (a plain ``>``-quoted text file) falls
+back to the ``>`` lines of the chunks.
 
 Nothing here touches the palace: the list is a local markdown file, and any
 failure is logged and swallowed so it can never fail a mine.
@@ -61,23 +69,60 @@ def candidates_dir() -> Path:
     return Path(raw).expanduser()
 
 
-def candidate_lines(content: str) -> list:
-    """Return the user lines of ``content`` that read as a standing rule, verbatim.
+def _reads_as_rule(text: str) -> bool:
+    """Whether one line of the user's reads as a standing rule.
 
-    Only ``>`` lines are user turns in the normalized transcript format.
     Harness-injected turns (``<task-notification>``, ``<system-reminder>``,
-    ``[Request interrupted ...]``) are not the user's words and are skipped.
+    ``[Request interrupted ...]``) are not the user's words and never match.
+    """
+    text = text.strip()
+    if not text or text[0] in "<[":
+        return False
+    return bool(RULE_PATTERN.search(text))
+
+
+def candidate_lines(content: str) -> list:
+    """Return the ``>`` lines of ``content`` that read as a standing rule, verbatim.
+
+    The fallback for a transcript with no role record. Only the first line
+    of a user turn carries the ``>`` marker, so a rule on a later line of a
+    multi-line message is missed here, and an assistant blockquote is taken
+    for the user's. When the user's messages are known, :func:`rule_lines`
+    checks every line of them instead.
+    """
+    return [
+        line for line in content.splitlines() if line.startswith(">") and _reads_as_rule(line[1:])
+    ]
+
+
+def rule_lines(user_messages: Iterable[str]) -> list:
+    """Return every line of the user's messages that reads as a standing rule.
+
+    Each line is returned as it stands in the transcript: the first line of a
+    message carries the ``> `` marker, the later lines are bare.
     """
     out = []
-    for line in content.splitlines():
-        if not line.startswith(">"):
-            continue
-        text = line[1:].strip()
-        if not text or text[0] in "<[":
-            continue
-        if RULE_PATTERN.search(text):
-            out.append(line)
+    for text in user_messages:
+        for i, raw in enumerate(str(text).splitlines()):
+            if _reads_as_rule(raw):
+                out.append(f"> {raw}" if i == 0 else raw)
     return out
+
+
+def _locate(line: str, items) -> Optional[tuple]:
+    """The ``(room, drawer_id)`` of the first chunk in ``items`` that holds ``line``.
+
+    A chunk holds the line when it is one of the chunk's lines, or (a line
+    the chunker joined onto another) when its text appears in the chunk.
+    ``None`` when no chunk holds it: the drawer is unchanged this pass, was
+    planned out as sensitive, or the chunker cut the line in two.
+    """
+    text = line.strip()
+    for chunk, room, drawer_id in items:
+        content = chunk.get("content") or ""
+        if line in content.splitlines() or text in content:
+            return room, drawer_id
+    return None
 
 
 def _slug_words(slug: str) -> list:
@@ -124,19 +169,40 @@ def _key(line: str) -> str:
     return hashlib.sha1(norm.encode("utf-8")).hexdigest()[:16]
 
 
-def flag_chunks(items, wing: str, source_file: str, today: Optional[date] = None) -> int:
+def flag_chunks(
+    items,
+    wing: str,
+    source_file: str,
+    today: Optional[date] = None,
+    user_messages: Optional[Iterable[str]] = None,
+) -> int:
     """Append rule candidates from ``items`` (``(chunk, room, drawer_id)``) to today's list.
+
+    ``user_messages`` is what :func:`mempalace.normalize.collect_user_messages`
+    gathered while the file was normalized. With it, every line of every user
+    message is checked and an assistant blockquote is never taken for the
+    user's; a candidate is listed only when one of ``items`` holds it, so an
+    unchanged drawer, or a sensitive chunk planned out of the pass, is never
+    listed. Empty or ``None`` (a format with no role record) falls back to
+    the ``>`` lines of the chunks.
 
     Returns the number of entries written. Never raises.
     """
     try:
         if not enabled() or "/subagents/" in str(source_file).replace("\\", "/"):
-            # A subagent's ``>`` turns are its orchestrator's prompt, not the user's.
+            # A subagent's user turns are its orchestrator's prompt, not the user's.
             return 0
         found = []
-        for chunk, room, drawer_id in items:
-            for line in candidate_lines(chunk.get("content") or ""):
-                found.append((line, room, drawer_id))
+        if user_messages:
+            items = list(items)
+            for line in rule_lines(user_messages):
+                where = _locate(line, items)
+                if where is not None:
+                    found.append((line, where[0], where[1]))
+        else:
+            for chunk, room, drawer_id in items:
+                for line in candidate_lines(chunk.get("content") or ""):
+                    found.append((line, room, drawer_id))
         if not found:
             return 0
         return _write(found, wing, source_file, today or date.today())
