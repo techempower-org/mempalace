@@ -316,6 +316,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| redaction takes bcrypt password hashes ($2a$/$2b$/$2y$) as their own strong kind | — | `HEAD` — pending resolution |
 | a slow or locked vault keeps the last good redact needles instead of refusing every write | — | [`bdf8f2f`](https://github.com/techempower-org/mempalace/commit/bdf8f2f) |
 | index the judged-parent lookup keys; `mempalace lookup-indexes` builds missing ones online | — | [`2423c26`](https://github.com/techempower-org/mempalace/commit/2423c26) |
 | a dream run reads its keys from 0600 env files named by --key-file, so a unit needs no EnvironmentFile= on a secrets file | — | [`2bd76b0`](https://github.com/techempower-org/mempalace/commit/2bd76b0) |
