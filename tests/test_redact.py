@@ -2051,34 +2051,86 @@ def test_a_digitalocean_key_is_named_and_never_left_raw(body):
             assert _placeholder("digitalocean", value) in out
 
 
-@pytest.mark.parametrize("prefix", ["$2a$10$", "$2b$12$", "$2y$14$"])
-def test_a_bcrypt_hash_is_named_and_never_left_raw(prefix):
+# Real bcrypt encodings: public crypt_blowfish test vectors (passwords "U*U", "U*U*", and the 8-bit "\xa3"
+# under the $2x$ and $2y$ variants), built in pieces like the samples above. Plus a historical $2$ shape.
+BCRYPT_VECTORS = [
+    "$2" + "a$05$" + "CCCCCCCCCCCCCCCCCCCCC." + "E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW",
+    "$2" + "a$05$" + "CCCCCCCCCCCCCCCCCCCCC." + "VGOzA784oUp/Z0DY336zx7pLYAy0lwK",
+    "$2" + "x$05$" + "/OK.fbVrR/bpIqNJ5ianF." + "CE5elHaaO4EbggVDjb8P19RukzXSM3e",
+    "$2" + "y$05$" + "/OK.fbVrR/bpIqNJ5ianF." + "Sa7shbm4.OzKpvFnX1pQLmQW96oUlCq",
+    "$2" + "b$31$" + "abcdefghijklmnopqrstuu" + "5s2v8.iXieOjg/.AySBTTZIIVFJeBui",
+    "$2" + "$04$" + "abcdefghijklmnopqrstuu" + "5s2v8.iXieOjg/.AySBTTZIIVFJeBui",
+]
+
+
+@pytest.mark.parametrize("value", BCRYPT_VECTORS)
+def test_a_bcrypt_hash_is_named_and_never_left_raw(value):
     """2026-11-24: Caddy basic_auth lines and an app's admin user row put bcrypt hashes into 14 drawers, and no
     rule took them. Every variant is caught as its own kind, in the contexts a transcript holds."""
-    value = prefix + ("Zq8./Wm4Tn" * 6)[:53]
+    assert len(value) in (59, 60)  # "$2$" is one shorter
     for text in (
         f"    alice {value}",  # a Caddyfile basic_auth line
         f"admin:{value}",  # an htpasswd line
-        '{"password": "' + value + '"}',
         "INSERT INTO users VALUES ('admin', '" + value + "');",
         "line one\\n" + value + "\\nline two",  # a raw JSONL escape right before and after
+        f"the hash was {value}.",  # a sentence ends on it: "." is in its alphabet
+        f"see {value}/ and {value}, then {value}",  # several, and "/" right after one
+        repr({"hash": value}),  # a Python repr
     ):
         out = redact(text)
         assert value not in out, text
-        if "password" not in text:  # a named value goes whole to the assignment rule, redacted too
-            assert _placeholder("bcrypt", value) in out, text
+        assert _placeholder("bcrypt", value) in out, text
+        assert redact(out) == out, text  # idempotent
+
+
+@pytest.mark.parametrize("value", BCRYPT_VECTORS[:4])
+def test_a_bcrypt_hash_in_an_encoded_spelling_is_taken(value):
+    """xreview r1 on #661: JSON may write "$" as \\u0024 and "/" as \\/, a URL writes "$" as %24."""
+    for encoded in (
+        value.replace("$", "\\u0024"),
+        value.replace("/", "\\/"),
+        value.replace("$", "%24"),
+        value.replace("$", "\\u0024").replace("/", "\\/"),
+    ):
+        out = redact(f"x {encoded} y")
+        assert "[redacted bcrypt sha256:" in out, encoded
+        assert value[-31:] not in out and value[7:29] not in out, (
+            encoded
+        )  # neither salt nor digest left
+
+
+def test_a_bcrypt_hash_beside_a_secret_name_is_redacted_either_way():
+    """Where the assignment rule also wants the value, whichever takes it, nothing of the hash is left and a
+    second pass changes nothing."""
+    value = BCRYPT_VECTORS[0]
+    for text in ('{"password": "' + value + '"}', f"password={value}", f"PASSWORD_HASH: {value}"):
+        out = redact(text)
+        assert value[7:29] not in out and value[29:] not in out, text
+        assert ("[redacted bcrypt sha256:" in out) or ("[redacted assignment]" in out), out
+        assert redact(out) == out, text
 
 
 def test_bcrypt_lookalikes_are_left():
-    body = ("Zq8./Wm4Tn" * 6)[:53]
+    body = BCRYPT_VECTORS[0][7:]
     for text in (
         "the $2a$ prefix marks bcrypt",
         "$2b$12$" + body[:52] + " short by one",
-        "$2b$12$" + body + "Q",  # one more of its alphabet: not a bcrypt hash
-        "$2x$12$" + body,  # not a bcrypt variant
+        "$2b$12$" + body + "Q",  # one more letter: a longer token, not a bcrypt hash
+        "$2c$12$" + body,  # not a bcrypt variant
         "$2b$1$" + body,  # one cost digit
+        "$2b$03$" + body,  # cost below 4
+        "$2b$32$" + body,  # cost above 31
+        "$2b$" + "\u0661\u0662" + "$" + body,  # Arabic-Indic digits are not a cost
     ):
         assert "[redacted bcrypt" not in redact(text), text
+
+
+def test_bcrypt_scanning_stays_linear():
+    import time as _time
+
+    t0 = _time.monotonic()
+    redact("$2b$12$" * 20000 + "A" * 100000 + "$2b$12$" + ("\\/" * 60))
+    assert _time.monotonic() - t0 < 5
 
 
 def test_identity_fields_are_never_rewritten_but_content_fields_still_are():
