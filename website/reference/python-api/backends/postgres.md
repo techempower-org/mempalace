@@ -196,18 +196,20 @@ All on a side connection with ``statement_timeout`` lifted for that session only
 would cancel the build), holding a per-table advisory lock for the whole run, so two runs never drop or build
 under each other; every state read of a run that changes anything happens under it (a dry run reads without
 it). Raises LookupIndexesBusy when another run holds it. The lock protects lookup-indexes runs from each
-other, not from an index someone builds by hand at the same moment.
+other, not from an index someone builds by hand at the same moment. The table is the one the collection's
+own statements reach through search_path, resolved once to its oid.
 
-For each key without a valid index: drop an INVALID leftover under the lookup name, ``CREATE INDEX
-CONCURRENTLY``, confirm it is valid. A failed build is reported (state "failed", ``error``, ``leftover``),
-not raised. Then ``ANALYZE`` the table, on every run that is not a dry run: an expression index has no
-statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
+For each key without a valid index: drop an INVALID leftover of our own build under the lookup name, ``CREATE
+INDEX CONCURRENTLY``, confirm it is valid. A failed build is reported (state "failed", ``error``,
+``leftover``), not raised. Then ``ANALYZE`` the table, on every run that is not a dry run: an expression index
+has no statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
 judged-parent indexes went unused until ANALYZE), so a palace whose indexes exist without statistics is
-repaired by a rerun. Then ``EXPLAIN`` (nothing executes) of the statement get() sends for the judged-parent
-lookup (on parent_drawer_id and parent_entry_id; source_file's lookups have other shapes, so its plan is not
-judged with this one) records whether its plan uses one of the key's valid indexes, twice: the per-value plan
-(plan_uses_index) and the generic plan a prepared statement can be given (generic_plan_uses_index). The key
-is inlined in that statement (_field_filter_to_sql), which is what lets the generic plan use the index.
+repaired by a rerun. Then ``EXPLAIN (FORMAT JSON)`` (nothing executes) of the statement get() sends for the
+judged-parent lookup (on parent_drawer_id and parent_entry_id; source_file's lookups have other shapes, so its
+plan is not judged with this one) records whether its plan uses one of the key's valid indexes, twice: the
+per-value plan (plan_uses_index) and the generic plan a prepared statement can be given
+(generic_plan_uses_index). The key is inlined in that statement (_field_filter_to_sql), which is what lets the
+generic plan use the index.
 
 Returns one dict per key: key, index, state (present | built | failed | missing in a dry run),
 plan_uses_index, generic_plan_uses_index. On a table smaller than ``plan_check_min_pages`` a scan is cheaper
@@ -261,4 +263,5 @@ def detect(cls, path: str) -> bool
 def lookup_index_name(table_name: str, key: str) -> str
 ```
 
-source_file keeps its original name; the others are ``&lt;table>_meta_&lt;key>_idx``.
+source_file keeps its original name; the others are ``&lt;table>_meta_&lt;key>_idx``. A name longer than 63 bytes
+becomes ``&lt;prefix>_&lt;hash of the full name>_idx``, so long table names still get distinct names per key.

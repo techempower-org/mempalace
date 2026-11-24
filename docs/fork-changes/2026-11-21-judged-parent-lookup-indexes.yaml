@@ -3,8 +3,8 @@ id: judged-parent-lookup-indexes
 date: '2026-11-21'
 bucket: Changed
 commit: HEAD
-area: Postgres backend
-summary: the judged-parent lookup gets expression indexes on parent_drawer_id and parent_entry_id, and `mempalace lookup-indexes` builds missing ones online, then ANALYZEs
+area: Performance
+summary: index the judged-parent lookup keys; `mempalace lookup-indexes` builds missing ones online
 body: |
   The search path hides results whose logical parent is judged out. For ids
   it cannot find directly, it runs get(where={key: {"$in": missing}},
@@ -16,14 +16,18 @@ body: |
 
   A new palace now creates both indexes, as it does
   metadata->>'source_file'. An existing palace runs `mempalace
-  lookup-indexes`, which works on a side connection with statement_timeout
-  lifted for that session, holding a per-table advisory lock so two runs
-  never build or drop under each other:
+  lookup-indexes`. It works on a side connection with statement_timeout
+  lifted for that session, on the table the collection's own statements
+  reach. It holds a per-table advisory lock, so two runs never build or drop
+  under each other:
   - it builds each missing lookup index with CREATE INDEX CONCURRENTLY,
-    dropping an INVALID leftover first. A failed build is reported by
-    index name (exit 1), and its INVALID leftover is dropped in the same run;
-  - it ANALYZEs the table on every run. An expression index has no
-    statistics until then, and the planner keeps its default guess and the
+    dropping an INVALID leftover of its own build first. A failed build is
+    reported by index name (exit 1), and the run tries to drop its INVALID
+    leftover; the `leftover` field says whether that worked. An index of
+    another definition under the lookup name is reported as a name conflict
+    and left alone;
+  - every run except --dry-run ANALYZEs the table. An expression index has
+    no statistics until then, and the planner keeps its default guess and the
     old plan;
   - it EXPLAINs the exact statement the judged-parent lookup sends and
     checks that both its per-value plan and its generic plan use one of the
@@ -33,5 +37,7 @@ body: |
   names its key literally (metadata->>'parent_drawer_id') instead of binding
   it as a parameter. psycopg prepares a statement after a few runs, and a
   generic plan for metadata->>$1 can't use an expression index on one key.
+  A lookup index name longer than PostgreSQL's 63 bytes gets a hash suffix,
+  so a long table name can't give two keys the same truncated name.
   On the palace it was measured on, the first search fell from 64.7 s to
   2.3 s.

@@ -7,6 +7,7 @@ install remains zero-config.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -67,22 +68,40 @@ class LookupIndexesBusy(RuntimeError):
     """Another ensure_lookup_indexes run holds this table's advisory lock."""
 
 
-def _plan_names_index(plan: str, index: str) -> bool:
-    """True when an EXPLAIN text scans ``index``: "Index Scan using <name> on", "Index Only Scan using <name>",
-    "Bitmap Index Scan on <name>". A whole-word match, so one index name inside a longer one does not count."""
-    quoted = re.escape(index)
-    return (
-        re.search(rf'(?:\busing|Bitmap Index Scan on) "?{quoted}"?(?=\s|$)', plan, re.M) is not None
-    )
+def _plan_index_names(plan: Any) -> set[str]:
+    """Every ``Index Name`` in an ``EXPLAIN (FORMAT JSON)`` plan: the indexes its scan nodes use. Read from the
+    structured plan, so a name that needs quoting or contains another name can't be misread."""
+    names: set[str] = set()
+    stack = [plan]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, list):
+            stack.extend(node)
+        elif isinstance(node, dict):
+            if isinstance(node.get("Index Name"), str):
+                names.add(node["Index Name"])
+            stack.extend(node.values())
+    return names
+
+
+# PostgreSQL truncates identifiers to NAMEDATALEN - 1 bytes. Two lookup names that only differ past that point would
+# collide, so a name that doesn't fit keeps a prefix and gains a hash of the full name.
+_MAX_IDENTIFIER_BYTES = 63
 
 
 def lookup_index_name(table_name: str, key: str) -> str:
-    """source_file keeps its original name; the others are ``<table>_meta_<key>_idx``."""
+    """source_file keeps its original name; the others are ``<table>_meta_<key>_idx``. A name longer than 63 bytes
+    becomes ``<prefix>_<hash of the full name>_idx``, so long table names still get distinct names per key."""
     if key not in LOOKUP_INDEX_KEYS:
         raise ValueError(f"not a lookup index key: {key!r}")
-    return (
+    name = (
         f"{table_name}_source_file_idx" if key == "source_file" else f"{table_name}_meta_{key}_idx"
     )
+    if len(name.encode()) <= _MAX_IDENTIFIER_BYTES:
+        return name
+    suffix = f"_{hashlib.sha1(name.encode()).hexdigest()[:10]}_idx"
+    prefix = name.encode()[: _MAX_IDENTIFIER_BYTES - len(suffix)].decode("utf-8", "ignore")
+    return prefix + suffix
 
 
 # Set once the first time a resolved embedder's width disagrees with the
@@ -1555,68 +1574,97 @@ class PostgresCollection(BaseCollection):
             )
         return found
 
-    def _lookup_index_state(self, cur, key: str) -> tuple[Optional[bool], list[str]]:
+    def _resolve_lookup_table(self, cur) -> tuple[int, str]:
+        """(oid, schema) of the table this collection's own statements reach. They name it unqualified, so it is
+        found through search_path, and every catalog check, DDL and page count here uses this same table rather
+        than one assumed to be in current_schema()."""
+        cur.execute(
+            "SELECT c.oid, n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE c.oid = to_regclass(%s)",
+            (self._table_id.as_string(cur.connection),),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise PalaceNotFoundError(f"PostgreSQL collection does not exist: {self.table_name}")
+        return int(row[0]), row[1]
+
+    def _lookup_index_state(
+        self, cur, table_oid: int, key: str
+    ) -> tuple[Optional[bool], list[str]]:
         """Discovery for one lookup key. (True, names): these valid, non-partial btrees lead with
-        ``metadata->>'<key>'``, whatever they are called. (False, []): no valid one, but an INVALID one sits under
-        the lookup name (a failed CONCURRENTLY build). (None, []): neither. The plan check accepts exactly the names
-        returned here, so discovery and the plan check use one rule."""
+        ``metadata->>'<key>'``, whatever they are called. (False, []): no valid one, but an INVALID non-unique one
+        on that expression sits under the lookup name (a failed CONCURRENTLY build). (None, []): neither. The plan
+        check accepts exactly the names returned here, so discovery and the plan check use one rule."""
+        lookup_name = lookup_index_name(self.table_name, key)
         cur.execute(
             """
-            SELECT ix.relname, idx.indisvalid
+            SELECT ix.relname, idx.indisvalid, idx.indisunique
             FROM pg_index idx
-            JOIN pg_class t ON t.oid = idx.indrelid
-            JOIN pg_namespace n ON n.oid = t.relnamespace
             JOIN pg_class ix ON ix.oid = idx.indexrelid
             JOIN pg_am am ON am.oid = ix.relam
-            WHERE n.nspname = current_schema()
-              AND t.relname = %s
+            WHERE idx.indrelid = %s
               AND am.amname = 'btree'
               AND idx.indpred IS NULL
               AND btrim(pg_get_indexdef(idx.indexrelid, 1, false), '()')
                   = 'metadata ->> ' || quote_literal(%s) || '::text'
             ORDER BY ix.relname = %s DESC, ix.relname
             """,
-            (self.table_name, key, lookup_index_name(self.table_name, key)),
+            (table_oid, key, lookup_name),
         )
         rows = cur.fetchall()
-        valid = [name for name, ok in rows if ok]
+        valid = [name for name, ok, _unique in rows if ok]
         if valid:
             return True, valid
-        if any(name == lookup_index_name(self.table_name, key) for name, _ in rows):
+        if any(name == lookup_name and not unique for name, _ok, unique in rows):
             return False, []
         return None, []
 
-    def _named_index_valid(self, cur, name: str) -> Optional[bool]:
-        """indisvalid of the index called ``name`` on this table, or None when there is none."""
+    def _named_lookup_index(
+        self, cur, table_oid: int, name: str, key: str
+    ) -> Optional[tuple[bool, bool]]:
+        """(valid, is_lookup) for the index called ``name`` on this table, or None when there is none. is_lookup:
+        it is exactly a lookup index for ``key`` (a single-column, non-unique, non-partial btree on
+        ``metadata->>'<key>'``). Only such an index is ever dropped here; any other index under the name is left."""
         cur.execute(
             """
-            SELECT idx.indisvalid
+            SELECT idx.indisvalid,
+                   am.amname = 'btree' AND idx.indpred IS NULL AND NOT idx.indisunique AND idx.indnatts = 1
+                   AND btrim(pg_get_indexdef(idx.indexrelid, 1, false), '()')
+                       = 'metadata ->> ' || quote_literal(%s) || '::text'
             FROM pg_index idx
             JOIN pg_class ix ON ix.oid = idx.indexrelid
-            JOIN pg_class t ON t.oid = idx.indrelid
-            JOIN pg_namespace n ON n.oid = ix.relnamespace
-            WHERE n.nspname = current_schema() AND ix.relname = %s AND t.relname = %s
+            JOIN pg_am am ON am.oid = ix.relam
+            WHERE idx.indrelid = %s AND ix.relname = %s
             """,
-            (name, self.table_name),
+            (key, table_oid, name),
         )
         row = cur.fetchone()
-        return None if row is None else bool(row[0])
+        return None if row is None else (bool(row[0]), bool(row[1]))
 
-    def _build_lookup_index(self, cur, _sql, key: str, state: Optional[bool]) -> dict:
+    def _build_lookup_index(
+        self, cur, _sql, table_oid: int, schema: str, key: str, state: Optional[bool]
+    ) -> dict:
         """Build one missing lookup index with CREATE INDEX CONCURRENTLY. A failure is reported, never raised: the
-        row gets state "failed" and the error, and an INVALID leftover under the lookup name is dropped in the same
-        run (``leftover``), so a rerun starts clean."""
+        row gets state "failed" and the error. An INVALID leftover of our own build is dropped in the same run
+        (``leftover`` says whether that worked); an index of any other definition under the lookup name is a name
+        conflict, reported and left intact."""
         name = lookup_index_name(self.table_name, key)
-        drop = _sql.SQL("DROP INDEX CONCURRENTLY IF EXISTS {}").format(_sql.Identifier(name))
+        drop = _sql.SQL("DROP INDEX CONCURRENTLY IF EXISTS {}").format(
+            _sql.Identifier(schema, name)
+        )
         try:
             if state is False:
                 cur.execute(drop)
             cur.execute(
                 _sql.SQL(
                     "CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ((metadata->>{}))"
-                ).format(_sql.Identifier(name), _sql.Identifier(self.table_name), _sql.Literal(key))
+                ).format(
+                    _sql.Identifier(name),
+                    _sql.Identifier(schema, self.table_name),
+                    _sql.Literal(key),
+                )
             )
-            now, valid = self._lookup_index_state(cur, key)
+            now, valid = self._lookup_index_state(cur, table_oid, key)
             if now is not True:
                 raise RuntimeError(
                     f"{name} is not a valid lookup index after CREATE INDEX CONCURRENTLY"
@@ -1629,7 +1677,10 @@ class PostgresCollection(BaseCollection):
                 "error": f"{type(exc).__name__}: {exc}".strip(),
             }
             try:
-                if self._named_index_valid(cur, name) is False:
+                named = self._named_lookup_index(cur, table_oid, name, key)
+                if named is not None and not named[1]:
+                    row["leftover"] = f"name conflict: {name} is another index; left intact"
+                elif named is not None and not named[0]:
                     cur.execute(drop)
                     row["leftover"] = "dropped"
             except Exception as drop_exc:
@@ -1659,18 +1710,20 @@ class PostgresCollection(BaseCollection):
         would cancel the build), holding a per-table advisory lock for the whole run, so two runs never drop or build
         under each other; every state read of a run that changes anything happens under it (a dry run reads without
         it). Raises LookupIndexesBusy when another run holds it. The lock protects lookup-indexes runs from each
-        other, not from an index someone builds by hand at the same moment.
+        other, not from an index someone builds by hand at the same moment. The table is the one the collection's
+        own statements reach through search_path, resolved once to its oid.
 
-        For each key without a valid index: drop an INVALID leftover under the lookup name, ``CREATE INDEX
-        CONCURRENTLY``, confirm it is valid. A failed build is reported (state "failed", ``error``, ``leftover``),
-        not raised. Then ``ANALYZE`` the table, on every run that is not a dry run: an expression index has no
-        statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
+        For each key without a valid index: drop an INVALID leftover of our own build under the lookup name, ``CREATE
+        INDEX CONCURRENTLY``, confirm it is valid. A failed build is reported (state "failed", ``error``,
+        ``leftover``), not raised. Then ``ANALYZE`` the table, on every run that is not a dry run: an expression index
+        has no statistics until then, and the planner keeps its default guess and the old plan (2026-11-21: both
         judged-parent indexes went unused until ANALYZE), so a palace whose indexes exist without statistics is
-        repaired by a rerun. Then ``EXPLAIN`` (nothing executes) of the statement get() sends for the judged-parent
-        lookup (on parent_drawer_id and parent_entry_id; source_file's lookups have other shapes, so its plan is not
-        judged with this one) records whether its plan uses one of the key's valid indexes, twice: the per-value plan
-        (plan_uses_index) and the generic plan a prepared statement can be given (generic_plan_uses_index). The key
-        is inlined in that statement (_field_filter_to_sql), which is what lets the generic plan use the index.
+        repaired by a rerun. Then ``EXPLAIN (FORMAT JSON)`` (nothing executes) of the statement get() sends for the
+        judged-parent lookup (on parent_drawer_id and parent_entry_id; source_file's lookups have other shapes, so its
+        plan is not judged with this one) records whether its plan uses one of the key's valid indexes, twice: the
+        per-value plan (plan_uses_index) and the generic plan a prepared statement can be given
+        (generic_plan_uses_index). The key is inlined in that statement (_field_filter_to_sql), which is what lets the
+        generic plan use the index.
 
         Returns one dict per key: key, index, state (present | built | failed | missing in a dry run),
         plan_uses_index, generic_plan_uses_index. On a table smaller than ``plan_check_min_pages`` a scan is cheaper
@@ -1696,8 +1749,9 @@ class PostgresCollection(BaseCollection):
                         raise LookupIndexesBusy(
                             f"another lookup-indexes run holds the lock on {self.table_name}; try again when it ends"
                         )
+                table_oid, schema = self._resolve_lookup_table(cur)
                 for key in LOOKUP_INDEX_KEYS:
-                    state, valid = self._lookup_index_state(cur, key)
+                    state, valid = self._lookup_index_state(cur, table_oid, key)
                     if state is True:
                         report.append(
                             {
@@ -1711,14 +1765,15 @@ class PostgresCollection(BaseCollection):
                         name = lookup_index_name(self.table_name, key)
                         report.append({"key": key, "index": name, "state": "missing"})
                     else:
-                        report.append(self._build_lookup_index(cur, _sql, key, state))
+                        report.append(
+                            self._build_lookup_index(cur, _sql, table_oid, schema, key, state)
+                        )
                 if not dry_run:
-                    cur.execute(_sql.SQL("ANALYZE {}").format(_sql.Identifier(self.table_name)))
                     cur.execute(
-                        "SELECT relpages FROM pg_class WHERE oid = to_regclass(%s)",
-                        (self.table_name,),
+                        _sql.SQL("ANALYZE {}").format(_sql.Identifier(schema, self.table_name))
                     )
-                    pages = (cur.fetchone() or [0])[0] or 0
+                    cur.execute("SELECT relpages FROM pg_class WHERE oid = %s", (table_oid,))
+                    pages = cur.fetchone()[0] or 0
                     probe_spec = _IncludeSpec.resolve(["metadatas"], default_distances=False)
                     for row in report:
                         if row["state"] not in ("present", "built"):
@@ -1739,14 +1794,14 @@ class PostgresCollection(BaseCollection):
                             spec=probe_spec,
                             resume_after=None,
                         )
-                        cur.execute(_sql.SQL("EXPLAIN {}").format(statement), params)
-                        plan = "\n".join(r[0] for r in cur.fetchall())
+                        cur.execute(_sql.SQL("EXPLAIN (FORMAT JSON) {}").format(statement), params)
+                        plan = cur.fetchone()[0]
                         generic = self._explain_generic(cur, _sql, statement, params)
-                        row["plan_uses_index"] = any(
-                            _plan_names_index(plan, name) for name in row["valid_indexes"]
+                        row["plan_uses_index"] = bool(
+                            _plan_index_names(plan) & set(row["valid_indexes"])
                         )
-                        row["generic_plan_uses_index"] = any(
-                            _plan_names_index(generic, name) for name in row["valid_indexes"]
+                        row["generic_plan_uses_index"] = bool(
+                            _plan_index_names(generic) & set(row["valid_indexes"])
                         )
         finally:
             conn.close()
@@ -1754,11 +1809,11 @@ class PostgresCollection(BaseCollection):
             self._source_file_indexed = True
         return report
 
-    def _explain_generic(self, cur, _sql, statement, params) -> str:
-        """EXPLAIN the generic plan of ``statement``: the plan a prepared statement gets when postgres stops
-        planning per call. psycopg prepares a statement after a few runs on one connection, and postgres may then
-        reuse one plan for every value, so a lookup must be served by its index under that plan too, not only under
-        the per-value plan a plain EXPLAIN shows. Prepared here with numbered parameters under
+    def _explain_generic(self, cur, _sql, statement, params) -> Any:
+        """``EXPLAIN (FORMAT JSON)`` of the generic plan of ``statement``: the plan a prepared statement gets when
+        postgres stops planning per call. psycopg prepares a statement after a few runs on one connection, and
+        postgres may then reuse one plan for every value, so a lookup must be served by its index under that plan
+        too, not only under the per-value plan a plain EXPLAIN shows. Prepared here with numbered parameters under
         ``plan_cache_mode = force_generic_plan``, explained with the probe's values, then deallocated."""
         text = statement.as_string(cur.connection)
         if text.count("%") != len(
@@ -1774,11 +1829,11 @@ class PostgresCollection(BaseCollection):
             cur.execute("PREPARE mempalace_lookup_probe AS " + text)
             try:
                 cur.execute(
-                    _sql.SQL("EXPLAIN EXECUTE mempalace_lookup_probe({})").format(
+                    _sql.SQL("EXPLAIN (FORMAT JSON) EXECUTE mempalace_lookup_probe({})").format(
                         _sql.SQL(", ").join(_sql.Literal(p) for p in params)
                     )
                 )
-                return "\n".join(r[0] for r in cur.fetchall())
+                return cur.fetchone()[0]
             finally:
                 cur.execute("DEALLOCATE mempalace_lookup_probe")
         finally:

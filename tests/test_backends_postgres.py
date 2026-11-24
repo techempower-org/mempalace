@@ -601,7 +601,10 @@ def test_the_plan_check_explains_the_statement_the_judged_parent_lookup_sends(
         log = _record_side_connection(monkeypatch)
         col.ensure_lookup_indexes(plan_check_min_pages=0)
         explains = [(t, p) for t, p in log if t.startswith("EXPLAIN ") and "parent_drawer_id" in t]
-        assert explains == [("EXPLAIN " + get_text, list(get_params))], (explains, get_text)
+        assert explains == [("EXPLAIN (FORMAT JSON) " + get_text, list(get_params))], (
+            explains,
+            get_text,
+        )
         # The generic-plan check prepares that same text, its placeholders numbered.
         numbers = iter(range(1, len(get_params) + 1))
         numbered = re.sub(r"%s", lambda _m: f"${next(numbers)}", get_text)
@@ -653,9 +656,10 @@ def test_a_warmed_production_connection_keeps_using_the_index_under_a_generic_pl
         prepared = cur.fetchall()
         assert len(prepared) == 1 and prepared[0][1] >= 6, prepared
         args = ", ".join("'" + str(v).replace("'", "''") + "'" for v in sent[-1])
-        cur.execute(f'EXPLAIN EXECUTE "{prepared[0][0]}"({args})')
-        plan = "\n".join(r[0] for r in cur.fetchall())
-        assert pg._plan_names_index(plan, f"{col.table_name}_meta_parent_drawer_id_idx"), plan
+        cur.execute(f'EXPLAIN (FORMAT JSON) EXECUTE "{prepared[0][0]}"({args})')
+        plan = cur.fetchone()[0]
+        index = pg.lookup_index_name(col.table_name, "parent_drawer_id")
+        assert index in pg._plan_index_names(plan), plan
     finally:
         _drop_lookup_table(col, conn)
 
@@ -779,11 +783,119 @@ def test_discovery_and_the_plan_check_accept_the_same_indexes(tmp_path):
         _drop_lookup_table(col, conn)
 
 
-def test_plan_names_index_matches_whole_names_only():
-    from mempalace.backends.postgres import _plan_names_index
+def test_plan_index_names_reads_every_scan_node_of_a_json_plan():
+    """The plan check reads ``Index Name`` from EXPLAIN (FORMAT JSON), so a quoted name or one name inside another
+    can't be misread (CodeRabbit on #655)."""
+    from mempalace.backends.postgres import _plan_index_names
 
-    plan = "Limit\n  ->  Index Scan using t_meta_parent_drawer_id_idx on t\n"
-    assert _plan_names_index(plan, "t_meta_parent_drawer_id_idx")
-    assert not _plan_names_index(plan, "t_meta_parent_drawer_id")
-    assert _plan_names_index("  ->  Bitmap Index Scan on t_x_idx", "t_x_idx")
-    assert not _plan_names_index("Index Scan using t_pkey on t", "t_x_idx")
+    plan = [
+        {
+            "Plan": {
+                "Node Type": "Limit",
+                "Plans": [
+                    {
+                        "Node Type": "Bitmap Heap Scan",
+                        "Plans": [
+                            {"Node Type": "Bitmap Index Scan", "Index Name": 'odd"name_idx'},
+                        ],
+                    },
+                    {"Node Type": "Index Scan", "Index Name": "t_meta_parent_drawer_id_idx"},
+                ],
+            }
+        }
+    ]
+    assert _plan_index_names(plan) == {'odd"name_idx', "t_meta_parent_drawer_id_idx"}
+    assert _plan_index_names([{"Plan": {"Node Type": "Seq Scan"}}]) == set()
+
+
+def test_long_table_names_get_distinct_lookup_index_names_that_fit():
+    """PostgreSQL truncates identifiers to 63 bytes. A name that doesn't fit keeps a prefix and gains a hash of the
+    full name, so the two parent-index names of a long table stay distinct; a short name is unchanged."""
+    from mempalace.backends.postgres import LOOKUP_INDEX_KEYS, lookup_index_name
+
+    assert lookup_index_name("t", "parent_drawer_id") == "t_meta_parent_drawer_id_idx"
+    assert lookup_index_name("t", "source_file") == "t_source_file_idx"
+    for table in ("x" * 50, "x" * 63, "é" * 31):
+        names = [lookup_index_name(table, key) for key in LOOKUP_INDEX_KEYS]
+        assert len(set(names)) == 3, names
+        assert all(len(n.encode()) <= 63 for n in names), names
+
+
+def test_a_collection_with_a_long_name_gets_all_three_lookup_indexes(tmp_path):
+    """Before the hashed names, a 50-character table gave both parent indexes the same truncated name, and creating
+    the second one stopped collection setup."""
+    import uuid
+
+    import psycopg
+
+    from mempalace.backends import postgres as pg
+
+    name = f"lk_long_{uuid.uuid4().hex}"[:12] + "x" * 38
+    col = get_backend("postgres").get_collection(
+        palace=_palace_ref(str(tmp_path)),
+        collection_name=name,
+        create=True,
+        options={"dsn": POSTGRES_DSN},
+    )
+    conn = psycopg.connect(POSTGRES_DSN, autocommit=True)
+    try:
+        col.add(ids=["seed"], documents=["d"], metadatas=[{"wing": "w"}], embeddings=[[0.0] * 384])
+        report = col.ensure_lookup_indexes(dry_run=True)
+        assert [r["state"] for r in report] == ["present"] * 3, report
+        assert len({r["index"] for r in report}) == 3
+        assert [r["index"] for r in report] == [
+            pg.lookup_index_name(col.table_name, k) for k in pg.LOOKUP_INDEX_KEYS
+        ]
+    finally:
+        _drop_lookup_table(col, conn)
+
+
+def test_the_table_is_found_where_the_collections_own_statements_find_it(tmp_path):
+    """With search_path = <another schema>, public, the collection's statements reach the table in public, but
+    current_schema() is the other schema. Discovery must look at the table the statements reach, not
+    current_schema() (CodeRabbit on #655): a dry run reports the indexes present, and a run builds nothing."""
+    import uuid
+
+    from mempalace.backends import postgres as pg
+
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    other = f"lk_other_{uuid.uuid4().hex[:8]}"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA "{other}"')
+        sep = "&" if "?" in POSTGRES_DSN else "?"
+        dsn = f"{POSTGRES_DSN}{sep}options=-csearch_path%3D{other}%2Cpublic"
+        elsewhere = pg.PostgresCollection(dsn, table_name=col.table_name)
+        assert [r["state"] for r in elsewhere.ensure_lookup_indexes(dry_run=True)] == [
+            "present"
+        ] * 3
+        assert [r["state"] for r in elsewhere.ensure_lookup_indexes()] == ["present"] * 3
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP SCHEMA IF EXISTS "{other}" CASCADE')
+        _drop_lookup_table(col, conn)
+
+
+def test_an_unrelated_index_under_the_lookup_name_is_never_dropped(tmp_path):
+    """Only an INVALID leftover of our own build is dropped. Another index that happens to hold the lookup name
+    (here an INVALID unique index on id, which may still enforce uniqueness) is a name conflict: reported, left intact
+    (CodeRabbit on #655)."""
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    name = f"{col.table_name}_meta_parent_entry_id_idx"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX "{name}"')
+            cur.execute(f'CREATE UNIQUE INDEX "{name}" ON "{col.table_name}" (id)')
+            cur.execute(
+                "UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(%s)", (name,)
+            )
+        row = col.ensure_lookup_indexes()[2]
+        assert row["state"] == "failed", row
+        assert row["leftover"].startswith("name conflict"), row
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT indisunique FROM pg_index WHERE indexrelid = to_regclass(%s)", (name,)
+            )
+            assert cur.fetchone() == (True,), "the unrelated index was dropped"
+    finally:
+        _drop_lookup_table(col, conn)
