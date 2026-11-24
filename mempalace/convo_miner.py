@@ -30,6 +30,7 @@ from .ids import (
     make_exchange_drawer_id,
 )
 from .normalize import UnparsedCodexTranscriptError, normalize_conversations
+from .rule_candidates import flag_chunks as flag_rule_candidates
 from .source_identity import identity_metadata, source_directory_identity
 from .entities import entities_metadata
 from .sensitive import configured_markers, sensitive_chunk_flags
@@ -1233,6 +1234,9 @@ def _file_chunks_locked(  # noqa: C901 — fork #414 incremental re-mine + upstr
         _write_source_manifest(
             use_manifest, collection, source_file, extract_mode, source_mtime, chunk_total
         )
+        # User lines that read as standing rules go to a per-day review list
+        # (#584). Only this pass's new/changed chunks; never raises.
+        flag_rule_candidates(changed, wing, source_file)
         if unchanged:
             print(
                 f"    = {len(unchanged)} unchanged drawer(s) kept, "

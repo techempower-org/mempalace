@@ -1,0 +1,27 @@
+seq: 213
+id: rule-candidates
+date: '2026-11-23'
+bucket: Added
+commit: HEAD
+area: Mining
+summary: the convo miner lists user lines that read as standing rules for review; `mempalace rules --since` prints them
+body: |
+  A rule said once in a session ("we should use the good dragon voices") sat
+  in the palace verbatim with no memory, no CLAUDE.md line and no hook, and a
+  lane in another project broke it (#584). Now each newly filed exchange chunk's
+  user lines that read as a standing rule (always / never / every / "we should
+  use" / "standing rule" / "from now on" / "I thought we") are appended verbatim,
+  with the drawer id, to `~/.mempalace/rule_candidates/rule-candidates-YYYY-MM-DD.md`
+  (`MEMPALACE_RULE_CANDIDATES_DIR`; `MEMPALACE_RULE_CANDIDATES=0` turns it off).
+  A line whose words cover an existing memory's `name:` slug
+  (`MEMPALACE_RULE_MEMORY_GLOB`, default `~/.claude/projects/*/memory/*.md`) is
+  dropped, and a line already listed on an earlier day is not listed again.
+  Subagent transcripts and harness-injected turns are skipped. The flagging never
+  fails a mine. `mempalace rules --since YYYY-MM-DD` prints the lists.
+tests: '11 (tests/test_rule_candidates.py)'
+files:
+- mempalace/rule_candidates.py
+- mempalace/convo_miner.py
+- mempalace/cli/parser.py
+- mempalace/cli/cmd_serve.py
+- tests/test_rule_candidates.py
