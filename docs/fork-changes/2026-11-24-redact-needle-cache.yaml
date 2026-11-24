@@ -2,7 +2,7 @@ seq: 214
 id: redact-needle-cache
 date: '2026-11-24'
 bucket: Changed
-commit: HEAD
+commit: bdf8f2f
 area: Reliability
 summary: a slow or locked vault keeps the last good redact needles instead of refusing every write
 body: |

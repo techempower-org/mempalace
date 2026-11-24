@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **a slow or locked vault keeps the last good redact needles instead of refusing every write** (`HEAD` — pending resolution)
+- **a slow or locked vault keeps the last good redact needles instead of refusing every write** ([`bdf8f2f`](https://github.com/techempower-org/mempalace/commit/bdf8f2f))
   Vault needles (`secret_vault_items`) were fetched on the write path, and a
   refresh that failed cleared them, so one bw timeout refused every palace
   write until the vault answered again.
