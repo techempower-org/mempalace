@@ -57,6 +57,47 @@ def cmd_palace_set_embedder(args):
         )
 
 
+def cmd_lookup_indexes(args):
+    """Postgres only: build the missing metadata lookup indexes online, ANALYZE, and check each plan uses its index.
+
+    Exit 0 when no build failed and no judged plan missed its index. A dry run never builds or judges plans, so it
+    exits 0 even with indexes missing (it lists them), and keys whose plans are not judged (source_file, a small
+    table) don't affect the exit. 1 when a build failed (the index is named) or a judged per-value or generic
+    (prepared) plan does not use its index; 2 for another backend; 3 when another lookup-indexes run holds the
+    table's lock.
+    """
+    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    if _selected_backend_for_palace(palace_path) != "postgres":
+        print("\n  lookup-indexes is for the postgres backend only.", file=sys.stderr)
+        raise SystemExit(2)
+    from ..backends.embedding_wrapper import EmbeddingCollection
+    from ..backends.postgres import LookupIndexesBusy
+    from ..palace import get_collection
+
+    col = get_collection(palace_path, create=False)
+    inner = col._inner if isinstance(col, EmbeddingCollection) else col
+    try:
+        report = inner.ensure_lookup_indexes(dry_run=getattr(args, "dry_run", False))
+    except LookupIndexesBusy as exc:
+        print(f"\n  {exc}", file=sys.stderr)
+        raise SystemExit(3)
+    bad = False
+    for row in report:
+        uses = row.get("plan_uses_index")
+        generic = row.get("generic_plan_uses_index")
+        if row["state"] == "failed":
+            plan = f"  BUILD FAILED: {row['error']} (leftover: {row.get('leftover', 'none')})"
+        elif uses is None:
+            plan = f"  plan not judged ({row['plan_note']})" if row.get("plan_note") else ""
+        else:
+            plan = "  plan uses it" if uses else "  plan does NOT use it"
+            plan += "; generic plan uses it" if generic else "; generic plan does NOT use it"
+        print(f"  {row['key']:<18} {row['state']:<8} {row['index']}{plan}")
+        bad = bad or uses is False or generic is False or row["state"] == "failed"
+    if bad:
+        raise SystemExit(1)
+
+
 def cmd_repair_status(args):
     """Read-only HNSW capacity health check (#1222)."""
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path

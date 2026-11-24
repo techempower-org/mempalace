@@ -397,3 +397,575 @@ def test_new_collection_indexes_source_file_and_reports_it(tmp_path, caplog):
         with conn.cursor() as cur:
             cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
         conn.close()
+
+
+def _lookup_table(tmp_path, rows=20000, autovacuum=True):
+    """A new collection plus ``rows`` drawers inserted in SQL: 1 in 50 with parent_drawer_id, 1 in 50 with
+    parent_entry_id, the rest with source_file only (the production mix is ~98.6 % without a parent key).
+    ``autovacuum=False`` turns it off before the insert, so no autoanalyze can add statistics behind a test."""
+    import uuid
+
+    import psycopg
+
+    col = get_backend("postgres").get_collection(
+        palace=_palace_ref(str(tmp_path)),
+        collection_name=f"lk_idx_{uuid.uuid4().hex[:8]}",
+        create=True,
+        options={"dsn": POSTGRES_DSN},
+    )
+    col.add(ids=["seed"], documents=["d"], metadatas=[{"wing": "w"}], embeddings=[[0.0] * 384])
+    conn = psycopg.connect(POSTGRES_DSN, autocommit=True)
+    with conn.cursor() as cur:
+        if not autovacuum:
+            cur.execute(f'ALTER TABLE "{col.table_name}" SET (autovacuum_enabled = false)')
+        cur.execute(
+            f'INSERT INTO "{col.table_name}" (id, wing, room, document, metadata) '
+            "SELECT 'd' || lpad(g::text, 8, '0'), 'w', 'r', 'x', CASE "
+            "WHEN g %% 50 = 0 THEN jsonb_build_object('parent_drawer_id', 'p' || g) "
+            "WHEN g %% 50 = 1 THEN jsonb_build_object('parent_entry_id', 'e' || g) "
+            "ELSE jsonb_build_object('source_file', '/f/' || (g %% 300)) END "
+            "FROM generate_series(1, %s) g ORDER BY random()",
+            (rows,),
+        )
+    return col, conn
+
+
+def test_a_new_collection_gets_every_lookup_index(tmp_path):
+    """source_file, parent_drawer_id and parent_entry_id each get their expression index at CREATE TABLE."""
+    from mempalace.backends import postgres as pg
+
+    col, conn = _lookup_table(tmp_path, rows=0)
+    try:
+        report = col.ensure_lookup_indexes(dry_run=True)
+        assert [(r["key"], r["state"]) for r in report] == [
+            (k, "present") for k in pg.LOOKUP_INDEX_KEYS
+        ]
+        assert report[1]["index"] == f"{col.table_name}_meta_parent_drawer_id_idx"
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
+
+
+def test_an_existing_palace_builds_the_missing_ones_analyzes_and_its_plans_use_them(tmp_path):
+    """The 2026-11-21 production gap: a palace created before the parent-id indexes. ensure_lookup_indexes builds
+    them CONCURRENTLY, ANALYZEs (an expression index has no statistics until then, and the planner keeps its
+    default guess), and the judged-parent lookup's plan uses each index. A rerun builds nothing."""
+    col, conn = _lookup_table(tmp_path)
+    try:
+        with conn.cursor() as cur:
+            for key in ("parent_drawer_id", "parent_entry_id"):
+                cur.execute(f'DROP INDEX "{col.table_name}_meta_{key}_idx"')
+        dry = col.ensure_lookup_indexes(dry_run=True)
+        assert [r["state"] for r in dry] == ["present", "missing", "missing"]
+
+        report = col.ensure_lookup_indexes(plan_check_min_pages=0)
+        assert [r["state"] for r in report] == ["present", "built", "built"]
+        assert all(r["marked"] for r in report[1:]), report
+        assert all(r["plan_uses_index"] for r in report[1:]), report
+        assert all(r["generic_plan_uses_index"] for r in report[1:]), report
+        assert report[0]["plan_note"] == "no judged-parent lookup on this key"
+        with conn.cursor() as cur:
+            for r in report[1:]:
+                cur.execute("SELECT count(*) FROM pg_stats WHERE tablename = %s", (r["index"],))
+                assert cur.fetchone()[0] > 0, f"{r['index']} has no statistics: ANALYZE did not run"
+
+        again = col.ensure_lookup_indexes(plan_check_min_pages=0)
+        assert [r["state"] for r in again] == ["present"] * 3
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
+
+
+def _invalid_lookup_index(conn, table, name, *, marked):
+    """An INVALID single-column lookup index on parent_entry_id under ``name``, as a failed CONCURRENTLY build
+    leaves it; ``marked`` adds this tool's build mark, as a run does when it can't drop its own leftover."""
+    from mempalace.backends import postgres as pg
+
+    with conn.cursor() as cur:
+        cur.execute(f'DROP INDEX IF EXISTS "{name}"')
+        cur.execute(f'CREATE INDEX "{name}" ON "{table}" ((metadata->>\'parent_entry_id\'))')
+        cur.execute(
+            "UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(%s)", (name,)
+        )
+        if marked:
+            cur.execute(f"COMMENT ON INDEX \"{name}\" IS '{pg._LOOKUP_BUILD_MARK}earlier-run'")
+
+
+def test_an_invalid_leftover_is_dropped_and_rebuilt(tmp_path):
+    """A failed CREATE INDEX CONCURRENTLY leaves an INVALID index under the lookup name; it is not counted as
+    present, and when it carries this tool's build mark the next run drops and rebuilds it (and marks the new one)."""
+    from mempalace.backends import postgres as pg
+
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    name = f"{col.table_name}_meta_parent_entry_id_idx"
+    try:
+        _invalid_lookup_index(conn, col.table_name, name, marked=True)
+        assert [r["state"] for r in col.ensure_lookup_indexes(dry_run=True)][2] == "missing"
+        report = col.ensure_lookup_indexes()
+        assert report[2]["state"] == "built"
+        assert report[2]["marked"] is True
+        assert report[2]["plan_note"] == "small table"
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT indisvalid, obj_description(indexrelid, 'pg_class') FROM pg_index "
+                "WHERE indexrelid = to_regclass(%s)",
+                (name,),
+            )
+            valid, comment = cur.fetchone()
+            assert valid is True
+            assert comment.startswith(pg._LOOKUP_BUILD_MARK) and not comment.endswith("earlier-run")
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
+
+
+def test_an_unmarked_invalid_index_of_the_same_shape_is_reported_not_dropped(tmp_path):
+    """#655 r3 ruling: the definition alone (name, table, validity, expression) doesn't prove this tool built an
+    index; a person can build the same shape by hand. An INVALID one without the build mark is reported and left
+    intact, never dropped."""
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    name = f"{col.table_name}_meta_parent_entry_id_idx"
+    try:
+        _invalid_lookup_index(conn, col.table_name, name, marked=False)
+        row = col.ensure_lookup_indexes()[2]
+        assert row["state"] == "failed", row
+        assert "did not build" in row["leftover"], row
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(%s)", (name,)
+            )
+            assert cur.fetchone() == (False,), "the hand-built index was dropped"
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
+
+
+def _statement_text(query, conn) -> str:
+    """The SQL text psycopg sends for ``query`` (a str, or a psycopg.sql Composed rendered on ``conn``). The driver
+    binds parameters server-side, so the text keeps its placeholders and the values travel separately."""
+    return query if isinstance(query, str) else query.as_string(conn)
+
+
+def _record_side_connection(monkeypatch, hook=None):
+    """Route ensure_lookup_indexes' side connection through a recorder: every statement it executes is logged as
+    (text, params), the text being what psycopg sends. ``hook(real_cursor, query, params, text)`` runs before each
+    statement and may raise in its place."""
+    import types
+
+    from mempalace.backends import postgres as pg
+
+    psycopg, sql = pg._load_psycopg2()
+    log = []
+
+    class Cur:
+        def __init__(self, real):
+            self._real = real
+
+        def execute(self, query, params=None):
+            text = _statement_text(query, self._real.connection)
+            log.append((text, None if params is None else list(params)))
+            if hook is not None:
+                hook(self._real, query, params, text)
+            return self._real.execute(query, params)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._real.close()
+
+    class Conn:
+        def __init__(self, real):
+            object.__setattr__(self, "_real", real)
+
+        def __setattr__(self, name, value):
+            setattr(self._real, name, value)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        def cursor(self):
+            return Cur(self._real.cursor())
+
+    fake = types.SimpleNamespace(connect=lambda dsn: Conn(psycopg.connect(dsn)))
+    monkeypatch.setattr(pg, "_load_psycopg2", lambda: (fake, sql))
+    return log
+
+
+def _drop_lookup_table(col, conn):
+    with conn.cursor() as cur:
+        cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+    conn.close()
+
+
+def test_the_plan_check_explains_the_statement_the_judged_parent_lookup_sends(
+    tmp_path, monkeypatch
+):
+    """#655 r1 (1): the probe must be the real lookup, not a look-alike. The searcher calls
+    get(where={key: {"$in": ids}}, include=["metadatas"], limit=_JUDGED_PARENT_ROW_LIMIT); the plan check EXPLAINs
+    exactly the statement text get() sends for that call, with the same bound parameters (psycopg binds them
+    server-side). Since round 2 the lookup key is inlined, so it is no parameter at all."""
+    import re
+
+    from mempalace import searcher
+    from mempalace.backends import postgres as pg
+
+    assert pg._LOOKUP_PROBE_LIMIT == searcher._JUDGED_PARENT_ROW_LIMIT
+    assert pg._JUDGED_PARENT_KEYS == searcher._PARENT_ID_KEYS
+    col, conn = _lookup_table(tmp_path, rows=2000)
+    try:
+        sent = []
+        real_execute = pg._RetryingCursor.execute
+
+        def spy(self, q, params=None):
+            sent.append((q, params))
+            return real_execute(self, q, params)
+
+        monkeypatch.setattr(pg._RetryingCursor, "execute", spy)
+        col.get(
+            where={"parent_drawer_id": {"$in": list(pg._LOOKUP_PROBE_IDS)}},
+            include=["metadatas"],
+            limit=searcher._JUDGED_PARENT_ROW_LIMIT,
+        )
+        monkeypatch.setattr(pg._RetryingCursor, "execute", real_execute)
+        get_query, get_params = sent[-1]
+        get_text = _statement_text(get_query, conn)
+        assert get_text.startswith("SELECT id, NULL::text, wing, room, metadata FROM"), get_text
+
+        log = _record_side_connection(monkeypatch)
+        col.ensure_lookup_indexes(plan_check_min_pages=0)
+        explains = [(t, p) for t, p in log if t.startswith("EXPLAIN ") and "parent_drawer_id" in t]
+        assert explains == [("EXPLAIN (FORMAT JSON) " + get_text, list(get_params))], (
+            explains,
+            get_text,
+        )
+        # The generic-plan check prepares that same text, its placeholders numbered.
+        numbers = iter(range(1, len(get_params) + 1))
+        numbered = re.sub(r"%s", lambda _m: f"${next(numbers)}", get_text)
+        assert ("PREPARE mempalace_lookup_probe AS " + numbered, None) in log
+    finally:
+        _drop_lookup_table(col, conn)
+
+
+def test_a_warmed_production_connection_keeps_using_the_index_under_a_generic_plan(tmp_path):
+    """#655 r2 (1, 2): the lookup on the backend's own connection, prepared by psycopg (prepare_threshold=0, so from
+    the first call) and run repeatedly under plan_cache_mode = force_generic_plan: the plan postgres reuses for every
+    value must still use the parent index. A key bound as $1 can't match the expression index; an inlined one can."""
+    from mempalace import searcher
+    from mempalace.backends import postgres as pg
+
+    col, conn = _lookup_table(tmp_path)
+    try:
+        col.ensure_lookup_indexes(
+            plan_check_min_pages=0
+        )  # ANALYZE, so the planner has the index's statistics
+        live = col._get_conn()
+        live.prepare_threshold = 0
+        col._cursor().execute("SET plan_cache_mode = force_generic_plan")
+        sent = []
+        real_execute = pg._RetryingCursor.execute
+
+        def spy(self, q, params=None):
+            sent.append(params)
+            return real_execute(self, q, params)
+
+        lookup = {
+            "where": {"parent_drawer_id": {"$in": ["p50", "p100"]}},
+            "include": ["metadatas"],
+            "limit": searcher._JUDGED_PARENT_ROW_LIMIT,
+        }
+        pg._RetryingCursor.execute = spy
+        try:
+            for _ in range(6):
+                assert len(col.get(**lookup)["ids"]) == 2
+        finally:
+            pg._RetryingCursor.execute = real_execute
+        cur = col._cursor()
+        cur.execute(
+            # Matched by table and shape, not by key: a bound key never appears in the statement text.
+            "SELECT name, generic_plans FROM pg_prepared_statements "
+            "WHERE statement LIKE %s AND statement LIKE %s AND statement NOT LIKE %s",
+            (f'%"{col.table_name}" WHERE%', "%ORDER BY id LIMIT%", "%pg_prepared_statements%"),
+        )
+        prepared = cur.fetchall()
+        assert len(prepared) == 1 and prepared[0][1] >= 6, prepared
+        args = ", ".join("'" + str(v).replace("'", "''") + "'" for v in sent[-1])
+        cur.execute(f'EXPLAIN (FORMAT JSON) EXECUTE "{prepared[0][0]}"({args})')
+        plan = cur.fetchone()[0]
+        index = pg.lookup_index_name(col.table_name, "parent_drawer_id")
+        assert index in pg._plan_index_names(plan), plan
+    finally:
+        _drop_lookup_table(col, conn)
+
+
+def test_a_second_run_waits_its_turn_and_changes_nothing(tmp_path):
+    """#655 r1 (2): two runs must never drop or build under each other. A run takes the table's advisory lock before
+    it reads any state; while another session holds it, the run raises LookupIndexesBusy and touches nothing."""
+    from mempalace.backends.postgres import LookupIndexesBusy
+
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    name = f"{col.table_name}_meta_parent_entry_id_idx"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX "{name}"')
+            cur.execute(
+                "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+                (f"mempalace.lookup_indexes:{col.table_name}",),
+            )
+        with pytest.raises(LookupIndexesBusy):
+            col.ensure_lookup_indexes()
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass(%s)", (name,))
+            assert cur.fetchone()[0] is None, "a run that did not hold the lock built an index"
+            cur.execute("SELECT pg_advisory_unlock_all()")
+        assert col.ensure_lookup_indexes()[2]["state"] == "built"
+    finally:
+        _drop_lookup_table(col, conn)
+
+
+def test_a_failed_build_is_reported_and_its_leftover_dropped_in_the_same_run(
+    tmp_path, monkeypatch, capsys
+):
+    """#655 r1 (3): a CONCURRENTLY build that fails part-way leaves an INVALID index. The run must say so (state
+    "failed", the error, the index named; the CLI exits 1) and drop the leftover itself, not leave it for the next
+    run to trip over."""
+    import types
+
+    import psycopg
+
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    name = f"{col.table_name}_meta_parent_entry_id_idx"
+
+    def fail_the_parent_entry_build(real_cur, query, params, text):
+        if text.startswith("CREATE INDEX CONCURRENTLY") and "parent_entry_id" in text:
+            real_cur.execute(query, params)  # the build gets as far as a catalog entry ...
+            with conn.cursor() as cur:  # ... and is then cancelled, which leaves it INVALID
+                cur.execute(
+                    "UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(%s)",
+                    (name,),
+                )
+            raise psycopg.errors.QueryCanceled("injected: canceling statement due to lock timeout")
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX "{name}"')
+        _record_side_connection(monkeypatch, hook=fail_the_parent_entry_build)
+        report = col.ensure_lookup_indexes()
+        row = report[2]
+        assert row["state"] == "failed" and row["index"] == name
+        assert "injected" in row["error"]
+        assert row["leftover"] == "dropped"
+        assert [r["state"] for r in report[:2]] == ["present", "present"]
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass(%s)", (name,))
+            assert cur.fetchone()[0] is None, "the INVALID leftover is still there"
+
+        from mempalace import cli  # the cmd_*.py fragments share this one namespace
+
+        monkeypatch.setattr(cli, "_selected_backend_for_palace", lambda _p: "postgres")
+        monkeypatch.setattr("mempalace.palace.get_collection", lambda *_a, **_k: col)
+        with pytest.raises(SystemExit) as exit_info:
+            cli.cmd_lookup_indexes(types.SimpleNamespace(palace=str(tmp_path), dry_run=False))
+        assert exit_info.value.code == 1
+        assert f"{name}  BUILD FAILED" in capsys.readouterr().out
+    finally:
+        _drop_lookup_table(col, conn)
+
+
+def test_a_rerun_analyzes_a_palace_whose_indexes_exist_without_statistics(tmp_path):
+    """#655 r1 (4): the 2026-11-21 production case. The indexes exist and are valid, but nothing has ANALYZEd them,
+    so the planner keeps its default guess and walks the primary key. A rerun that builds nothing must still
+    ANALYZE, and the plans then use the indexes."""
+    col, conn = _lookup_table(tmp_path, autovacuum=False)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM pg_stats WHERE tablename LIKE %s",
+                (f"{col.table_name}_meta_%",),
+            )
+            assert cur.fetchone()[0] == 0, (
+                "precondition: the expression indexes have no statistics yet"
+            )
+        report = col.ensure_lookup_indexes(plan_check_min_pages=0)
+        assert [r["state"] for r in report] == ["present"] * 3
+        with conn.cursor() as cur:
+            for r in report[1:]:
+                cur.execute("SELECT count(*) FROM pg_stats WHERE tablename = %s", (r["index"],))
+                assert cur.fetchone()[0] > 0, f"{r['index']} still has no statistics"
+        assert all(r["plan_uses_index"] for r in report[1:]), report
+    finally:
+        _drop_lookup_table(col, conn)
+
+
+def test_discovery_and_the_plan_check_accept_the_same_indexes(tmp_path):
+    """#655 r1 (5): discovery counts any valid btree on the expression, whatever its name, so the plan check must
+    accept that same index. A hand-built index under another name is reported as the index, and its plan passes."""
+    col, conn = _lookup_table(tmp_path)
+    custom = f"{col.table_name}_hand_built_pd"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX "{col.table_name}_meta_parent_drawer_id_idx"')
+            cur.execute(
+                f'CREATE INDEX "{custom}" ON "{col.table_name}" ((metadata->>\'parent_drawer_id\'))'
+            )
+        report = col.ensure_lookup_indexes(plan_check_min_pages=0)
+        row = report[1]
+        assert (row["state"], row["index"]) == ("present", custom)
+        assert row["plan_uses_index"] is True, row
+    finally:
+        _drop_lookup_table(col, conn)
+
+
+def test_plan_index_names_reads_every_scan_node_of_a_json_plan():
+    """The plan check reads ``Index Name`` from EXPLAIN (FORMAT JSON), so a quoted name or one name inside another
+    can't be misread (CodeRabbit on #655)."""
+    from mempalace.backends.postgres import _plan_index_names
+
+    plan = [
+        {
+            "Plan": {
+                "Node Type": "Limit",
+                "Plans": [
+                    {
+                        "Node Type": "Bitmap Heap Scan",
+                        "Plans": [
+                            {"Node Type": "Bitmap Index Scan", "Index Name": 'odd"name_idx'},
+                        ],
+                    },
+                    {"Node Type": "Index Scan", "Index Name": "t_meta_parent_drawer_id_idx"},
+                ],
+            }
+        }
+    ]
+    assert _plan_index_names(plan) == {'odd"name_idx', "t_meta_parent_drawer_id_idx"}
+    assert _plan_index_names([{"Plan": {"Node Type": "Seq Scan"}}]) == set()
+
+
+def test_long_table_names_get_distinct_lookup_index_names_that_fit():
+    """PostgreSQL truncates identifiers to 63 bytes. A name that doesn't fit keeps a prefix and gains a hash of the
+    full name, so the two parent-index names of a long table stay distinct; a short name is unchanged."""
+    from mempalace.backends.postgres import LOOKUP_INDEX_KEYS, lookup_index_name
+
+    assert lookup_index_name("t", "parent_drawer_id") == "t_meta_parent_drawer_id_idx"
+    assert lookup_index_name("t", "source_file") == "t_source_file_idx"
+    for table in ("x" * 50, "x" * 63, "é" * 31):
+        names = [lookup_index_name(table, key) for key in LOOKUP_INDEX_KEYS]
+        assert len(set(names)) == 3, names
+        assert all(len(n.encode()) <= 63 for n in names), names
+
+
+def test_a_collection_with_a_long_name_gets_all_three_lookup_indexes(tmp_path):
+    """Before the hashed names, a 50-character table gave both parent indexes the same truncated name, and creating
+    the second one stopped collection setup."""
+    import uuid
+
+    import psycopg
+
+    from mempalace.backends import postgres as pg
+
+    name = f"lk_long_{uuid.uuid4().hex}"[:12] + "x" * 38
+    col = get_backend("postgres").get_collection(
+        palace=_palace_ref(str(tmp_path)),
+        collection_name=name,
+        create=True,
+        options={"dsn": POSTGRES_DSN},
+    )
+    conn = psycopg.connect(POSTGRES_DSN, autocommit=True)
+    try:
+        col.add(ids=["seed"], documents=["d"], metadatas=[{"wing": "w"}], embeddings=[[0.0] * 384])
+        report = col.ensure_lookup_indexes(dry_run=True)
+        assert [r["state"] for r in report] == ["present"] * 3, report
+        assert len({r["index"] for r in report}) == 3
+        assert [r["index"] for r in report] == [
+            pg.lookup_index_name(col.table_name, k) for k in pg.LOOKUP_INDEX_KEYS
+        ]
+    finally:
+        _drop_lookup_table(col, conn)
+
+
+def test_the_table_is_found_where_the_collections_own_statements_find_it(tmp_path):
+    """With search_path = <another schema>, public, the collection's statements reach the table in public, but
+    current_schema() is the other schema. Discovery must look at the table the statements reach, not
+    current_schema() (CodeRabbit on #655): a dry run reports the indexes present, and a run builds nothing."""
+    import uuid
+
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    from mempalace.backends import postgres as pg
+
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    other = f"lk_other_{uuid.uuid4().hex[:8]}"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA "{other}"')
+        # make_conninfo works for a URI or a keyword DSN, and keeps any options already set.
+        parts = conninfo_to_dict(POSTGRES_DSN)
+        parts["options"] = f"{parts.get('options', '')} -csearch_path={other},public".strip()
+        dsn = make_conninfo(**parts)
+        elsewhere = pg.PostgresCollection(dsn, table_name=col.table_name)
+        assert [r["state"] for r in elsewhere.ensure_lookup_indexes(dry_run=True)] == [
+            "present"
+        ] * 3
+        assert [r["state"] for r in elsewhere.ensure_lookup_indexes()] == ["present"] * 3
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP SCHEMA IF EXISTS "{other}" CASCADE')
+        _drop_lookup_table(col, conn)
+
+
+def test_an_unrelated_index_under_the_lookup_name_is_never_dropped(tmp_path):
+    """Only an INVALID leftover of our own build is dropped. Another index that happens to hold the lookup name
+    (here an INVALID unique index on id, which may still enforce uniqueness) is a name conflict: reported, left intact
+    (CodeRabbit on #655)."""
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    name = f"{col.table_name}_meta_parent_entry_id_idx"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX "{name}"')
+            cur.execute(f'CREATE UNIQUE INDEX "{name}" ON "{col.table_name}" (id)')
+            cur.execute(
+                "UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(%s)", (name,)
+            )
+        row = col.ensure_lookup_indexes()[2]
+        assert row["state"] == "failed", row
+        assert row["leftover"].startswith("name conflict"), row
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT indisunique FROM pg_index WHERE indexrelid = to_regclass(%s)", (name,)
+            )
+            assert cur.fetchone() == (True,), "the unrelated index was dropped"
+    finally:
+        _drop_lookup_table(col, conn)
+
+
+def test_an_invalid_index_of_another_definition_is_not_dropped_as_a_leftover(tmp_path):
+    """Discovery matches the leading expression only, so an INVALID two-column index on
+    ((metadata->>'parent_entry_id'), id) under the lookup name looks like a leftover. The first drop must check the
+    exact definition too: it is somebody else's index, reported as a name conflict and left intact (CodeRabbit on
+    #655)."""
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    name = f"{col.table_name}_meta_parent_entry_id_idx"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX "{name}"')
+            cur.execute(
+                f'CREATE INDEX "{name}" ON "{col.table_name}" ((metadata->>\'parent_entry_id\'), id)'
+            )
+            cur.execute(
+                "UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(%s)", (name,)
+            )
+        row = col.ensure_lookup_indexes()[2]
+        assert row["state"] == "failed", row
+        assert row["leftover"].startswith("name conflict"), row
+        with conn.cursor() as cur:
+            cur.execute("SELECT indnatts FROM pg_index WHERE indexrelid = to_regclass(%s)", (name,))
+            assert cur.fetchone() == (2,), "the two-column index was dropped"
+    finally:
+        _drop_lookup_table(col, conn)

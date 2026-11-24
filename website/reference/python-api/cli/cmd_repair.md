@@ -18,6 +18,20 @@ change the configured model — when the two differ it prints how to align
 ``MEMPALACE_EMBEDDING_MODEL``. ``--force`` overwrites an existing,
 differently-named identity.
 
+### `cmd_lookup_indexes`
+
+```python
+def cmd_lookup_indexes(args)
+```
+
+Postgres only: build the missing metadata lookup indexes online, ANALYZE, and check each plan uses its index.
+
+Exit 0 when no build failed and no judged plan missed its index. A dry run never builds or judges plans, so it
+exits 0 even with indexes missing (it lists them), and keys whose plans are not judged (source_file, a small
+table) don't affect the exit. 1 when a build failed (the index is named) or a judged per-value or generic
+(prepared) plan does not use its index; 2 for another backend; 3 when another lookup-indexes run holds the
+table's lock.
+
 ### `cmd_repair_status`
 
 ```python

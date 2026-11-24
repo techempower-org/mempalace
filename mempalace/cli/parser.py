@@ -1433,6 +1433,18 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         ),
     )
 
+    # lookup-indexes (postgres)
+    p_lookup = sub.add_parser(
+        "lookup-indexes",
+        help=(
+            "Postgres: build the missing metadata lookup indexes (source_file, parent_drawer_id, "
+            "parent_entry_id) CONCURRENTLY, then ANALYZE, then check each lookup plan uses its index"
+        ),
+    )
+    p_lookup.add_argument(
+        "--dry-run", action="store_true", help="Only report which indexes are missing"
+    )
+
     # repair
     p_repair = sub.add_parser(
         "repair",
@@ -3254,6 +3266,7 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         "wake-up": cmd_wakeup,
         "repair": cmd_repair,
         "repair-status": cmd_repair_status,
+        "lookup-indexes": cmd_lookup_indexes,
         "migrate": cmd_migrate,
         "migrate-to-postgres": cmd_migrate_to_postgres,
         "purge": cmd_purge,
