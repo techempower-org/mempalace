@@ -24,6 +24,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
+- **redaction takes bcrypt password hashes ($2a$/$2b$/$2y$) as their own strong kind** (`HEAD` — pending resolution)
+  Caddy basic_auth lines and an app's admin user row put bcrypt hashes into
+  14 drawers, and no rule took them: a hash of a person's password can be
+  attacked offline. The strong passes now include a `bcrypt` kind: every
+  variant (`$2$`, `$2a$`, `$2b$`, `$2x$`, `$2y$`), an ASCII cost of 04-31,
+  and 53 characters of salt and digest, with "$" also spelled `%24` or
+  `$` and "/" also `\/`. Only a following letter or digit stops a
+  match, so a hash that ends a sentence is still taken. The miner masks
+  new ones on every write, and the daily secrets check redacts old ones.
+
+
 - **a slow or locked vault keeps the last good redact needles instead of refusing every write** ([`bdf8f2f`](https://github.com/techempower-org/mempalace/commit/bdf8f2f))
   Vault needles (`secret_vault_items`) were fetched on the write path, and a
   refresh that failed cleared them, so one bw timeout refused every palace
