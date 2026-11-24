@@ -2057,7 +2057,7 @@ def test_a_bcrypt_hash_is_named_and_never_left_raw(prefix):
     rule took them. Every variant is caught as its own kind, in the contexts a transcript holds."""
     value = prefix + ("Zq8./Wm4Tn" * 6)[:53]
     for text in (
-        f"    cassandra {value}",  # a Caddyfile basic_auth line
+        f"    alice {value}",  # a Caddyfile basic_auth line
         f"admin:{value}",  # an htpasswd line
         '{"password": "' + value + '"}',
         "INSERT INTO users VALUES ('admin', '" + value + "');",
