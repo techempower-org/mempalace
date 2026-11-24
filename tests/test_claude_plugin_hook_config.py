@@ -130,3 +130,24 @@ def test_session_end_hook_uses_background_wrapper(hook_config: dict) -> None:
 
     assert any("mempal-session-end-hook.sh" in command for command in commands)
     assert not any("mempal-precompact-hook.sh" in command for command in commands)
+
+
+def test_plugin_hook_events_declared_once() -> None:
+    """No event key appears twice in hooks.json (#583).
+
+    ``json.loads`` keeps only the last duplicate key, so a repeated
+    ``"SessionEnd"`` block is invisible to the fixture above and to Claude
+    Code alike; it only rots. Parse with a hook that sees every pair.
+    """
+    duplicates: list[str] = []
+
+    def _no_dupes(pairs):
+        seen = set()
+        for key, _ in pairs:
+            if key in seen:
+                duplicates.append(key)
+            seen.add(key)
+        return dict(pairs)
+
+    json.loads(HOOK_CONFIG.read_text(encoding="utf-8"), object_pairs_hook=_no_dupes)
+    assert not duplicates, f"duplicate keys in {HOOK_CONFIG.name}: {duplicates}"

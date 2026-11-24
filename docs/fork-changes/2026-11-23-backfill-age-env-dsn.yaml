@@ -1,0 +1,20 @@
+seq: 213
+id: backfill-age-env-dsn
+date: '2026-11-23'
+bucket: Fixed
+commit: HEAD
+area: CLI
+summary: mempalace-backfill-age reads its DSN from MEMPALACE_POSTGRES_DSN when --dsn is absent; the plugin hooks.json declares SessionEnd once
+body: |
+  `--dsn` was required, so the DSN (password included) sat in the process list
+  for the length of a backfill on familiar. It is now optional: without it the
+  DSN comes from `MEMPALACE_POSTGRES_DSN` (or `MEMPALACE_PG_DSN`), and the flag
+  still wins when given. `.claude-plugin/hooks/hooks.json` declared the same
+  `SessionEnd` block three times; JSON keeps only the last duplicate key, so the
+  copies were dead text. A test now parses the file with a duplicate-key check.
+tests: '6 (tests/test_backfill_age_dsn.py, tests/test_claude_plugin_hook_config.py)'
+files:
+- mempalace/backfill_age.py
+- .claude-plugin/hooks/hooks.json
+- tests/test_backfill_age_dsn.py
+- tests/test_claude_plugin_hook_config.py
