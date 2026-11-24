@@ -67,11 +67,14 @@ from __future__ import annotations
 
 import bisect
 import hashlib
+import logging
 import os
 import re
 import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 # Kind -> pattern. Each matches a credential's shape only.
 # A PEM private key, taken line by line (2026-11-17: four OpenSSH private keys sat in drawers and no
@@ -313,7 +316,7 @@ def _config_signature() -> Tuple[str, Optional[Tuple[int, ...]]]:
     return path, (st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
 
 
-def _load() -> List[Tuple[str, re.Pattern]]:
+def _load(refetch: bool = False) -> List[Tuple[str, re.Pattern]]:
     from .config import MempalaceConfig
 
     config = MempalaceConfig()
@@ -322,7 +325,9 @@ def _load() -> List[Tuple[str, re.Pattern]]:
     raw = config._file_config.get("secret_patterns", [])
     if not isinstance(raw, list) or not all(isinstance(p, str) and p for p in raw):
         raise SecretPatternsUnavailable("secret_patterns must be a list of non-empty strings")
-    return _compile(tuple(raw)) + _vault_passes(config._file_config.get("secret_vault_items", []))
+    return _compile(tuple(raw)) + _vault_passes(
+        config._file_config.get("secret_vault_items", []), refetch=refetch
+    )
 
 
 _VAULT_LABEL = re.compile(r"[a-z0-9][a-z0-9-]{0,62}")
@@ -389,17 +394,15 @@ def _needle_pattern(value: str) -> str:
     return "(?:" + "|".join(alts) + ")"
 
 
-def _vault_passes(items: Any) -> List[Pass]:
-    """One pass per configured vault item: its current value, on alphanumeric word boundaries, becomes
-    ``[redacted vault <label>]`` (no hash: the value may be guessable). The config holds item ids and
-    labels only. Any item that cannot be fetched fails closed, like an unreadable config."""
+def _vault_items(items: Any) -> List[Tuple[str, str]]:
+    """The configured vault items as (id, label), checked; a malformed list fails closed."""
     if not isinstance(items, list):
         raise SecretPatternsUnavailable("secret_vault_items must be a list")
     if len(items) > _VAULT_MAX_ITEMS:  # each fetch may take its 30 s timeout; keep a load bounded
         raise SecretPatternsUnavailable(
             f"secret_vault_items lists more than {_VAULT_MAX_ITEMS} items"
         )
-    out: List[Pass] = []
+    out = []
     for it in items:
         if not (
             isinstance(it, dict)
@@ -411,29 +414,164 @@ def _vault_passes(items: Any) -> List[Pass]:
             raise SecretPatternsUnavailable(
                 "secret_vault_items entries need an id and a label [a-z0-9-]"
             )
-        try:
-            value = _vault_fetch(it["id"])
-        except SecretPatternsUnavailable as exc:
-            raise SecretPatternsUnavailable(f"vault item {it['label']}: {exc}") from exc
-        if len(value.strip()) < 6:
-            raise SecretPatternsUnavailable(
-                f"vault item {it['label']}: value too short to match safely"
-            )
-        out.append(_pass([(f"vault {it['label']}", _needle_pattern(value))]))
+        out.append((it["id"], it["label"]))
     return out
 
 
+# The last good value of each vault item: {item id: (value, time.monotonic() when fetched)}. Held in
+# memory only, under _lock. A fetch that fails keeps it: one slow or locked vault answer must not refuse
+# every palace write while a good value is known. Only an item with no good value fails closed.
+_vault_values: Dict[str, Tuple[str, float]] = {}
+_refresher: Dict[str, Any] = {"thread": None, "stop": None}
+
+
+def _refresher_alive() -> bool:
+    t = _refresher["thread"]
+    return t is not None and t.is_alive()
+
+
+def _fetch_checked(item_id: str, label: str) -> str:
+    try:
+        value = _vault_fetch(item_id)
+    except SecretPatternsUnavailable as exc:
+        raise SecretPatternsUnavailable(f"vault item {label}: {exc}") from exc
+    if len(value.strip()) < 6:
+        raise SecretPatternsUnavailable(f"vault item {label}: value too short to match safely")
+    return value
+
+
+def _vault_value(item_id: str, label: str, now: float, refetch: bool = False) -> str:
+    """The value to match for one item (call under _lock). While the refresher runs, any cached value is
+    used (it fetches off the write path, every half TTL). Without it, a cached value younger than the TTL
+    is used unless ``refetch`` (the config changed). Otherwise fetch; if that fails, keep the last good
+    value (logged by label and age, never the value), and fail closed only when there is none."""
+    cached = _vault_values.get(item_id)
+    if cached is not None and (
+        _refresher_alive() or (not refetch and now - cached[1] <= _VAULT_TTL)
+    ):
+        return cached[0]
+    try:
+        value = _fetch_checked(item_id, label)
+    except SecretPatternsUnavailable as exc:
+        if cached is None:
+            raise
+        logger.warning(
+            "redact: %s; keeping the last good value (fetched %.0f s ago)", exc, now - cached[1]
+        )
+        return cached[0]
+    _vault_values[item_id] = (value, now)
+    return value
+
+
+def _vault_passes(items: Any, now: Optional[float] = None, refetch: bool = False) -> List[Pass]:
+    """One pass per configured vault item: its value, on alphanumeric word boundaries, becomes
+    ``[redacted vault <label>]`` (no hash: the value may be guessable). The config holds item ids and
+    labels only. An item with no good value (never fetched, or fetched too short) fails closed, like an
+    unreadable config; an item that is no longer configured is dropped from the cache."""
+    pairs = _vault_items(items)
+    now = time.monotonic() if now is None else now
+    for gone in set(_vault_values) - {i for i, _l in pairs}:
+        del _vault_values[gone]
+    return [
+        _pass([(f"vault {label}", _needle_pattern(_vault_value(item_id, label, now, refetch)))])
+        for item_id, label in pairs
+    ]
+
+
+def refresh_vault_needles() -> Dict[str, str]:
+    """Fetch every configured vault item now, outside the write lock, and keep each good value; a write
+    never waits on the vault for an item with a good value. Returns {label: "ok" | "kept (<age> s): <why>"
+    | "none: <why>"}, labels and reasons only. The next patterns() call recompiles from the new values."""
+    from .config import MempalaceConfig
+
+    config = MempalaceConfig()
+    if getattr(config, "_file_config_state", "read") in ("unread", "unparsed"):
+        raise SecretPatternsUnavailable("palace config unreadable; secret_vault_items unknown")
+    pairs = _vault_items(config._file_config.get("secret_vault_items", []))
+    fetched: Dict[str, Tuple[str, float]] = {}
+    report: Dict[str, str] = {}
+    for item_id, label in pairs:
+        try:
+            fetched[item_id] = (_fetch_checked(item_id, label), time.monotonic())
+            report[label] = "ok"
+        except SecretPatternsUnavailable as exc:
+            report[label] = str(exc)
+    with _lock:
+        _vault_values.update(fetched)
+        now = time.monotonic()
+        for item_id, label in pairs:
+            if report[label] == "ok":
+                continue
+            cached = _vault_values.get(item_id)
+            why = report[label]
+            report[label] = (
+                f"kept ({now - cached[1]:.0f} s): {why}" if cached is not None else f"none: {why}"
+            )
+            logger.warning("redact: needle refresh: %s %s", label, report[label])
+        if fetched:
+            # recompile from the new values on the next call, fetching nothing
+            _cache["dirty"] = True
+    return report
+
+
+def start_vault_refresher(interval: float = _VAULT_TTL / 2) -> bool:
+    """Start (once per process) a daemon thread that runs refresh_vault_needles() now and every
+    ``interval`` seconds, so a long-lived writer (palace-daemon) never fetches on the write path. False
+    when it already runs."""
+    if _refresher_alive():
+        return False
+    stop = threading.Event()
+
+    def run() -> None:
+        while not stop.is_set():
+            try:
+                refresh_vault_needles()
+            except Exception as exc:  # noqa: BLE001 -- the timer must outlive one bad refresh
+                logger.warning("redact: needle refresh failed: %s", exc)
+            stop.wait(interval)
+
+    t = threading.Thread(target=run, name="mempalace-vault-refresh", daemon=True)
+    _refresher.update(thread=t, stop=stop)
+    t.start()
+    return True
+
+
+def stop_vault_refresher(timeout: float = 5.0) -> None:
+    stop, t = _refresher["stop"], _refresher["thread"]
+    if stop is not None:
+        stop.set()
+    if t is not None:
+        t.join(timeout)
+    _refresher.update(thread=None, stop=None)
+
+
+def vault_status() -> List[Tuple[str, Optional[float]]]:
+    """(label, seconds since its last good fetch, or None if it has none) per configured item."""
+    from .config import MempalaceConfig
+
+    pairs = _vault_items(MempalaceConfig()._file_config.get("secret_vault_items", []))
+    with _lock:
+        now = time.monotonic()
+        return [
+            (label, now - _vault_values[i][1] if i in _vault_values else None) for i, label in pairs
+        ]
+
+
 def patterns() -> List[Pass]:
-    """The compiled patterns, re-read when the config file changes, and also every ``_VAULT_TTL``
-    seconds while vault needles are configured, so a rotated value is picked up; a refresh that
-    fails raises (fails closed) rather than keep matching a stale value."""
+    """The compiled patterns, re-read when the config file changes (every vault value fetched again),
+    every ``_VAULT_TTL`` seconds while vault needles are configured (a value older than that fetched
+    again, unless the refresher keeps them), and after the refresher brings new values. A vault fetch
+    that fails keeps that item's last good value; an item with none fails closed, and so does an
+    unreadable or invalid config."""
     key = _config_signature()
     with _lock:
         now = time.monotonic()
         stale = _cache.get("vault") and now - _cache.get("loaded_at", 0.0) > _VAULT_TTL
-        if _cache["key"] != key or stale:
-            _cache["key"] = None  # a failed reload leaves nothing cached
-            loaded = _load()
+        changed = _cache["key"] != key
+        if changed or stale or _cache.get("dirty"):
+            _cache["key"] = None  # a failed reload leaves no compiled patterns
+            _cache["dirty"] = False
+            loaded = _load(refetch=changed)
             _cache["patterns"] = loaded
             _cache["vault"] = any(k.startswith("vault ") for _rx, kinds in loaded for k in kinds)
             _cache["loaded_at"] = now

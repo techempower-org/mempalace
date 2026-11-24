@@ -18,6 +18,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-11-24]
+
+
+### Changed
+
+
+- **a slow or locked vault keeps the last good redact needles instead of refusing every write** (`HEAD` — pending resolution)
+  Vault needles (`secret_vault_items`) were fetched on the write path, and a
+  refresh that failed cleared them, so one bw timeout refused every palace
+  write until the vault answered again.
+
+  Each item's last good value is now kept in memory. A fetch that fails
+  keeps it (logged by label and age, never the value); only an item with no
+  good value fails closed, as before. A config change still fetches every
+  value again. `start_vault_refresher()` runs the fetches on a timer thread
+  every half TTL, outside the write lock, and while it runs a write never
+  waits on the vault. palace-daemon starts it at startup.
+  `refresh_vault_needles()` and `vault_status()` report each label as ok,
+  kept (with its age) or none.
+
+
 ## [2026-11-21]
 
 

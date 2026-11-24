@@ -75,15 +75,51 @@ store a credential they would have caught, so the write stops instead.
 
 ## Functions
 
+### `refresh_vault_needles`
+
+```python
+def refresh_vault_needles() -> Dict[str, str]
+```
+
+Fetch every configured vault item now, outside the write lock, and keep each good value; a write
+never waits on the vault for an item with a good value. Returns &#123;label: "ok" | "kept (&lt;age> s): &lt;why>"
+| "none: &lt;why>"}, labels and reasons only. The next patterns() call recompiles from the new values.
+
+### `start_vault_refresher`
+
+```python
+def start_vault_refresher(interval: float = _VAULT_TTL / 2) -> bool
+```
+
+Start (once per process) a daemon thread that runs refresh_vault_needles() now and every
+``interval`` seconds, so a long-lived writer (palace-daemon) never fetches on the write path. False
+when it already runs.
+
+### `stop_vault_refresher`
+
+```python
+def stop_vault_refresher(timeout: float = 5.0) -> None
+```
+
+### `vault_status`
+
+```python
+def vault_status() -> List[Tuple[str, Optional[float]]]
+```
+
+(label, seconds since its last good fetch, or None if it has none) per configured item.
+
 ### `patterns`
 
 ```python
 def patterns() -> List[Pass]
 ```
 
-The compiled patterns, re-read when the config file changes, and also every ``_VAULT_TTL``
-seconds while vault needles are configured, so a rotated value is picked up; a refresh that
-fails raises (fails closed) rather than keep matching a stale value.
+The compiled patterns, re-read when the config file changes (every vault value fetched again),
+every ``_VAULT_TTL`` seconds while vault needles are configured (a value older than that fetched
+again, unless the refresher keeps them), and after the refresher brings new values. A vault fetch
+that fails keeps that item's last good value; an item with none fails closed, and so does an
+unreadable or invalid config.
 
 ### `redact`
 
