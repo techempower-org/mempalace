@@ -525,23 +525,66 @@ def test_an_invalid_ordered_source_file_leftover_is_dropped_and_rebuilt(tmp_path
         conn.close()
 
 
+# Indexes that are not exactly ((metadata->>'source_file'), id): another second column, no second column, or the same
+# two columns with a non-default operator class, collation or order. The per-column deparse prints none of those
+# decorations, so a check on the deparse alone would take the last four for the lookup index (xreview r1, #662).
+_NOT_THE_ORDERED_SHAPE = (
+    "((metadata->>'source_file'))",
+    "((metadata->>'source_file'), wing)",
+    "((metadata->>'source_file'), id text_pattern_ops)",
+    "((metadata->>'source_file'), id COLLATE \"C\")",
+    "((metadata->>'source_file'), id DESC)",
+    "((metadata->>'source_file') text_pattern_ops, id)",
+)
+
+
+def _index_oid(conn, name):
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass(%s)::oid", (name,))
+        return cur.fetchone()[0]
+
+
 def test_a_single_column_index_under_the_ordered_name_is_a_name_conflict_never_dropped(tmp_path):
-    """An index under the source_file lookup name that lacks id is not a lookup index of that key, even INVALID and
-    marked: it is reported as a name conflict and left intact, never dropped as the tool's leftover."""
+    """An index under the source_file lookup name that is not exactly ((metadata->>'source_file'), id) with default
+    operator classes, collations and order is not a lookup index of that key, even INVALID and marked: it is
+    reported as a name conflict and left intact, never dropped as the tool's leftover."""
     from mempalace.backends import postgres as pg
 
     col, conn = _lookup_table(tmp_path, rows=1000)
     name = pg.lookup_index_name(col.table_name, "source_file")
     try:
-        for columns, want in (
-            ("((metadata->>'source_file'))", ["metadata ->> 'source_file'::text"]),
-            ("((metadata->>'source_file'), wing)", ["metadata ->> 'source_file'::text", "wing"]),
-        ):
+        for columns in _NOT_THE_ORDERED_SHAPE:
             _invalid_source_file_index(conn, col.table_name, name, columns)
+            oid = _index_oid(conn, name)
             row = col.ensure_lookup_indexes()[0]
             assert row["state"] == "failed", (columns, row)
             assert "name conflict" in row.get("leftover", ""), (columns, row)
-            assert _index_columns(conn, name) == want, columns
+            assert _index_oid(conn, name) == oid, f"{columns}: the index was dropped or replaced"
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
+
+
+def test_a_valid_index_of_a_near_shape_does_not_count_as_the_ordered_lookup_index(tmp_path):
+    """Discovery takes a valid index as source_file's lookup index only if it can return a value's matches in the
+    order `ORDER BY id` asks for: id second, with its default operator class, its own collation and ascending order.
+    A near shape leaves the key missing (the ordered one gets built), and the near shape stays."""
+    from mempalace.backends import postgres as pg
+
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    name = pg.lookup_index_name(col.table_name, "source_file")
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX "{name}"')
+        for n, columns in enumerate(_NOT_THE_ORDERED_SHAPE[2:]):
+            near = f"{col.table_name}_near_{n}"
+            with conn.cursor() as cur:
+                cur.execute(f'CREATE INDEX "{near}" ON "{col.table_name}" {columns}')
+            row = col.ensure_lookup_indexes(dry_run=True)[0]
+            assert row["state"] == "missing", (columns, row)
+            with conn.cursor() as cur:
+                cur.execute(f'DROP INDEX "{near}"')
     finally:
         with conn.cursor() as cur:
             cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
@@ -1010,9 +1053,24 @@ def test_a_common_source_file_does_not_walk_the_primary_key_for_a_limited_read(t
                 "WHERE (metadata->>'source_file' = %s) ORDER BY id LIMIT 1000",
                 ("/heavy.jsonl",),
             )
-            used = pg._plan_index_names(cur.fetchone()[0])
+            plan = cur.fetchone()[0]
+        used = pg._plan_index_names(plan)
         assert pg.lookup_index_name(col.table_name, "source_file") in used, used
         assert f"{col.table_name}_pkey" not in used, used
+
+        # The read must stop after its 1000 rows: an ordered Index Scan straight under the Limit, with no Sort and no
+        # bitmap scan anywhere (a Bitmap Heap Scan + Sort would read every match first; xreview r1, #662).
+        def nodes(n):
+            yield n
+            for k in n.get("Plans", []):
+                yield from nodes(k)
+
+        top = plan[0]["Plan"]
+        types = [n["Node Type"] for n in nodes(top)]
+        assert top["Node Type"] == "Limit", types
+        assert top["Plans"][0]["Node Type"] == "Index Scan", types
+        assert top["Plans"][0]["Index Name"] == pg.lookup_index_name(col.table_name, "source_file")
+        assert not any(t == "Sort" or t.startswith("Bitmap") for t in types), types
         got = col.get(where={"source_file": "/heavy.jsonl"}, limit=1000)
         assert got["ids"] == [f"d{g:08d}" for g in range(240001, 241001)]
     finally:

@@ -127,6 +127,27 @@ def _lookup_index_columns(_sql, key: str):
     return _sql.SQL("({})").format(expr)
 
 
+def _plain_key_column_sql(n: int) -> str:
+    """SQL (over ``pg_index idx``) true when key column ``n`` (0-based) is plain: ascending with nulls last
+    (indoption 0), its type's default btree operator class, and the collation it has outside the index. The
+    per-column deparse (pg_get_indexdef(oid, n + 1, false)) prints none of these, so a column with
+    ``text_pattern_ops``, ``COLLATE "C"`` or ``DESC`` would otherwise pass as the plain one: that index can't return
+    a value's rows in `ORDER BY id` order, and must never be taken for the lookup index (xreview r1, #662).
+    Column 0 is the ``metadata->>'<key>'`` expression (text, the database's default collation); column 1 is
+    ``id`` (the column's own collation)."""
+    collation = (
+        "(SELECT c.oid FROM pg_collation c WHERE c.collname = 'default' "
+        "AND c.collnamespace = 'pg_catalog'::regnamespace)"
+        if n == 0
+        else "(SELECT a.attcollation FROM pg_attribute a WHERE a.attrelid = idx.indrelid AND a.attname = 'id')"
+    )
+    return (
+        f"(idx.indoption[{n}] = 0"
+        f" AND EXISTS (SELECT 1 FROM pg_opclass oc WHERE oc.oid = idx.indclass[{n}] AND oc.opcdefault)"
+        f" AND idx.indcollation[{n}] = {collation})"
+    )
+
+
 # Set once the first time a resolved embedder's width disagrees with the
 # column's, so the mismatch is named on the batch that discovers it rather
 # than on every batch after.
@@ -1632,7 +1653,12 @@ class PostgresCollection(BaseCollection):
               AND idx.indpred IS NULL
               AND btrim(pg_get_indexdef(idx.indexrelid, 1, false), '()')
                   = 'metadata ->> ' || quote_literal(%s) || '::text'
-              AND (NOT %s OR (idx.indnkeyatts >= 2 AND pg_get_indexdef(idx.indexrelid, 2, false) = 'id'))
+              AND (NOT %s OR (idx.indnkeyatts >= 2 AND pg_get_indexdef(idx.indexrelid, 2, false) = 'id'
+                              AND """
+            + _plain_key_column_sql(0)
+            + " AND "
+            + _plain_key_column_sql(1)
+            + """))
             ORDER BY ix.relname = %s DESC, ix.relname
             """,
             (table_oid, key, key in ORDERED_LOOKUP_KEYS, lookup_name),
@@ -1650,7 +1676,8 @@ class PostgresCollection(BaseCollection):
     ) -> Optional[tuple[bool, bool, bool]]:
         """(valid, is_lookup, marked) for the index called ``name`` on this table, or None when there is none.
         is_lookup: it is exactly a lookup index for ``key`` (a non-unique, non-partial btree on ``metadata->>'<key>'``
-        alone, or on ``(metadata->>'<key>', id)`` for ORDERED_LOOKUP_KEYS, with no INCLUDE columns). marked: its
+        alone, or on ``(metadata->>'<key>', id)`` for ORDERED_LOOKUP_KEYS, with no INCLUDE columns, and every key
+        column plain: ascending, default operator class, its own collation; _plain_key_column_sql). marked: its
         comment carries this tool's build mark (_LOOKUP_BUILD_MARK), which only ensure_lookup_indexes writes. A
         definition alone never proves the tool built an index: a person can build the same shape by hand."""
         ordered = key in ORDERED_LOOKUP_KEYS
@@ -1661,7 +1688,12 @@ class PostgresCollection(BaseCollection):
                    AND idx.indnatts = %s AND idx.indnkeyatts = %s
                    AND btrim(pg_get_indexdef(idx.indexrelid, 1, false), '()')
                        = 'metadata ->> ' || quote_literal(%s) || '::text'
-                   AND (NOT %s OR pg_get_indexdef(idx.indexrelid, 2, false) = 'id'),
+                   AND """
+            + _plain_key_column_sql(0)
+            + """
+                   AND (NOT %s OR (pg_get_indexdef(idx.indexrelid, 2, false) = 'id' AND """
+            + _plain_key_column_sql(1)
+            + """)),
                    coalesce(obj_description(idx.indexrelid, 'pg_class'), '') LIKE %s
             FROM pg_index idx
             JOIN pg_class ix ON ix.oid = idx.indexrelid
