@@ -2,7 +2,7 @@ seq: 216
 id: source-file-ordered-lookup-index
 date: '2026-11-24'
 bucket: Changed
-commit: HEAD
+commit: 116337a
 area: Performance
 summary: the source_file lookup index carries id, so a common file's limited read stops walking the primary key
 body: |

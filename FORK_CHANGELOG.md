@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **the source_file lookup index carries id, so a common file's limited read stops walking the primary key** (`HEAD` — pending resolution)
+- **the source_file lookup index carries id, so a common file's limited read stops walking the primary key** ([`116337a`](https://github.com/techempower-org/mempalace/commit/116337a))
   get() orders every limited read by id, so the per-file probes send
   `metadata->>'source_file' = %s ORDER BY id LIMIT 1000`. For the most
   common source_file values (24k-70k rows each) the planner chose a
