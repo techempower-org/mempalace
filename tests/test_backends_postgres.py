@@ -343,7 +343,7 @@ def test_new_collection_indexes_source_file_and_reports_it(tmp_path, caplog):
         metadatas=[{"wing": "w", "source_file": "/s/a.jsonl"}],
         embeddings=[[0.0] * 384],
     )
-    index = f"{col.table_name}_source_file_idx"
+    index = pg.lookup_index_name(col.table_name, "source_file")
     conn = psycopg2.connect(POSTGRES_DSN)
     conn.autocommit = True
     try:
@@ -491,6 +491,61 @@ def _invalid_lookup_index(conn, table, name, *, marked):
         )
         if marked:
             cur.execute(f"COMMENT ON INDEX \"{name}\" IS '{pg._LOOKUP_BUILD_MARK}earlier-run'")
+
+
+def _invalid_source_file_index(conn, table, name, columns):
+    """An INVALID index under ``name`` on ``columns``, carrying this tool's build mark (a failed run's leftover)."""
+    from mempalace.backends import postgres as pg
+
+    with conn.cursor() as cur:
+        cur.execute(f'DROP INDEX IF EXISTS "{name}"')
+        cur.execute(f'CREATE INDEX "{name}" ON "{table}" {columns}')
+        cur.execute(
+            "UPDATE pg_index SET indisvalid = false WHERE indexrelid = to_regclass(%s)", (name,)
+        )
+        cur.execute(f"COMMENT ON INDEX \"{name}\" IS '{pg._LOOKUP_BUILD_MARK}earlier-run'")
+
+
+def test_an_invalid_ordered_source_file_leftover_is_dropped_and_rebuilt(tmp_path):
+    """The leftover rule holds for the two-column source_file index: a marked INVALID one of exactly that shape is
+    the tool's own, dropped and rebuilt valid."""
+    from mempalace.backends import postgres as pg
+
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    name = pg.lookup_index_name(col.table_name, "source_file")
+    try:
+        _invalid_source_file_index(conn, col.table_name, name, "((metadata->>'source_file'), id)")
+        assert col.ensure_lookup_indexes(dry_run=True)[0]["state"] == "missing"
+        row = col.ensure_lookup_indexes()[0]
+        assert row["state"] == "built" and row["marked"] is True, row
+        assert _index_columns(conn, name) == ["metadata ->> 'source_file'::text", "id"]
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
+
+
+def test_a_single_column_index_under_the_ordered_name_is_a_name_conflict_never_dropped(tmp_path):
+    """An index under the source_file lookup name that lacks id is not a lookup index of that key, even INVALID and
+    marked: it is reported as a name conflict and left intact, never dropped as the tool's leftover."""
+    from mempalace.backends import postgres as pg
+
+    col, conn = _lookup_table(tmp_path, rows=1000)
+    name = pg.lookup_index_name(col.table_name, "source_file")
+    try:
+        for columns, want in (
+            ("((metadata->>'source_file'))", ["metadata ->> 'source_file'::text"]),
+            ("((metadata->>'source_file'), wing)", ["metadata ->> 'source_file'::text", "wing"]),
+        ):
+            _invalid_source_file_index(conn, col.table_name, name, columns)
+            row = col.ensure_lookup_indexes()[0]
+            assert row["state"] == "failed", (columns, row)
+            assert "name conflict" in row.get("leftover", ""), (columns, row)
+            assert _index_columns(conn, name) == want, columns
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
 
 
 def test_an_invalid_leftover_is_dropped_and_rebuilt(tmp_path):
@@ -854,11 +909,116 @@ def test_long_table_names_get_distinct_lookup_index_names_that_fit():
     from mempalace.backends.postgres import LOOKUP_INDEX_KEYS, lookup_index_name
 
     assert lookup_index_name("t", "parent_drawer_id") == "t_meta_parent_drawer_id_idx"
-    assert lookup_index_name("t", "source_file") == "t_source_file_idx"
+    assert lookup_index_name("t", "source_file") == "t_source_file_id_idx"
     for table in ("x" * 50, "x" * 63, "é" * 31):
         names = [lookup_index_name(table, key) for key in LOOKUP_INDEX_KEYS]
         assert len(set(names)) == 3, names
         assert all(len(n.encode()) <= 63 for n in names), names
+
+
+def _index_columns(conn, index):
+    """The deparsed key columns of ``index`` (expression parentheses trimmed), in order."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT idx.indnatts, idx.indexrelid FROM pg_index idx JOIN pg_class ix ON ix.oid = idx.indexrelid "
+            "WHERE ix.relname = %s",
+            (index,),
+        )
+        row = cur.fetchone()
+        assert row is not None, f"no index {index}"
+        cols = []
+        for n in range(1, row[0] + 1):
+            cur.execute("SELECT btrim(pg_get_indexdef(%s, %s, false), '()')", (row[1], n))
+            cols.append(cur.fetchone()[0])
+        return cols
+
+
+def test_the_source_file_lookup_index_carries_id_so_limited_reads_come_out_in_order(tmp_path):
+    """get() orders every limited read by id. The source_file lookup index is ((metadata->>'source_file'), id), so a
+    value's matches come out of one index already in id order."""
+    from mempalace.backends import postgres as pg
+
+    col, conn = _lookup_table(tmp_path, rows=0)
+    try:
+        name = pg.lookup_index_name(col.table_name, "source_file")
+        assert _index_columns(conn, name) == ["metadata ->> 'source_file'::text", "id"]
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
+
+
+def test_a_palace_with_only_the_single_column_source_file_index_builds_the_ordered_one(tmp_path):
+    """A palace from before the ordered index has ((metadata->>'source_file')) only. That one does not count as the
+    lookup index: ensure_lookup_indexes builds the ordered one, and leaves the old index alone (it was never this
+    tool's to drop). The other keys keep their single-column indexes."""
+    from mempalace.backends import postgres as pg
+
+    col, conn = _lookup_table(tmp_path, rows=2000)
+    name = pg.lookup_index_name(col.table_name, "source_file")
+    old = f"{col.table_name}_source_file_idx"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP INDEX "{name}"')
+            cur.execute(f'CREATE INDEX "{old}" ON "{col.table_name}" ((metadata->>\'source_file\'))')
+        dry = col.ensure_lookup_indexes(dry_run=True)
+        assert [r["state"] for r in dry] == ["missing", "present", "present"], dry
+        report = col.ensure_lookup_indexes(plan_check_min_pages=0)
+        assert report[0]["state"] == "built" and report[0]["index"] == name, report[0]
+        assert report[0]["marked"], report[0]
+        assert _index_columns(conn, name) == ["metadata ->> 'source_file'::text", "id"]
+        assert _index_columns(conn, old) == ["metadata ->> 'source_file'::text"]
+        assert [r["state"] for r in col.ensure_lookup_indexes()] == ["present"] * 3
+        for key in ("parent_drawer_id", "parent_entry_id"):
+            assert len(_index_columns(conn, pg.lookup_index_name(col.table_name, key))) == 1
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
+
+
+def test_a_common_source_file_does_not_walk_the_primary_key_for_a_limited_read(tmp_path):
+    """The 2026-11-24 production gap: for the most common source_file values (24k-70k rows each) the planner chose a
+    primary-key walk with a filter for `= %s ORDER BY id LIMIT 1000`, pricing it as if the matches were spread evenly
+    through the ids. They sit together, so the walk read 9-90 % of the table into the statement timeout. Here one
+    value holds 20 % of the rows, all at the end of id order, in a heap filled in random order (as on the palace).
+    The read must come from the source_file lookup index and still return the first 1000 ids in order."""
+    import uuid
+
+    import psycopg
+
+    from mempalace.backends import postgres as pg
+
+    col = get_backend("postgres").get_collection(
+        palace=_palace_ref(str(tmp_path)),
+        collection_name=f"sf_ord_{uuid.uuid4().hex[:8]}",
+        create=True,
+        options={"dsn": POSTGRES_DSN},
+    )
+    conn = psycopg.connect(POSTGRES_DSN, autocommit=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f'INSERT INTO "{col.table_name}" (id, wing, room, document, metadata) '
+                "SELECT 'd' || lpad(g::text, 8, '0'), 'w', 'r', 'x', jsonb_build_object('source_file', "
+                "CASE WHEN g > 240000 THEN '/heavy.jsonl' ELSE '/f/' || (g % 3000) END) "
+                "FROM generate_series(1, 300000) g ORDER BY random()"
+            )
+            cur.execute(f'ANALYZE "{col.table_name}"')
+            cur.execute(
+                f'EXPLAIN (FORMAT JSON) SELECT id, metadata FROM "{col.table_name}" '
+                "WHERE (metadata->>'source_file' = %s) ORDER BY id LIMIT 1000",
+                ("/heavy.jsonl",),
+            )
+            used = pg._plan_index_names(cur.fetchone()[0])
+        assert pg.lookup_index_name(col.table_name, "source_file") in used, used
+        assert f"{col.table_name}_pkey" not in used, used
+        got = col.get(where={"source_file": "/heavy.jsonl"}, limit=1000)
+        assert got["ids"] == [f"d{g:08d}" for g in range(240001, 241001)]
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{col.table_name}"')
+        conn.close()
 
 
 def test_a_collection_with_a_long_name_gets_all_three_lookup_indexes(tmp_path):

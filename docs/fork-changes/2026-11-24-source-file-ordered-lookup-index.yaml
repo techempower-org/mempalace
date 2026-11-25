@@ -1,0 +1,23 @@
+seq: 216
+id: source-file-ordered-lookup-index
+date: '2026-11-24'
+bucket: Changed
+commit: HEAD
+area: Performance
+summary: the source_file lookup index carries id, so a common file's limited read stops walking the primary key
+body: |
+  get() orders every limited read by id, so the per-file probes send
+  `metadata->>'source_file' = %s ORDER BY id LIMIT 1000`. For the most
+  common source_file values (24k-70k rows each) the planner chose a
+  primary-key walk with a filter. It assumed the matches were spread evenly
+  through the ids, but they sit together, so the walk read 9-90 % of a
+  1.5 M-row table and ran into the statement timeout.
+
+  The source_file lookup index is now `((metadata->>'source_file'), id)`,
+  named `<table>_source_file_id_idx`, so a value's matches come out of the
+  index already in id order and `LIMIT n` reads n entries. New palaces
+  build it at CREATE TABLE. On an existing palace, the single-column
+  `<table>_source_file_idx` no longer counts as the lookup index, and
+  `mempalace lookup-indexes` builds the new one CONCURRENTLY and runs
+  ANALYZE. The old index is left alone: drop it by hand once the new one is
+  valid. The parent-id lookup indexes keep one column.

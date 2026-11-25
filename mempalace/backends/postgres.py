@@ -54,6 +54,13 @@ _WARNED_NO_SOURCE_FILE_INDEX: set = set()
 # index it walked the primary key over every row until the statement timeout (2026-11-21: 104 cancellations in 24 h,
 # a 64.7 s search).
 LOOKUP_INDEX_KEYS = ("source_file", "parent_drawer_id", "parent_entry_id")
+# Lookup keys whose index is ((metadata->>'<key>'), id) instead of the expression alone. get() orders every limited
+# read by id (`= %s ORDER BY id LIMIT n`), and a source_file value can hold tens of thousands of rows; with the
+# expression alone the planner priced a primary-key walk with a filter for the most common values, as if their
+# matches were spread evenly through the ids. They sit together, so the walk read 9-90 % of a 1.5 M-row table into
+# the statement timeout (2026-11-24). With id in the index the matches come out in id order and LIMIT n reads n
+# entries. The parent keys are looked up by ids that are missing by construction, so they keep one column.
+ORDERED_LOOKUP_KEYS = ("source_file",)
 
 # The plan check EXPLAINs the judged-parent lookup as get() sends it: where={key: {"$in": ids}}, include=["metadatas"],
 # limit = searcher/query.py _JUDGED_PARENT_ROW_LIMIT (a test keeps the two equal). The ids are never real ones.
@@ -93,18 +100,31 @@ _MAX_IDENTIFIER_BYTES = 63
 
 
 def lookup_index_name(table_name: str, key: str) -> str:
-    """source_file keeps its original name; the others are ``<table>_meta_<key>_idx``. A name longer than 63 bytes
-    becomes ``<prefix>_<hash of the full name>_idx``, so long table names still get distinct names per key."""
+    """source_file's is ``<table>_source_file_id_idx`` (it carries id, ORDERED_LOOKUP_KEYS; the older single-column
+    ``<table>_source_file_idx`` keeps its name and is left alone); the others are ``<table>_meta_<key>_idx``. A name
+    longer than 63 bytes becomes ``<prefix>_<hash of the full name>_idx``, so long table names still get distinct
+    names per key."""
     if key not in LOOKUP_INDEX_KEYS:
         raise ValueError(f"not a lookup index key: {key!r}")
     name = (
-        f"{table_name}_source_file_idx" if key == "source_file" else f"{table_name}_meta_{key}_idx"
+        f"{table_name}_source_file_id_idx"
+        if key == "source_file"
+        else f"{table_name}_meta_{key}_idx"
     )
     if len(name.encode()) <= _MAX_IDENTIFIER_BYTES:
         return name
     suffix = f"_{hashlib.sha1(name.encode()).hexdigest()[:10]}_idx"
     prefix = name.encode()[: _MAX_IDENTIFIER_BYTES - len(suffix)].decode("utf-8", "ignore")
     return prefix + suffix
+
+
+def _lookup_index_columns(_sql, key: str):
+    """The column list of ``key``'s lookup index: ``((metadata->>'<key>'), id)`` for ORDERED_LOOKUP_KEYS, else
+    ``((metadata->>'<key>'))``."""
+    expr = _sql.SQL("(metadata->>{})").format(_sql.Literal(key))
+    if key in ORDERED_LOOKUP_KEYS:
+        return _sql.SQL("({}, id)").format(expr)
+    return _sql.SQL("({})").format(expr)
 
 
 # Set once the first time a resolved embedder's width disagrees with the
@@ -1569,8 +1589,8 @@ class PostgresCollection(BaseCollection):
             _WARNED_NO_SOURCE_FILE_INDEX.add(self.table_name)
             logger.warning(
                 "%s has no index on metadata->>'source_file': every per-file lookup scans "
-                "the table. Build it once with: CREATE INDEX CONCURRENTLY %s_source_file_idx "
-                "ON %s ((metadata->>'source_file'));",
+                "the table. Build it once with `mempalace lookup-indexes`, or: CREATE INDEX CONCURRENTLY "
+                "%s_source_file_id_idx ON %s ((metadata->>'source_file'), id); ANALYZE;",
                 self.table_name,
                 self.table_name,
                 self.table_name,
@@ -1595,9 +1615,11 @@ class PostgresCollection(BaseCollection):
         self, cur, table_oid: int, key: str
     ) -> tuple[Optional[bool], list[str]]:
         """Discovery for one lookup key. (True, names): these valid, non-partial btrees lead with
-        ``metadata->>'<key>'``, whatever they are called. (False, []): no valid one, but an INVALID non-unique one
-        on that expression sits under the lookup name (a failed CONCURRENTLY build). (None, []): neither. The plan
-        check accepts exactly the names returned here, so discovery and the plan check use one rule."""
+        ``metadata->>'<key>'`` (for ORDERED_LOOKUP_KEYS, with ``id`` as the second key column), whatever they are
+        called. (False, []): no valid one, but an INVALID non-unique one of that shape sits under the lookup name (a
+        failed CONCURRENTLY build). (None, []): neither, which includes a source_file index on the expression alone
+        (it can't serve `ORDER BY id LIMIT n` without the walk). The plan check accepts exactly the names returned
+        here, so discovery and the plan check use one rule."""
         lookup_name = lookup_index_name(self.table_name, key)
         cur.execute(
             """
@@ -1610,9 +1632,10 @@ class PostgresCollection(BaseCollection):
               AND idx.indpred IS NULL
               AND btrim(pg_get_indexdef(idx.indexrelid, 1, false), '()')
                   = 'metadata ->> ' || quote_literal(%s) || '::text'
+              AND (NOT %s OR (idx.indnkeyatts >= 2 AND pg_get_indexdef(idx.indexrelid, 2, false) = 'id'))
             ORDER BY ix.relname = %s DESC, ix.relname
             """,
-            (table_oid, key, lookup_name),
+            (table_oid, key, key in ORDERED_LOOKUP_KEYS, lookup_name),
         )
         rows = cur.fetchall()
         valid = [name for name, ok, _unique in rows if ok]
@@ -1626,23 +1649,34 @@ class PostgresCollection(BaseCollection):
         self, cur, table_oid: int, name: str, key: str
     ) -> Optional[tuple[bool, bool, bool]]:
         """(valid, is_lookup, marked) for the index called ``name`` on this table, or None when there is none.
-        is_lookup: it is exactly a lookup index for ``key`` (a single-column, non-unique, non-partial btree on
-        ``metadata->>'<key>'``). marked: its comment carries this tool's build mark (_LOOKUP_BUILD_MARK), which only
-        ensure_lookup_indexes writes. A definition alone never proves the tool built an index: a person can build
-        the same shape by hand."""
+        is_lookup: it is exactly a lookup index for ``key`` (a non-unique, non-partial btree on ``metadata->>'<key>'``
+        alone, or on ``(metadata->>'<key>', id)`` for ORDERED_LOOKUP_KEYS, with no INCLUDE columns). marked: its
+        comment carries this tool's build mark (_LOOKUP_BUILD_MARK), which only ensure_lookup_indexes writes. A
+        definition alone never proves the tool built an index: a person can build the same shape by hand."""
+        ordered = key in ORDERED_LOOKUP_KEYS
         cur.execute(
             """
             SELECT idx.indisvalid,
-                   am.amname = 'btree' AND idx.indpred IS NULL AND NOT idx.indisunique AND idx.indnatts = 1
+                   am.amname = 'btree' AND idx.indpred IS NULL AND NOT idx.indisunique
+                   AND idx.indnatts = %s AND idx.indnkeyatts = %s
                    AND btrim(pg_get_indexdef(idx.indexrelid, 1, false), '()')
-                       = 'metadata ->> ' || quote_literal(%s) || '::text',
+                       = 'metadata ->> ' || quote_literal(%s) || '::text'
+                   AND (NOT %s OR pg_get_indexdef(idx.indexrelid, 2, false) = 'id'),
                    coalesce(obj_description(idx.indexrelid, 'pg_class'), '') LIKE %s
             FROM pg_index idx
             JOIN pg_class ix ON ix.oid = idx.indexrelid
             JOIN pg_am am ON am.oid = ix.relam
             WHERE idx.indrelid = %s AND ix.relname = %s
             """,
-            (key, _LOOKUP_BUILD_MARK + "%", table_oid, name),
+            (
+                2 if ordered else 1,
+                2 if ordered else 1,
+                key,
+                ordered,
+                _LOOKUP_BUILD_MARK + "%",
+                table_oid,
+                name,
+            ),
         )
         row = cur.fetchone()
         return None if row is None else (bool(row[0]), bool(row[1]), bool(row[2]))
@@ -1694,12 +1728,10 @@ class PostgresCollection(BaseCollection):
                 cur.execute(drop)  # our own marked leftover
                 before = None
             cur.execute(
-                _sql.SQL(
-                    "CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} ((metadata->>{}))"
-                ).format(
+                _sql.SQL("CREATE INDEX CONCURRENTLY IF NOT EXISTS {} ON {} {}").format(
                     _sql.Identifier(name),
                     _sql.Identifier(schema, self.table_name),
-                    _sql.Literal(key),
+                    _lookup_index_columns(_sql, key),
                 )
             )
             now, valid = self._lookup_index_state(cur, table_oid, key)
@@ -2007,12 +2039,13 @@ class PostgresCollection(BaseCollection):
         # 1.16M-drawer palace (#567). An existing palace builds it once, CONCURRENTLY.
         # The same for the other lookup keys (LOOKUP_INDEX_KEYS). An existing palace builds the missing ones with
         # ensure_lookup_indexes() (`mempalace lookup-indexes`), CONCURRENTLY and followed by ANALYZE.
+        # source_file's carries id (ORDERED_LOOKUP_KEYS), so its limited reads come out of the index in id order.
         for key in LOOKUP_INDEX_KEYS:
             cur.execute(
-                self._sql.SQL("CREATE INDEX {} ON {} ((metadata->>{}))").format(
+                self._sql.SQL("CREATE INDEX {} ON {} {}").format(
                     self._sql.Identifier(lookup_index_name(self.table_name, key)),
                     self._table_id,
-                    self._sql.Literal(key),
+                    _lookup_index_columns(self._sql, key),
                 )
             )
 
