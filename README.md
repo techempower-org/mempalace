@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| the source_file lookup index carries id, so a common file's limited read stops walking the primary key | — | `HEAD` — pending resolution |
 | redaction takes bcrypt password hashes ($2a$/$2b$/$2y$) as their own strong kind | — | [`9929cad`](https://github.com/techempower-org/mempalace/commit/9929cad) |
 | a slow or locked vault keeps the last good redact needles instead of refusing every write | — | [`bdf8f2f`](https://github.com/techempower-org/mempalace/commit/bdf8f2f) |
 | index the judged-parent lookup keys; `mempalace lookup-indexes` builds missing ones online | — | [`2423c26`](https://github.com/techempower-org/mempalace/commit/2423c26) |

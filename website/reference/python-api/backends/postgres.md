@@ -270,5 +270,7 @@ def detect(cls, path: str) -> bool
 def lookup_index_name(table_name: str, key: str) -> str
 ```
 
-source_file keeps its original name; the others are ``&lt;table>_meta_&lt;key>_idx``. A name longer than 63 bytes
-becomes ``&lt;prefix>_&lt;hash of the full name>_idx``, so long table names still get distinct names per key.
+source_file's is ``&lt;table>_source_file_id_idx`` (it carries id, ORDERED_LOOKUP_KEYS; the older single-column
+``&lt;table>_source_file_idx`` keeps its name and is left alone); the others are ``&lt;table>_meta_&lt;key>_idx``. A name
+longer than 63 bytes becomes ``&lt;prefix>_&lt;hash of the full name>_idx``, so long table names still get distinct
+names per key.

@@ -24,6 +24,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
+- **the source_file lookup index carries id, so a common file's limited read stops walking the primary key** (`HEAD` — pending resolution)
+  get() orders every limited read by id, so the per-file probes send
+  `metadata->>'source_file' = %s ORDER BY id LIMIT 1000`. For the most
+  common source_file values (24k-70k rows each) the planner chose a
+  primary-key walk with a filter. It assumed the matches were spread evenly
+  through the ids, but they sit together, so the walk read 9-90 % of a
+  1.5 M-row table and ran into the statement timeout.
+
+  The source_file lookup index is now `((metadata->>'source_file'), id)`,
+  named `<table>_source_file_id_idx`, so a value's matches come out of the
+  index already in id order and `LIMIT n` reads n entries. New palaces
+  build it at CREATE TABLE. On an existing palace, the single-column
+  `<table>_source_file_idx` no longer counts as the lookup index, and
+  `mempalace lookup-indexes` builds the new one CONCURRENTLY and runs
+  ANALYZE. The old index is left alone: drop it by hand once the new one is
+  valid. The parent-id lookup indexes keep one column.
+
+
 - **redaction takes bcrypt password hashes ($2a$/$2b$/$2y$) as their own strong kind** ([`9929cad`](https://github.com/techempower-org/mempalace/commit/9929cad))
   Caddy basic_auth lines and an app's admin user row put bcrypt hashes into
   14 drawers, and no rule took them: a hash of a person's password can be
