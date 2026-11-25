@@ -1003,7 +1003,9 @@ def test_a_palace_with_only_the_single_column_source_file_index_builds_the_order
     try:
         with conn.cursor() as cur:
             cur.execute(f'DROP INDEX "{name}"')
-            cur.execute(f'CREATE INDEX "{old}" ON "{col.table_name}" ((metadata->>\'source_file\'))')
+            cur.execute(
+                f'CREATE INDEX "{old}" ON "{col.table_name}" ((metadata->>\'source_file\'))'
+            )
         dry = col.ensure_lookup_indexes(dry_run=True)
         assert [r["state"] for r in dry] == ["missing", "present", "present"], dry
         report = col.ensure_lookup_indexes(plan_check_min_pages=0)
