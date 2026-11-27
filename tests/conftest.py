@@ -341,9 +341,12 @@ def _reset_mcp_cache(monkeypatch):  # noqa: C901 — merged fork+upstream cached
             # drawers (observed as foreign tags leaking into tag/taxonomy
             # tests under full-suite ordering). Dropping the cache forces a
             # fresh system per test. No-op if the chromadb internal moves.
-            from chromadb.api.shared_system_client import SharedSystemClient
+            # The Systems are STOPPED first: a clear alone leaves a raw
+            # PersistentClient's handles open until a full gc pass, and they
+            # piled up past a 1024 fd limit (_chroma_reset.py).
+            from _chroma_reset import stop_and_clear_chroma_systems
 
-            SharedSystemClient.clear_system_cache()
+            stop_and_clear_chroma_systems()
         except (ImportError, AttributeError):
             pass
 
