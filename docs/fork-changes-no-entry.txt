@@ -23,3 +23,4 @@
 601  docs only: resolves seven fork-change entries' commit: HEAD to their squash shas and re-renders. Nothing a FORK_CHANGELOG reader needs.
 602  docs only: decision spec for a fleet dreaming job (docs/superpowers/specs/2026-11-05-dreaming-decision.md); no behaviour change. Nothing a FORK_CHANGELOG reader needs.
 663  tests only: the suite's per-test chromadb reset stops Systems before clearing the cache, so it fits a 1024 fd limit; no package change. Nothing a FORK_CHANGELOG reader needs.
+664  tests only: the curated-docs doctor tests pin the mcp_bridge check, so they pass on a host without the bridge on PATH; no package change. Nothing a FORK_CHANGELOG reader needs.

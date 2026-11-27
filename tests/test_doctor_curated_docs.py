@@ -36,6 +36,28 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _mcp_bridge_on_path(monkeypatch):
+    """Pin doctor's first check, ``shutil.which("mempalace-mcp")``, to found.
+
+    It reads the HOST's PATH: where the suite runs as ``.venv/bin/python -m
+    pytest`` without activating the venv, the bridge is not on PATH, the check
+    is an error, and every test here that expects exit 0 failed on that host
+    alone. Other names still resolve for real; a test that wants the bridge
+    missing patches ``shutil.which`` itself, inside, and wins.
+    """
+    import shutil
+
+    real = shutil.which
+
+    def which(name, *a, **k):
+        if name == "mempalace-mcp":
+            return "/opt/test/bin/mempalace-mcp"
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(shutil, "which", which)
+
+
 def _doctor_args(**overrides):
     defaults = {"wing": None, "json": False, "curated": True, "palace": None}
     defaults.update(overrides)
