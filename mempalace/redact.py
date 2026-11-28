@@ -449,8 +449,9 @@ _vault_values: Dict[str, Tuple[str, float]] = {}
 # a fetch here since: that writer's refresher vouches for it, so it counts like a value this process's
 # own refresher keeps (used without fetching until _VAULT_MAX_KEEP after the writer's fetch). Under _lock.
 _seeded: set = set()
-# The vault's lastSync as of each item's last good fetch: {item id: lastSync}. Under _lock.
-_sync_seen: Dict[str, str] = {}
+# Each item's revisionDate in the vault CLI's local copy as of its last good fetch: {item id: revision}.
+# Under _lock.
+_rev_seen: Dict[str, str] = {}
 # The refresher thread and its stop event; changed only under _refresher_lock. A thread that has not
 # exited stays tracked (so no second one starts beside it) and, once stopped, never publishes.
 _refresher: Dict[str, Any] = {"thread": None, "stop": None}
@@ -534,51 +535,93 @@ def _vault_passes(items: Any, refetch: bool = False) -> List[Pass]:
     ]
 
 
-# A value is fetched again this long after its last good fetch even when the vault's lastSync has not
-# moved: it covers a change the lastSync does not show (an item edited with the CLI on this host), and it
-# stays well under _VAULT_MAX_KEEP, so a vault that answers keeps every value far from expiry.
+# A value is fetched again this long after its last good fetch even when its revision has not moved:
+# defence in depth against a change the CLI's local copy does not show, and well under _VAULT_MAX_KEEP,
+# so a vault that answers keeps every value far from expiry.
 _VAULT_BACKSTOP = 6 * 3600.0
 
+# The last projection of the CLI's local copy: the file's (inode, mtime ns, size) when it was read, the
+# ids asked for, and {id: revisionDate}. Nothing else from the file is ever kept. "parses" counts reads.
+_revisions: Dict[str, Any] = {"sig": None, "ids": None, "revs": None, "parses": 0}
+_CIPHERS_KEY = re.compile(r"user_[0-9A-Za-z-]+_ciphers_ciphers")
 
-def _vault_sync_state() -> Tuple[Optional[str], str]:
-    """(the vault CLI's lastSync, "unlocked") from ``bw --nointeraction status``, which prints no item
-    and no secret; (None, reason) when it cannot answer or the vault is not unlocked. The CLI's ``get``
-    reads only its local copy, which changes when an unlock or a ``bw sync`` (never run here) brings a
-    new one, so an unchanged lastSync means an unchanged local vault."""
+
+def _cli_data_path() -> str:
+    """The vault CLI's local copy (``data.json``): BITWARDENCLI_APPDATA_DIR if set, else
+    ``$XDG_CONFIG_HOME`` (or ``~/.config``) + ``Bitwarden CLI``, as the CLI itself resolves it."""
+    base = os.environ.get("BITWARDENCLI_APPDATA_DIR")
+    if not base:
+        cfg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+        base = os.path.join(cfg, "Bitwarden CLI")
+    return os.path.join(base, "data.json")
+
+
+def _keep_revision_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    """json object hook: an object with a string ``id`` and ``revisionDate`` (a vault item) becomes just
+    those two; any other object keeps only its object-valued members (the maps that lead to items).
+    Every other value (each encrypted field, every list, every scalar) is dropped as it is parsed, so
+    no dict built here ever holds one."""
+    d = dict(pairs)
+    if isinstance(d.get("id"), str) and isinstance(d.get("revisionDate"), str):
+        return {"id": d["id"], "revisionDate": d["revisionDate"]}
+    return {k: v for k, v in d.items() if isinstance(v, dict)}
+
+
+def _vault_revisions(ids: Tuple[str, ...]) -> Optional[Dict[str, str]]:
+    """{item id: revisionDate} for exactly ``ids``, read from the vault CLI's local copy, opened
+    read-only and parsed only when its (inode, mtime, size) changed since the last read or other ids are
+    asked for. No CLI call, no decryption: revisionDate is stored in the clear, each item's fields
+    encrypted, and the projection keeps nothing else. The local copy changes on an unlock, a ``bw sync``
+    (never run here) or a ``bw edit`` on this host, and each moves the edited item's revisionDate. None
+    (the caller fetches every item, as before) when the file is unreadable, its shape unknown, or an id
+    is missing."""
     import json as _json
-    import shutil
-    import subprocess
 
-    bw = shutil.which("bw") or os.path.expanduser("~/.local/bin/bw")
-    env = dict(os.environ)
-    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    path = _cli_data_path()
     try:
-        r = subprocess.run(
-            [bw, "--nointeraction", "status"], capture_output=True, timeout=30, env=env
+        st = os.stat(path)
+    except OSError:
+        return None
+    sig = (st.st_ino, st.st_mtime_ns, st.st_size)
+    if _revisions["sig"] == sig and _revisions["ids"] == ids:
+        return dict(_revisions["revs"]) if _revisions["revs"] is not None else None
+    revs: Optional[Dict[str, str]] = None
+    try:
+        with open(path, "rb") as f:  # read-only
+            doc = _json.load(f, object_pairs_hook=_keep_revision_keys)
+        maps = (
+            [v for k, v in doc.items() if _CIPHERS_KEY.fullmatch(k)]
+            if isinstance(doc, dict)
+            else []
         )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return None, f"status unreachable ({type(exc).__name__})"
-    if r.returncode != 0:
-        return None, f"status rc {r.returncode}"
-    try:
-        state = _json.loads(r.stdout or b"")
-    except ValueError:
-        return None, "status unparsable"
-    status = state.get("status") if isinstance(state, dict) else None
-    if status != "unlocked":
-        return None, f"vault {status if isinstance(status, str) else 'state unknown'}"[:60]
-    last_sync = state.get("lastSync")
-    if not isinstance(last_sync, str) or not last_sync:
-        return None, "status has no lastSync"
-    return last_sync, "unlocked"
+        if len(maps) == 1:
+            found = {}
+            for item_id in ids:
+                entry = maps[0].get(item_id)
+                if not (
+                    isinstance(entry, dict)
+                    and entry.get("id") == item_id
+                    and entry.get("revisionDate")
+                ):
+                    break
+                found[item_id] = entry["revisionDate"]
+            else:
+                revs = found
+    except (OSError, ValueError, RecursionError):
+        revs = None
+    _revisions.update(sig=sig, ids=ids, revs=revs, parses=_revisions["parses"] + 1)
+    if revs is None:
+        logger.warning(
+            "redact: vault item revisions unreadable from the CLI's local copy; fetching all"
+        )
+    return dict(revs) if revs is not None else None
 
 
 def refresh_vault_needles(stop: Optional[threading.Event] = None) -> Dict[str, str]:
-    """Refresh the configured vault items off the write path: ask the vault CLI's state first (one call,
-    no secret), then fetch only the items that need it: no good value kept, the vault's lastSync moved
-    since the item's last good fetch, or that fetch older than ``_VAULT_BACKSTOP``. When the state cannot
-    be read (a locked vault, a CLI timeout) only the items with no value or past the backstop are
-    fetched; the rest keep their value and age toward ``_VAULT_MAX_KEEP`` as before. Never syncs.
+    """Refresh the configured vault items off the write path, fetching only the items that need it: no
+    good value kept, the item's revisionDate in the vault CLI's local copy moved since its last good
+    fetch (:func:`_vault_revisions`; no CLI call), or that fetch older than ``_VAULT_BACKSTOP``. When the
+    revisions cannot be read, every item is fetched, as before. Never syncs.
     One refresh runs at a time, and a fetch is kept only if it is newer than the kept one. With ``stop``
     set by the time the fetches return, nothing is kept. Returns {label: "ok" | "unchanged (<age> s)" |
     "kept (<age> s)" | "expired (<age> s)" | "none"}, each failure followed by this module's own reason
@@ -591,27 +634,23 @@ def refresh_vault_needles(stop: Optional[threading.Event] = None) -> Dict[str, s
         if getattr(config, "_file_config_state", "read") in ("unread", "unparsed"):
             raise SecretPatternsUnavailable("palace config unreadable; secret_vault_items unknown")
         pairs = _vault_items(config._file_config.get("secret_vault_items", []))
-        last_sync, state_why = _vault_sync_state()
+        revs = _vault_revisions(tuple(i for i, _l in pairs))
         # Copied without _lock (a dict copy is one step under the GIL): this only decides what to fetch,
         # and a refresh must never wait on a write before it fetches. Publishing below is under _lock and
         # keeps the newer value either way.
-        values, seen_syncs = dict(_vault_values), dict(_sync_seen)
+        values, seen_revs = dict(_vault_values), dict(_rev_seen)
         now = time.monotonic()
-        held = {i: (values.get(i), seen_syncs.get(i)) for i, _l in pairs}
         fetched: Dict[str, Tuple[str, float]] = {}
         report: Dict[str, str] = {}
         for item_id, label in pairs:
-            cached, seen = held[item_id]
+            cached = values.get(item_id)
             if (
                 cached is not None
                 and now - cached[1] <= _VAULT_BACKSTOP
-                and (last_sync is None or last_sync == seen)
+                and revs is not None
+                and seen_revs.get(item_id) == revs[item_id]
             ):
-                report[label] = (
-                    f"unchanged ({now - cached[1]:.0f} s)"
-                    if last_sync is not None
-                    else f"vault state unread: {state_why}"
-                )
+                report[label] = f"unchanged ({now - cached[1]:.0f} s)"
                 continue
             try:
                 value = _fetch_checked(item_id, label)
@@ -625,11 +664,11 @@ def refresh_vault_needles(stop: Optional[threading.Event] = None) -> Dict[str, s
             if stop is not None and stop.is_set():
                 return {label: "not kept: the refresher was stopped" for _i, label in pairs}
             published = [_publish(i, v, t) for i, (v, t) in fetched.items()]
-            if last_sync is not None:
-                # read before these fetches: a sync landing between them only makes the next refresh
+            if revs is not None:
+                # read before these fetches: an edit landing between them only makes the next refresh
                 # fetch once more
                 for item_id in fetched:
-                    _sync_seen[item_id] = last_sync
+                    _rev_seen[item_id] = revs[item_id]
             now = time.monotonic()
             for item_id, label in pairs:
                 if report[label] == "ok" or report[label].startswith("unchanged"):

@@ -1208,24 +1208,29 @@ VAULT_VALUE = "hunt" + "erpass"  # lower case only: no shape rule can catch it
 
 @pytest.fixture(autouse=True)
 def _fresh_vault_cache(monkeypatch):
-    """Each test starts with no last-good vault value and no refresher thread, and leaves none. The
-    vault CLI's state never comes from a real ``bw``: each read reports a new lastSync, so every
-    refresh here fetches every item (the status gate itself: test_redact_needle_seed.py)."""
+    """Each test starts with no last-good vault value and no refresher thread, and leaves none. Item
+    revisions never come from a real vault CLI copy: each read reports new ones, so every refresh here
+    fetches every item (the revision gate itself: test_redact_needle_seed.py)."""
     import itertools
 
     import mempalace.redact as R
 
-    syncs = itertools.count()
-    monkeypatch.setattr(R, "_vault_sync_state", lambda: (f"sync-{next(syncs)}", "unlocked"))
+    reads = itertools.count()
+
+    def revisions(ids):
+        n = next(reads)
+        return {i: f"rev-{n}" for i in ids}
+
+    monkeypatch.setattr(R, "_vault_revisions", revisions)
     R.stop_vault_refresher()
     R._vault_values.clear()
     R._seeded.clear()
-    R._sync_seen.clear()
+    R._rev_seen.clear()
     yield
     R.stop_vault_refresher()
     R._vault_values.clear()
     R._seeded.clear()
-    R._sync_seen.clear()
+    R._rev_seen.clear()
     R._cache["key"] = None
     R._cache["expires_at"] = None
 

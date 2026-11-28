@@ -35,8 +35,9 @@ exactly 40, which is a git sha: a 40-hex secret passes, and sha256 digests are r
 plus "+" or "="; not starting "/"; quoted paths, URLs, dotted names and timestamps are left, so a
 quoted secret holding "." or ":" passes this rule). A bare lower-case password matches no shape:
 for that, ``secret_vault_items`` in the config lists vault item ids and labels (never values);
-each value is fetched in process at pattern load (``bw --nointeraction``) and replaced on word
-boundaries with ``[redacted vault &lt;label>]``. An item that cannot be fetched (a locked vault)
+each value is fetched in process at pattern load (``bw --nointeraction``), or handed over by the
+writer that spawned this process (:func:`needle_seed_fd`), and replaced on word boundaries with
+``[redacted vault &lt;label>]``. An item that cannot be fetched (a locked vault)
 fails every write closed, as an unreadable config does: a stale palace is visible and
 recoverable, a re-mined password is not.
 
@@ -81,12 +82,15 @@ store a credential they would have caught, so the write stops instead.
 def refresh_vault_needles(stop: Optional[threading.Event] = None) -> Dict[str, str]
 ```
 
-Fetch every configured vault item now, outside the write lock, and keep each good value; a write
-never waits on the vault for an item with a good value. One refresh runs at a time, and a fetch is
-kept only if it is newer than the kept one. With ``stop`` set by the time the fetches return, nothing
-is kept. Returns &#123;label: "ok" | "kept (&lt;age> s)" | "expired (&lt;age> s)" | "none"}, each failure followed
-by this module's own reason (no CLI output); expired: kept past ``_VAULT_MAX_KEEP``, so writes fail
-closed. The next patterns() call recompiles from the new values.
+Refresh the configured vault items off the write path, fetching only the items that need it: no
+good value kept, the item's revisionDate in the vault CLI's local copy moved since its last good
+fetch (:func:`_vault_revisions`; no CLI call), or that fetch older than ``_VAULT_BACKSTOP``. When the
+revisions cannot be read, every item is fetched, as before. Never syncs.
+One refresh runs at a time, and a fetch is kept only if it is newer than the kept one. With ``stop``
+set by the time the fetches return, nothing is kept. Returns &#123;label: "ok" | "unchanged (&lt;age> s)" |
+"kept (&lt;age> s)" | "expired (&lt;age> s)" | "none"}, each failure followed by this module's own reason
+(no CLI output); expired: kept past ``_VAULT_MAX_KEEP``, so writes fail closed. The next patterns()
+call recompiles from the new values.
 
 ### `start_vault_refresher`
 
@@ -114,6 +118,17 @@ def vault_status() -> List[Tuple[str, Optional[float]]]
 ```
 
 (label, seconds since its last good fetch, or None if it has none) per configured item.
+
+### `needle_seed_fd`
+
+```python
+def needle_seed_fd() -> Optional[int]
+```
+
+The read end of a pipe that already holds this process's needles, for one child: pass it with
+``pass_fds=(fd,)`` and ``&#123;NEEDLE_SEED_ENV: str(fd)}`` in the child's env, then close it here right
+after the spawn. The write end is closed before this returns. None (spawn as before, the child
+fetches) when there is nothing to hand over, off Linux, or the pipe cannot be made.
 
 ### `patterns`
 

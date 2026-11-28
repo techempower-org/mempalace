@@ -1,11 +1,12 @@
-"""A writer hands its vault needles to the mine children it spawns, and refreshes them by vault state.
+"""A writer hands its vault needles to the mine children it spawns, and refreshes them by item revision.
 
 Flow 3a002409 (2026-11-27): every ``mempalace mine`` child fetched every configured vault item itself
 (``bw get password``, serially, 30 s each). Under a re-mine burst one fetch took ~8 s and some passed
 30 s, so a child with no last good value failed closed and filed nothing. palace-daemon already holds
 good values (its refresher). It now passes them to each child through an inherited pipe: never argv,
-environ, disk or a log. The refresher asks ``bw status`` (no secret) and fetches values only when the
-vault's lastSync moved, a value is missing, or the oldest passes a backstop well under the max-keep.
+environ, disk or a log. The refresher reads each item's revisionDate from the vault CLI's local copy (no
+CLI call, no decryption) and fetches a value only when its revision moved, it is missing, or it passes a
+backstop well under the max-keep; any doubt about the copy fetches every item, as before.
 """
 
 from __future__ import annotations
@@ -52,7 +53,8 @@ def _fresh():
         R.stop_vault_refresher()
         R._vault_values.clear()
         R._seeded.clear()
-        R._sync_seen.clear()
+        R._rev_seen.clear()
+        R._revisions.update(sig=None, ids=None, revs=None, parses=0)
         R._cache["key"] = None
         R._cache["expires_at"] = None
 
@@ -255,84 +257,176 @@ def test_the_seed_is_read_from_a_pipe_and_the_pipe_closed(monkeypatch):
     assert R.NEEDLE_SEED_ENV not in os.environ
 
 
-# --- the refresher asks the vault's state first --------------------------------------------------
+# --- the refresher reads each item's revision from the CLI's local copy ------------------------------
+
+# Built at run time: an encrypted-field stand-in that must never come out of the projection.
+CANARY = "2." + "Q0FOQVJZ" * 4 + "|" + "ZW5j" * 6
+
+
+def _cipher(item_id, rev):
+    return {
+        "id": item_id,
+        "revisionDate": rev,
+        "name": CANARY,
+        "notes": CANARY,
+        "key": CANARY,
+        "login": {"username": CANARY, "password": CANARY, "uris": [{"uri": CANARY}]},
+        "fields": [{"name": CANARY, "value": CANARY, "type": 1}],
+        "passwordHistory": [{"password": CANARY, "lastUsedDate": "2026-01-01T00:00:00.000Z"}],
+        "collectionIds": [],
+        "folderId": None,
+        "type": 1,
+    }
+
+
+def _write_data(path, revs, extra=True):
+    ciphers = {i: _cipher(i, r) for i, r in revs.items()}
+    if extra:
+        ciphers["other-1"] = _cipher("other-1", "2026-01-02T00:00:00.000Z")
+    doc = {
+        "global_account_accounts": {"u-1": {"email": CANARY}},
+        "user_0b1c-uid_ciphers_ciphers": ciphers,
+        "user_0b1c-uid_folders_folders": {
+            "f-1": {"id": "f-1", "revisionDate": "x", "name": CANARY}
+        },
+        "user_0b1c-uid_crypto_privateKey": CANARY,
+    }
+    path.write_text(json.dumps(doc))
 
 
 @pytest.fixture
-def counted(monkeypatch):
-    calls = {"get": [], "status": 0}
-    state = {"last_sync": "2026-11-27T23:06:52.700Z"}
+def cli_copy(tmp_path, monkeypatch):
+    appdata = tmp_path / "Bitwarden CLI"
+    appdata.mkdir()
+    monkeypatch.setenv("BITWARDENCLI_APPDATA_DIR", str(appdata))
+    data = appdata / "data.json"
+    revs = {"item-a": "2026-11-27T18:15:09.966Z", "item-b": "2026-11-20T08:00:00.000Z"}
+    _write_data(data, revs)
+    R._revisions.update(sig=None, ids=None, revs=None, parses=0)
+    return data, revs
+
+
+@pytest.fixture
+def gets(monkeypatch):
+    calls = []
 
     def fetch(item_id):
-        calls["get"].append(item_id)
+        calls.append(item_id)
         return VALUES[item_id]
 
-    def sync_state():
-        calls["status"] += 1
-        return state["last_sync"], "unlocked" if state["last_sync"] else "locked"
-
     monkeypatch.setattr(R, "_vault_fetch", fetch)
-    monkeypatch.setattr(R, "_vault_sync_state", sync_state)
-    return calls, state
+    return calls
 
 
-def test_no_get_while_last_sync_is_unchanged_and_every_value_is_under_the_backstop(counted):
-    calls, _state = counted
+def test_the_projection_holds_exactly_the_ids_and_their_revisions(cli_copy):
+    data, revs = cli_copy
+    out = R._vault_revisions(("item-a", "item-b"))
+    assert out == revs
+    for kept in (out, R._revisions):
+        assert CANARY not in repr(kept)
+    assert "other-1" not in repr(R._revisions)
+
+
+def test_the_object_hook_drops_every_field_but_id_and_revision():
+    item = json.loads(json.dumps(_cipher("x", "r")), object_pairs_hook=R._keep_revision_keys)
+    assert item == {"id": "x", "revisionDate": "r"}
+    container = json.loads(
+        json.dumps({"a": CANARY, "b": [CANARY], "c": {"d": CANARY}}),
+        object_pairs_hook=R._keep_revision_keys,
+    )
+    assert container == {"c": {}}
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "not json",
+        json.dumps({"user_u_ciphers_ciphers": {}}),  # an id missing
+        json.dumps({"something_else": {}}),  # unknown shape
+        json.dumps(
+            {"user_u_ciphers_ciphers": {"item-a": {"id": "item-a", "revisionDate": "r"}}}
+            | {"user_v_ciphers_ciphers": {}}
+        ),  # two accounts: ambiguous
+        json.dumps({"user_u_ciphers_ciphers": {"item-a": {"id": "item-z", "revisionDate": "r"}}}),
+    ],
+)
+def test_any_doubt_about_the_copy_fetches_every_item(cli_copy, gets, body):
+    data, _revs = cli_copy
+    data.write_text(body)
+    assert R._vault_revisions(("item-a",)) is None
+    for _ in range(3):
+        assert R.refresh_vault_needles() == {"alpha": "ok", "bravo": "ok"}
+    assert gets == ["item-a", "item-b"] * 3
+
+
+def test_a_missing_copy_fetches_every_item(cli_copy, gets):
+    data, _revs = cli_copy
+    data.unlink()
+    R.refresh_vault_needles()
+    R.refresh_vault_needles()
+    assert gets == ["item-a", "item-b"] * 2
+
+
+def test_no_get_while_revisions_are_unchanged_and_every_value_is_under_the_backstop(cli_copy, gets):
     assert R.refresh_vault_needles() == {"alpha": "ok", "bravo": "ok"}  # no values yet: fetch
-    assert calls["get"] == ["item-a", "item-b"]
-    calls["get"].clear()
-    for _ in range(5):  # a window of refreshes over an unchanged vault
+    assert gets == ["item-a", "item-b"]
+    gets.clear()
+    for _ in range(5):  # a window of refreshes over an unchanged local copy
         report = R.refresh_vault_needles()
         assert all(r.startswith("unchanged") for r in report.values()), report
-    assert calls["get"] == []
-    assert calls["status"] == 6
+    assert gets == []
 
 
-def test_a_moved_last_sync_fetches_again(counted):
-    calls, state = counted
+def test_the_copy_is_parsed_only_when_its_mtime_or_size_changes(cli_copy, gets):
+    data, revs = cli_copy
+    for _ in range(4):
+        R.refresh_vault_needles()
+    assert R._revisions["parses"] == 1
+    st = data.stat()
+    os.utime(data, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))  # the CLI rewrote it as is
     R.refresh_vault_needles()
-    calls["get"].clear()
-    state["last_sync"] = "2026-11-28T01:00:00.000Z"
-    assert R.refresh_vault_needles() == {"alpha": "ok", "bravo": "ok"}
-    assert calls["get"] == ["item-a", "item-b"]
-
-
-def test_the_backstop_fetches_an_old_value_even_with_last_sync_unchanged(counted):
-    calls, _state = counted
+    assert R._revisions["parses"] == 2
+    gets.clear()
     R.refresh_vault_needles()
-    calls["get"].clear()
+    assert gets == [] and R._revisions["parses"] == 2
+
+
+def test_a_local_edit_moves_one_revision_and_fetches_only_that_item(cli_copy, gets):
+    # The hole the lastSync gate had: `bw edit` on this host changes the item and its revisionDate in
+    # the local copy, and moves no lastSync.
+    data, revs = cli_copy
+    R.refresh_vault_needles()
+    gets.clear()
+    _write_data(data, {**revs, "item-b": "2026-11-27T19:30:00.000Z"})
+    report = R.refresh_vault_needles()
+    assert report["bravo"] == "ok" and report["alpha"].startswith("unchanged"), report
+    assert gets == ["item-b"]
+
+
+def test_the_backstop_fetches_an_old_value_with_its_revision_unchanged(cli_copy, gets):
+    R.refresh_vault_needles()
+    gets.clear()
     value, t = R._vault_values["item-b"]
     R._vault_values["item-b"] = (value, t - R._VAULT_BACKSTOP - 1)
     R.refresh_vault_needles()
-    assert calls["get"] == ["item-b"]
+    assert gets == ["item-b"]
     assert R._VAULT_BACKSTOP < R._VAULT_MAX_KEEP / 2
 
 
-def test_a_missing_value_is_fetched(counted):
-    calls, _state = counted
+def test_a_missing_value_is_fetched(cli_copy, gets):
     R.refresh_vault_needles()
-    calls["get"].clear()
+    gets.clear()
     del R._vault_values["item-a"]
     R.refresh_vault_needles()
-    assert calls["get"] == ["item-a"]
+    assert gets == ["item-a"]
 
 
-def test_a_status_that_cannot_answer_adds_no_gets_while_values_are_good(counted):
-    calls, state = counted
-    R.refresh_vault_needles()
-    calls["get"].clear()
-    state["last_sync"] = None  # locked, or the CLI timed out
-    report = R.refresh_vault_needles()
-    assert calls["get"] == []
-    assert all(r.startswith("kept") for r in report.values()), report
-
-
-def test_a_failed_get_is_retried_next_refresh_and_only_that_item(counted, monkeypatch):
-    calls, _state = counted
+def test_a_failed_get_is_retried_next_refresh_and_only_that_item(cli_copy, monkeypatch):
+    calls = []
     flaky = {"fail": True}
 
     def fetch(item_id):
-        calls["get"].append(item_id)
+        calls.append(item_id)
         if item_id == "item-b" and flaky["fail"]:
             raise SecretPatternsUnavailable("vault unreachable (TimeoutExpired)")
         return VALUES[item_id]
@@ -340,30 +434,44 @@ def test_a_failed_get_is_retried_next_refresh_and_only_that_item(counted, monkey
     monkeypatch.setattr(R, "_vault_fetch", fetch)
     report = R.refresh_vault_needles()
     assert report["alpha"] == "ok" and report["bravo"].startswith("none")
-    calls["get"].clear()
+    calls.clear()
     flaky["fail"] = False
     R.refresh_vault_needles()
-    assert calls["get"] == ["item-b"]
+    assert calls == ["item-b"]
 
 
-def test_the_refresher_never_runs_a_vault_sync(monkeypatch):
+def test_the_refresher_makes_no_periodic_cli_call_and_never_syncs(cli_copy, monkeypatch):
     argvs = []
 
     class Done:
         returncode = 0
-        stdout = b'{"status":"unlocked","lastSync":"2026-11-27T23:06:52.700Z"}'
 
     def run(argv, **_kw):
         argvs.append(argv[1:])
-        if "status" in argv:
-            return Done()
         out = Done()
         out.stdout = VALUES[argv[-1]].encode() + b"\n"
         return out
 
     monkeypatch.setattr(subprocess, "run", run)
-    for _ in range(3):
+    for _ in range(4):
         R.refresh_vault_needles()
-    assert ["--nointeraction", "status"] in argvs
-    assert not any("sync" in a for argv in argvs for a in argv)
-    assert sum(1 for a in argvs if a[:2] == ["--nointeraction", "get"]) == 2
+    assert argvs == [
+        ["--nointeraction", "get", "password", "item-a"],
+        ["--nointeraction", "get", "password", "item-b"],
+    ]
+
+
+def test_the_copy_is_opened_read_only(cli_copy, monkeypatch):
+    import builtins
+
+    modes = []
+    real_open = builtins.open
+
+    def spy(file, mode="r", *a, **kw):
+        if str(file).endswith("data.json"):
+            modes.append(mode)
+        return real_open(file, mode, *a, **kw)
+
+    monkeypatch.setattr(builtins, "open", spy)
+    R._vault_revisions(("item-a",))
+    assert modes == ["rb"]
