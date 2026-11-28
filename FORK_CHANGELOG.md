@@ -31,7 +31,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   value failed closed and filed nothing.
 
   `needle_seed_fd()` gives a writer the read end of a pipe holding its kept
-  values and their fetch times; the write end is closed before it returns.
+  values and their fetch times, written in one non-blocking write of at most
+  PIPE_BUF (4096 bytes: atomic, so the writer never waits; a larger seed or
+  a refused write is no seed); the write end is closed before it returns.
   The writer passes it to one child (`pass_fds`) with the fd number in
   `MEMPALACE_NEEDLE_FD`. At import the child reads it once, closes it and
   drops the variable. No value is ever in an argv, an environment, a file or

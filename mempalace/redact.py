@@ -753,9 +753,11 @@ def vault_status() -> List[Tuple[str, Optional[float]]]:
 # is ever in an argv, an environment, a file or a log; only the fd number is in the environment.
 NEEDLE_SEED_ENV = "MEMPALACE_NEEDLE_FD"
 NEEDLE_SEED_VERSION = 1
-# Under a Linux pipe's default 64 KiB capacity: the whole seed is written before the child starts, so the
-# write never blocks and the child reads it all without waiting. Five items fit with room to spare.
-_NEEDLE_SEED_MAX = 32 * 1024
+# The seed is written in ONE non-blocking write of at most PIPE_BUF (4096 bytes on Linux), before the child
+# starts. POSIX makes such a write atomic: all of it or EAGAIN, never a partial one, and the writer never
+# blocks, whatever the pipe's capacity (a pipe holds at least one page). A larger seed, or a refused write,
+# is no seed: the child fetches. Five real needles measured 1,093 bytes (2026-11-27).
+_NEEDLE_SEED_MAX = 4096
 
 
 def _seed_payload() -> Optional[bytes]:
@@ -794,10 +796,10 @@ def needle_seed_fd() -> Optional[int]:
         return None
     failed = None
     try:
-        view = memoryview(payload)
-        while view:
-            view = view[os.write(w, view) :]
-    except OSError as exc:
+        os.set_blocking(w, False)
+        if os.write(w, payload) != len(payload):  # atomic at <= PIPE_BUF: never expected
+            failed = "short write"
+    except OSError as exc:  # EAGAIN when the pipe cannot take it whole: fail closed, never wait
         failed = type(exc).__name__
     finally:
         os.close(w)

@@ -261,21 +261,43 @@ def test_the_seed_is_read_from_a_pipe_and_the_pipe_closed(monkeypatch):
 
 # Built at run time: an encrypted-field stand-in that must never come out of the projection.
 CANARY = "2." + "Q0FOQVJZ" * 4 + "|" + "ZW5j" * 6
+NUM_CANARY = 918273645  # where the real copy holds a number
+LAST_SYNC = "2026-11-27T23:06:52.700Z"
 
 
 def _cipher(item_id, rev):
+    """Every field but id and revisionDate carries a canary: strings, nested, numeric, and the fields the
+    real copy holds as null or a boolean."""
     return {
         "id": item_id,
         "revisionDate": rev,
         "name": CANARY,
         "notes": CANARY,
         "key": CANARY,
-        "login": {"username": CANARY, "password": CANARY, "uris": [{"uri": CANARY}]},
-        "fields": [{"name": CANARY, "value": CANARY, "type": 1}],
-        "passwordHistory": [{"password": CANARY, "lastUsedDate": "2026-01-01T00:00:00.000Z"}],
-        "collectionIds": [],
-        "folderId": None,
-        "type": 1,
+        "login": {
+            "username": CANARY,
+            "password": CANARY,
+            "totp": CANARY,
+            "passwordRevisionDate": CANARY,
+            "uris": [{"uri": CANARY, "match": NUM_CANARY}],
+            "fido2Credentials": [{"keyValue": CANARY, "counter": NUM_CANARY}],
+        },
+        "fields": [{"name": CANARY, "value": CANARY, "type": NUM_CANARY, "linkedId": CANARY}],
+        "passwordHistory": [{"password": CANARY, "lastUsedDate": CANARY}],
+        "attachments": [{"fileName": CANARY, "key": CANARY, "size": CANARY}],
+        "collectionIds": [CANARY],
+        "folderId": CANARY,
+        "organizationId": CANARY,
+        "deletedDate": CANARY,
+        "archivedDate": CANARY,
+        "creationDate": CANARY,
+        "permissions": {"delete": CANARY, "restore": CANARY},
+        "favorite": CANARY,
+        "edit": CANARY,
+        "viewPassword": CANARY,
+        "organizationUseTotp": CANARY,
+        "reprompt": NUM_CANARY,
+        "type": NUM_CANARY,
     }
 
 
@@ -285,6 +307,7 @@ def _write_data(path, revs, extra=True):
         ciphers["other-1"] = _cipher("other-1", "2026-01-02T00:00:00.000Z")
     doc = {
         "global_account_accounts": {"u-1": {"email": CANARY}},
+        "user_0b1c-uid_profile_lastSync": LAST_SYNC,
         "user_0b1c-uid_ciphers_ciphers": ciphers,
         "user_0b1c-uid_folders_folders": {
             "f-1": {"id": "f-1", "revisionDate": "x", "name": CANARY}
@@ -320,11 +343,13 @@ def gets(monkeypatch):
 
 def test_the_projection_holds_exactly_the_ids_and_their_revisions(cli_copy):
     data, revs = cli_copy
+    assert CANARY in data.read_text() and str(NUM_CANARY) in data.read_text()  # the fixture can see
     out = R._vault_revisions(("item-a", "item-b"))
+    assert out == {"item-a": "2026-11-27T18:15:09.966Z", "item-b": "2026-11-20T08:00:00.000Z"}
     assert out == revs
     for kept in (out, R._revisions):
-        assert CANARY not in repr(kept)
-    assert "other-1" not in repr(R._revisions)
+        assert CANARY not in repr(kept) and str(NUM_CANARY) not in repr(kept)
+    assert "other-1" not in repr(R._revisions) and LAST_SYNC not in repr(R._revisions)
 
 
 def test_the_object_hook_drops_every_field_but_id_and_revision():
@@ -398,6 +423,7 @@ def test_a_local_edit_moves_one_revision_and_fetches_only_that_item(cli_copy, ge
     R.refresh_vault_needles()
     gets.clear()
     _write_data(data, {**revs, "item-b": "2026-11-27T19:30:00.000Z"})
+    assert json.loads(data.read_text())["user_0b1c-uid_profile_lastSync"] == LAST_SYNC  # unchanged
     report = R.refresh_vault_needles()
     assert report["bravo"] == "ok" and report["alpha"].startswith("unchanged"), report
     assert gets == ["item-b"]
@@ -475,3 +501,304 @@ def test_the_copy_is_opened_read_only(cli_copy, monkeypatch):
     monkeypatch.setattr(builtins, "open", spy)
     R._vault_revisions(("item-a",))
     assert modes == ["rb"]
+
+
+# --- the writer never blocks on the pipe (lead ruling 1) ---------------------------------------------
+
+
+def _small_pipe(prefill=0):
+    """os.pipe with its capacity cut to 4 KiB (one page, F_SETPIPE_SZ), optionally holding ``prefill``
+    bytes already, as under a per-user pipe-page limit or a reader that never drained."""
+    import fcntl
+
+    real_pipe = os.pipe
+
+    def pipe():
+        r, w = real_pipe()
+        fcntl.fcntl(w, fcntl.F_SETPIPE_SZ, 4096)
+        assert fcntl.fcntl(w, fcntl.F_GETPIPE_SZ) == 4096
+        if prefill:
+            os.write(w, b"x" * prefill)
+        return r, w
+
+    return pipe
+
+
+def _seed_in_thread():
+    import threading
+
+    out = {}
+    t = threading.Thread(target=lambda: out.update(fd=R.needle_seed_fd()), daemon=True)
+    t.start()
+    t.join(5)
+    assert not t.is_alive(), "needle_seed_fd blocked on the pipe"
+    return out["fd"]
+
+
+def _value_for_payload(size):
+    """A needle value that makes the seed exactly ``size`` bytes."""
+    R._vault_values["item-a"] = ("v" * 10, R.time.monotonic() - 1)
+    base = len(R._seed_payload()) - 10
+    value = "v" * (size - base)
+    R._vault_values["item-a"] = (value, R._vault_values["item-a"][1])
+    assert len(R._seed_payload()) == size
+    return value
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="F_SETPIPE_SZ")
+def test_a_full_pipe_buf_seed_fits_a_4k_pipe(monkeypatch):
+    _value_for_payload(4096)
+    monkeypatch.setattr(os, "pipe", _small_pipe())
+    fd = _seed_in_thread()
+    assert fd is not None
+    try:
+        assert len(os.read(fd, 65536)) == 4096
+        assert os.read(fd, 1) == b""  # the write end is closed: EOF
+    finally:
+        os.close(fd)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="F_SETPIPE_SZ")
+def test_a_pipe_that_cannot_take_the_seed_whole_means_no_seed_never_a_wait(monkeypatch, caplog):
+    _value_for_payload(4000)
+    monkeypatch.setattr(os, "pipe", _small_pipe(prefill=200))  # 3,896 bytes free
+    assert _seed_in_thread() is None
+    assert "BlockingIOError" in caplog.text
+    assert "v" * 100 not in caplog.text
+
+
+def test_a_seed_over_pipe_buf_is_never_attempted(monkeypatch):
+    _value_for_payload(4097)
+    monkeypatch.setattr(os, "pipe", lambda: pytest.fail("a pipe was made for an oversized seed"))
+    assert R.needle_seed_fd() is None
+
+
+# --- a real mine, seeded through the fd (lead rulings 2 and 3) ---------------------------------------
+
+# The mine child: the test suite's deterministic embedding (no model download), the real CLI, its own
+# process. mempalace.redact reads the seed at import, as in production.
+MINE_CHILD = textwrap.dedent(
+    """\
+    import hashlib, logging, sys
+    log_file, palace, src, mode = sys.argv[1:5]
+    logging.basicConfig(filename=log_file, level=logging.DEBUG, force=True)
+    import mempalace.redact  # takes the seed here, if one was passed
+
+    DIM = 384
+
+    def emb(text):
+        vec = [0.0] * DIM
+        for tok in str(text).lower().split():
+            d = hashlib.sha256(tok.encode()).digest()
+            vec[int.from_bytes(d[:4], "little") % DIM] += 1.0
+        n = sum(v * v for v in vec) ** 0.5 or 1.0
+        return [v / n for v in vec]
+
+    class EF:
+        @staticmethod
+        def name():
+            return "default"
+        @staticmethod
+        def build_from_config(config):
+            return EF()
+        @staticmethod
+        def validate_config(config):
+            return
+        def get_config(self):
+            return {}
+        def is_legacy(self):
+            return False
+        def default_space(self):
+            return "cosine"
+        def supported_spaces(self):
+            return ["cosine", "l2", "ip"]
+        def embed_query(self, input):
+            return self(input=input)
+        def __call__(self, input):
+            return [emb(t) for t in list(input or [])]
+
+    ef = EF()
+    import mempalace.backends.chroma as chroma_mod
+    import mempalace.backends.embedding_wrapper as embedding_wrapper
+    import mempalace.embedding as embedding_mod
+    from chromadb.api.types import DefaultEmbeddingFunction
+    DefaultEmbeddingFunction.__call__ = lambda self, input: ef(input=input)
+    DefaultEmbeddingFunction.embed_query = lambda self, input: ef(input=input)
+    embedding_mod.get_embedding_function = lambda *_, **__: ef
+    chroma_mod.ChromaBackend._resolve_embedding_function = staticmethod(lambda **_: ef)
+    embedding_wrapper._embed_texts = lambda texts, **_: ef(input=list(texts))
+
+    import mempalace.cli as cli
+    sys.argv = ["mempalace", "--palace", palace, "mine", src, "--mode", mode, "--wing", "w"]
+    cli.main()
+    """
+)
+
+
+def _pipe_holding(payload: bytes) -> int:
+    r, w = os.pipe()
+    os.write(w, payload)
+    os.close(w)
+    return r
+
+
+def _bw_that_fails(bindir, log):
+    script = bindir / "bw"
+    script.write_text(f'#!/bin/sh\necho "$*" >> {str(log)!r}\nexit 1\n')
+    script.chmod(0o755)
+
+
+def _run_mine(
+    tmp_path, items, source_text, seed_fd=None, bw="fails", mode="projects", name="notes.md"
+):
+    """One real ``mempalace mine`` subprocess over a one-file source. Returns its result and paths."""
+    root = tmp_path / "mine"
+    home, cfg, palace, src, bindir = (root / n for n in ("home", "config", "palace", "src", "bin"))
+    for d in (home, cfg, palace, src, bindir):
+        d.mkdir(parents=True)
+    (cfg / "config.json").write_text(
+        json.dumps({"palace_path": str(palace), "secret_vault_items": items})
+    )
+    (src / name).write_text(source_text, encoding="utf-8")
+    calls = root / "bw-calls.log"
+    if bw == "fails":
+        _bw_that_fails(bindir, calls)
+    else:
+        script = bindir / "bw"
+        script.write_text(f'#!/bin/sh\necho "$*" >> {str(calls)!r}\nprintf "%s\\n" {bw!r}\n')
+        script.chmod(0o755)
+    log_file, phase = root / "mine.log", root / "phase.json"
+    env = {
+        "PATH": f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        "HOME": str(home),
+        "LANG": "C.UTF-8",
+        "MEMPALACE_CONFIG_DIR": str(cfg),
+        "MEMPALACE_HUB_FORWARD": "0",
+        "MEMPALACE_MINE_PHASE_FILE": str(phase),
+        "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.abspath(R.__file__))),
+    }
+    kwargs = {}
+    if seed_fd is not None:
+        env[R.NEEDLE_SEED_ENV] = str(seed_fd)
+        kwargs["pass_fds"] = (seed_fd,)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", MINE_CHILD, str(log_file), str(palace), str(src), mode],
+            capture_output=True,
+            env=env,
+            timeout=180,
+            **kwargs,
+        )
+    finally:
+        if seed_fd is not None:
+            os.close(seed_fd)
+    return proc, {
+        "root": root,
+        "palace": palace,
+        "src": src,
+        "calls": calls,
+        "log": log_file,
+        "phase": phase,
+    }
+
+
+def _drawers(palace):
+    from mempalace.palace import get_collection
+
+    try:
+        col = get_collection(str(palace), create=False)
+    except Exception:  # noqa: BLE001 -- no collection: nothing was filed
+        return []
+    return col.get(include=["documents"])["documents"]
+
+
+TWO_ITEMS = [{"id": "item-a", "label": "alpha"}, {"id": "item-b", "label": "bravo"}]
+BODY = (
+    "# notes\n\n"
+    + " ".join(f"line{j} about the garden shed and its roof" for j in range(60))
+    + "\n"
+)
+REFUSED = "vault answered rc 1, empty"
+
+
+def _seed_bytes(items):
+    return json.dumps({"v": 1, "items": items}).encode()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="pass_fds, shared CLOCK_MONOTONIC")
+@pytest.mark.parametrize("variant", ["stale", "missing-id", "malformed"])
+def test_a_bad_seed_makes_the_mine_refuse_to_file_as_a_vault_failure_does(tmp_path, variant):
+    # Today's outcome when the vault cannot answer: no seed, the CLI fails, the mine refuses to file.
+    base, base_paths = _run_mine(tmp_path / "base", TWO_ITEMS, BODY)
+    assert base.returncode != 0
+    assert REFUSED in base.stderr.decode() and "SecretPatternsUnavailable" in base.stderr.decode()
+    assert _drawers(base_paths["palace"]) == []
+
+    now = R.time.monotonic()
+    payload = {
+        "stale": _seed_bytes({i: [v, now - R._VAULT_MAX_KEEP - 60] for i, v in VALUES.items()}),
+        "missing-id": _seed_bytes({"item-a": [VALUES["item-a"], now - 5]}),
+        "malformed": b'{"v": 1, "items": {"item-a": ["seedvalue',
+    }[variant]
+    proc, paths = _run_mine(tmp_path / variant, TWO_ITEMS, BODY, seed_fd=_pipe_holding(payload))
+    err = proc.stderr.decode()
+    assert proc.returncode == base.returncode, err[-3000:]
+    assert "SecretPatternsUnavailable" in err and REFUSED in err, err[-3000:]
+    assert _drawers(paths["palace"]) == []
+    assert paths["calls"].exists()  # it went to the (failing) vault for what the seed did not give
+
+
+CANARY_NEEDLE = "canary" + "minesecret" + "q"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="pass_fds, shared CLOCK_MONOTONIC")
+def test_a_seeded_mine_keeps_the_needle_out_of_everything_it_writes(tmp_path):
+    R._vault_values["item-c"] = (CANARY_NEEDLE, R.time.monotonic() - 5)
+    fd = R.needle_seed_fd()
+    R._vault_values.clear()
+    # A session transcript, mined in convos mode as the daemon's hook mines are: that miner writes the
+    # heartbeat (phase file) the daemon reads.
+    turns = []
+    for j in range(12):
+        turns.append(
+            {"type": "user", "message": {"role": "user", "content": f"q{j} about the shed roof"}}
+        )
+        say = f"a{j}: the shed roof needs work" + (
+            f"; the shed wifi password is {CANARY_NEEDLE}" if j % 4 == 1 else ""
+        )
+        turns.append(
+            {
+                "type": "assistant",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": say}]},
+            }
+        )
+    text = "".join(json.dumps(t) + "\n" for t in turns)
+    # The fake CLI answers another value: a fetch would leave the canary unredacted and show in its log.
+    proc, paths = _run_mine(
+        tmp_path,
+        [{"id": "item-c", "label": "shed-wifi"}],
+        text,
+        seed_fd=fd,
+        bw="fetched" + "othervalue",
+        mode="convos",
+        name="session.jsonl",
+    )
+    err = proc.stderr.decode()
+    assert proc.returncode == 0, err[-3000:]
+    assert not paths["calls"].exists(), "the seeded mine called the vault CLI"
+    docs = _drawers(paths["palace"])
+    assert any("[redacted vault shed-wifi]" in d for d in docs)  # the needle was applied
+    needle = CANARY_NEEDLE.encode()
+    assert needle not in proc.stdout and needle not in proc.stderr  # the mine's report
+    assert paths["phase"].exists() and needle not in paths["phase"].read_bytes()  # the heartbeat
+    assert paths["log"].exists() and needle not in paths["log"].read_bytes()  # the log file
+    scanned, hits = 0, []
+    for p in paths["root"].rglob("*"):
+        if p.is_file() and paths["src"] not in p.parents:
+            scanned += 1
+            if needle in p.read_bytes():
+                hits.append(str(p.relative_to(paths["root"])))
+    assert hits == [], hits  # palace, config, home, phase, log: no written state holds it
+    assert scanned > 5
+    # The scan can see: the one place the canary was put is found.
+    assert any(needle in p.read_bytes() for p in paths["src"].rglob("*") if p.is_file())
