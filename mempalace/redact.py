@@ -31,8 +31,9 @@ exactly 40, which is a git sha: a 40-hex secret passes, and sha256 digests are r
 plus "+" or "="; not starting "/"; quoted paths, URLs, dotted names and timestamps are left, so a
 quoted secret holding "." or ":" passes this rule). A bare lower-case password matches no shape:
 for that, ``secret_vault_items`` in the config lists vault item ids and labels (never values);
-each value is fetched in process at pattern load (``bw --nointeraction``) and replaced on word
-boundaries with ``[redacted vault <label>]``. An item that cannot be fetched (a locked vault)
+each value is fetched in process at pattern load (``bw --nointeraction``), or handed over by the
+writer that spawned this process (:func:`needle_seed_fd`), and replaced on word boundaries with
+``[redacted vault <label>]``. An item that cannot be fetched (a locked vault)
 fails every write closed, as an unreadable config does: a stale palace is visible and
 recoverable, a re-mined password is not.
 
@@ -444,6 +445,12 @@ def _vault_items(items: Any) -> List[Tuple[str, str]]:
 # keeps it: one slow or locked vault answer must not refuse every palace write while a good value is known.
 # It counts for _VAULT_MAX_KEEP after that fetch; an item with no good value, or an older one, fails closed.
 _vault_values: Dict[str, Tuple[str, float]] = {}
+# Item ids whose kept value came from the spawning writer's seed (needle_seed_fd) and was not replaced by
+# a fetch here since: that writer's refresher vouches for it, so it counts like a value this process's
+# own refresher keeps (used without fetching until _VAULT_MAX_KEEP after the writer's fetch). Under _lock.
+_seeded: set = set()
+# The vault's lastSync as of each item's last good fetch: {item id: lastSync}. Under _lock.
+_sync_seen: Dict[str, str] = {}
 # The refresher thread and its stop event; changed only under _refresher_lock. A thread that has not
 # exited stays tracked (so no second one starts beside it) and, once stopped, never publishes.
 _refresher: Dict[str, Any] = {"thread": None, "stop": None}
@@ -479,6 +486,7 @@ def _publish(item_id: str, value: str, fetched_at: float) -> bool:
     if cached is not None and cached[1] >= fetched_at:
         return False
     _vault_values[item_id] = (value, fetched_at)
+    _seeded.discard(item_id)
     return True
 
 
@@ -491,7 +499,8 @@ def _vault_value(item_id: str, label: str, refetch: bool = False) -> str:
     cached = _vault_values.get(item_id)
     if cached is not None:
         age = time.monotonic() - cached[1]
-        if age <= _VAULT_MAX_KEEP and (_refresher_alive() or (not refetch and age <= _VAULT_TTL)):
+        vouched = _refresher_alive() or item_id in _seeded
+        if age <= _VAULT_MAX_KEEP and (vouched or (not refetch and age <= _VAULT_TTL)):
             return cached[0]
     try:
         value = _fetch_checked(item_id, label)
@@ -518,19 +527,63 @@ def _vault_passes(items: Any, refetch: bool = False) -> List[Pass]:
     pairs = _vault_items(items)
     for gone in set(_vault_values) - {i for i, _l in pairs}:
         del _vault_values[gone]
+        _seeded.discard(gone)
     return [
         _pass([(f"vault {label}", _needle_pattern(_vault_value(item_id, label, refetch)))])
         for item_id, label in pairs
     ]
 
 
+# A value is fetched again this long after its last good fetch even when the vault's lastSync has not
+# moved: it covers a change the lastSync does not show (an item edited with the CLI on this host), and it
+# stays well under _VAULT_MAX_KEEP, so a vault that answers keeps every value far from expiry.
+_VAULT_BACKSTOP = 6 * 3600.0
+
+
+def _vault_sync_state() -> Tuple[Optional[str], str]:
+    """(the vault CLI's lastSync, "unlocked") from ``bw --nointeraction status``, which prints no item
+    and no secret; (None, reason) when it cannot answer or the vault is not unlocked. The CLI's ``get``
+    reads only its local copy, which changes when an unlock or a ``bw sync`` (never run here) brings a
+    new one, so an unchanged lastSync means an unchanged local vault."""
+    import json as _json
+    import shutil
+    import subprocess
+
+    bw = shutil.which("bw") or os.path.expanduser("~/.local/bin/bw")
+    env = dict(os.environ)
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    try:
+        r = subprocess.run(
+            [bw, "--nointeraction", "status"], capture_output=True, timeout=30, env=env
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"status unreachable ({type(exc).__name__})"
+    if r.returncode != 0:
+        return None, f"status rc {r.returncode}"
+    try:
+        state = _json.loads(r.stdout or b"")
+    except ValueError:
+        return None, "status unparsable"
+    status = state.get("status") if isinstance(state, dict) else None
+    if status != "unlocked":
+        return None, f"vault {status if isinstance(status, str) else 'state unknown'}"[:60]
+    last_sync = state.get("lastSync")
+    if not isinstance(last_sync, str) or not last_sync:
+        return None, "status has no lastSync"
+    return last_sync, "unlocked"
+
+
 def refresh_vault_needles(stop: Optional[threading.Event] = None) -> Dict[str, str]:
-    """Fetch every configured vault item now, outside the write lock, and keep each good value; a write
-    never waits on the vault for an item with a good value. One refresh runs at a time, and a fetch is
-    kept only if it is newer than the kept one. With ``stop`` set by the time the fetches return, nothing
-    is kept. Returns {label: "ok" | "kept (<age> s)" | "expired (<age> s)" | "none"}, each failure followed
-    by this module's own reason (no CLI output); expired: kept past ``_VAULT_MAX_KEEP``, so writes fail
-    closed. The next patterns() call recompiles from the new values."""
+    """Refresh the configured vault items off the write path: ask the vault CLI's state first (one call,
+    no secret), then fetch only the items that need it: no good value kept, the vault's lastSync moved
+    since the item's last good fetch, or that fetch older than ``_VAULT_BACKSTOP``. When the state cannot
+    be read (a locked vault, a CLI timeout) only the items with no value or past the backstop are
+    fetched; the rest keep their value and age toward ``_VAULT_MAX_KEEP`` as before. Never syncs.
+    One refresh runs at a time, and a fetch is kept only if it is newer than the kept one. With ``stop``
+    set by the time the fetches return, nothing is kept. Returns {label: "ok" | "unchanged (<age> s)" |
+    "kept (<age> s)" | "expired (<age> s)" | "none"}, each failure followed by this module's own reason
+    (no CLI output); expired: kept past ``_VAULT_MAX_KEEP``, so writes fail closed. The next patterns()
+    call recompiles from the new values."""
     from .config import MempalaceConfig
 
     with _refresh_lock:
@@ -538,9 +591,28 @@ def refresh_vault_needles(stop: Optional[threading.Event] = None) -> Dict[str, s
         if getattr(config, "_file_config_state", "read") in ("unread", "unparsed"):
             raise SecretPatternsUnavailable("palace config unreadable; secret_vault_items unknown")
         pairs = _vault_items(config._file_config.get("secret_vault_items", []))
+        last_sync, state_why = _vault_sync_state()
+        # Copied without _lock (a dict copy is one step under the GIL): this only decides what to fetch,
+        # and a refresh must never wait on a write before it fetches. Publishing below is under _lock and
+        # keeps the newer value either way.
+        values, seen_syncs = dict(_vault_values), dict(_sync_seen)
+        now = time.monotonic()
+        held = {i: (values.get(i), seen_syncs.get(i)) for i, _l in pairs}
         fetched: Dict[str, Tuple[str, float]] = {}
         report: Dict[str, str] = {}
         for item_id, label in pairs:
+            cached, seen = held[item_id]
+            if (
+                cached is not None
+                and now - cached[1] <= _VAULT_BACKSTOP
+                and (last_sync is None or last_sync == seen)
+            ):
+                report[label] = (
+                    f"unchanged ({now - cached[1]:.0f} s)"
+                    if last_sync is not None
+                    else f"vault state unread: {state_why}"
+                )
+                continue
             try:
                 value = _fetch_checked(item_id, label)
                 fetched[item_id] = (value, time.monotonic())
@@ -553,9 +625,14 @@ def refresh_vault_needles(stop: Optional[threading.Event] = None) -> Dict[str, s
             if stop is not None and stop.is_set():
                 return {label: "not kept: the refresher was stopped" for _i, label in pairs}
             published = [_publish(i, v, t) for i, (v, t) in fetched.items()]
+            if last_sync is not None:
+                # read before these fetches: a sync landing between them only makes the next refresh
+                # fetch once more
+                for item_id in fetched:
+                    _sync_seen[item_id] = last_sync
             now = time.monotonic()
             for item_id, label in pairs:
-                if report[label] == "ok":
+                if report[label] == "ok" or report[label].startswith("unchanged"):
                     continue
                 cached = _vault_values.get(item_id)
                 why = report[label]
@@ -626,6 +703,161 @@ def vault_status() -> List[Tuple[str, Optional[float]]]:
         return [
             (label, now - _vault_values[i][1] if i in _vault_values else None) for i, label in pairs
         ]
+
+
+# --- The writer hands its needles to the mine children it spawns (Flow 3a002409) ------------------------
+# Each ``mempalace mine`` child used to fetch every item itself, serially, 30 s limit each; under a re-mine
+# burst one fetch took ~8 s and some passed 30 s, so a child with no last good value failed closed. The
+# writer (palace-daemon, whose refresher holds good values) instead creates a pipe, writes its values with
+# their fetch times, closes the write end, and passes the read end to the child (``pass_fds``) with the fd
+# number in NEEDLE_SEED_ENV. The child reads it once at import, closes it, and drops the variable. No value
+# is ever in an argv, an environment, a file or a log; only the fd number is in the environment.
+NEEDLE_SEED_ENV = "MEMPALACE_NEEDLE_FD"
+NEEDLE_SEED_VERSION = 1
+# Under a Linux pipe's default 64 KiB capacity: the whole seed is written before the child starts, so the
+# write never blocks and the child reads it all without waiting. Five items fit with room to spare.
+_NEEDLE_SEED_MAX = 32 * 1024
+
+
+def _seed_payload() -> Optional[bytes]:
+    """This process's kept values, each with its fetch time (``time.monotonic()``, Linux's system-wide
+    CLOCK_MONOTONIC, so the child measures the same age), as the seed's bytes; None when there is none.
+    A value already past ``_VAULT_MAX_KEEP`` is left out."""
+    import json as _json
+
+    with _lock:
+        now = time.monotonic()
+        items = {i: [v, t] for i, (v, t) in _vault_values.items() if now - t <= _VAULT_MAX_KEEP}
+    if not items:
+        return None
+    return _json.dumps({"v": NEEDLE_SEED_VERSION, "items": items}).encode("utf-8")
+
+
+def needle_seed_fd() -> Optional[int]:
+    """The read end of a pipe that already holds this process's needles, for one child: pass it with
+    ``pass_fds=(fd,)`` and ``{NEEDLE_SEED_ENV: str(fd)}`` in the child's env, then close it here right
+    after the spawn. The write end is closed before this returns. None (spawn as before, the child
+    fetches) when there is nothing to hand over, off Linux, or the pipe cannot be made."""
+    import sys
+
+    if not sys.platform.startswith("linux"):
+        return None
+    payload = _seed_payload()
+    if payload is None:
+        return None
+    if len(payload) > _NEEDLE_SEED_MAX:
+        logger.warning("redact: needle seed too large (%d bytes); the child fetches", len(payload))
+        return None
+    try:
+        r, w = os.pipe()  # both non-inheritable: only pass_fds hands r to the one child
+    except OSError as exc:
+        logger.warning("redact: no needle seed pipe (%s); the child fetches", type(exc).__name__)
+        return None
+    failed = None
+    try:
+        view = memoryview(payload)
+        while view:
+            view = view[os.write(w, view) :]
+    except OSError as exc:
+        failed = type(exc).__name__
+    finally:
+        os.close(w)
+    if failed is not None:
+        os.close(r)
+        logger.warning("redact: needle seed not written (%s); the child fetches", failed)
+        return None
+    return r
+
+
+def _apply_seed(payload: bytes) -> int:
+    """Keep the seed's values as fetched by the writer at their given time, marked as vouched for; the
+    number kept. The whole seed is dropped (0) if any part is malformed: an unknown version, a value too
+    short to match safely, a time that is not a number or lies in the future. Never logs its content."""
+    import json as _json
+    import math
+
+    why = None
+    items: Dict[str, Tuple[str, float]] = {}
+    try:
+        doc = _json.loads(payload.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        doc, why = None, "unparsable"
+    if why is None:
+        if not isinstance(doc, dict) or doc.get("v") != NEEDLE_SEED_VERSION:
+            why = "unknown version"
+        elif not isinstance(doc.get("items"), dict):
+            why = "no item map"
+    if why is None:
+        now = time.monotonic()
+        for item_id, pair in doc["items"].items():
+            ok = (
+                isinstance(pair, list)
+                and len(pair) == 2
+                and isinstance(pair[0], str)
+                and len(pair[0].strip()) >= 6
+                and isinstance(pair[1], (int, float))
+                and not isinstance(pair[1], bool)
+                and math.isfinite(pair[1])
+                and pair[1] <= now
+            )
+            if not ok:
+                why = "malformed item"
+                break
+            items[item_id] = (pair[0], float(pair[1]))
+    if why is not None:
+        logger.warning("redact: needle seed dropped (%s); this process fetches", why)
+        return 0
+    with _lock:
+        for item_id, (value, fetched_at) in items.items():
+            if _publish(item_id, value, fetched_at):
+                _seeded.add(item_id)
+        _cache["dirty"] = True
+    return len(items)
+
+
+def _seed_from_env() -> int:
+    """At import: read the seed from the fd NEEDLE_SEED_ENV names, if it is a pipe, then close it; the
+    variable is removed either way, so no child of this process inherits a stale fd number. The number
+    of values kept (0: none, and this process fetches as before)."""
+    import stat
+
+    raw = os.environ.pop(NEEDLE_SEED_ENV, None)
+    if raw is None:
+        return 0
+    try:
+        fd = int(raw)
+        if fd < 3 or not stat.S_ISFIFO(os.fstat(fd).st_mode):
+            raise ValueError
+    except (ValueError, OSError):
+        # Not a pipe we were handed: not ours to read or close.
+        logger.warning(
+            "redact: %s does not name a seed pipe; this process fetches", NEEDLE_SEED_ENV
+        )
+        return 0
+    chunks = []
+    try:
+        os.set_blocking(fd, False)  # written in full before the spawn: never wait on a writer
+        size = 0
+        while size <= _NEEDLE_SEED_MAX:
+            try:
+                chunk = os.read(fd, 65536)
+            except BlockingIOError:
+                chunks = []  # a writer still holds the pipe open: not a seed made by needle_seed_fd
+                break
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+        else:
+            chunks = []
+    except OSError:
+        chunks = []
+    finally:
+        os.close(fd)
+    if not chunks:
+        logger.warning("redact: needle seed unreadable; this process fetches")
+        return 0
+    return _apply_seed(b"".join(chunks))
 
 
 def patterns() -> List[Pass]:
@@ -1303,3 +1535,7 @@ def redact_metadatas(metadatas):
     if isinstance(metadatas, dict):
         return _redact_metadata(metadatas)
     return [_redact_metadata(m) for m in metadatas]
+
+
+# A mine child spawned by a writer that seeds it (needle_seed_fd): take the needles before any write.
+_seed_from_env()

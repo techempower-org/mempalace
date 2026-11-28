@@ -1,0 +1,28 @@
+seq: 217
+id: redact-needle-seed
+date: '2026-11-27'
+bucket: Changed
+commit: HEAD
+area: Reliability
+summary: a mine child takes its redact needles from the writer that spawned it, and the refresher asks the vault's state before fetching
+body: |
+  Every `mempalace mine` child fetched each configured vault item itself
+  (`bw get password`, serially, 30 s limit each). Under a burst of mines one
+  fetch took about 8 s and some passed 30 s, so a child with no last good
+  value failed closed and filed nothing.
+
+  `needle_seed_fd()` gives a writer the read end of a pipe holding its kept
+  values and their fetch times; the write end is closed before it returns.
+  The writer passes it to one child (`pass_fds`) with the fd number in
+  `MEMPALACE_NEEDLE_FD`. At import the child reads it once, closes it and
+  drops the variable. No value is ever in an argv, an environment, a file or
+  a log. A seeded value counts like one the child's own refresher keeps, so
+  the child fetches nothing, and it still fails closed 24 h after the
+  writer's fetch. A child without the fd fetches as before; a malformed seed
+  is dropped whole.
+
+  `refresh_vault_needles()` first reads `bw --nointeraction status` (no
+  item, no secret) and fetches an item only when the vault's lastSync moved
+  since its last good fetch, it has no value, or that fetch is more than 6 h
+  old. A status that cannot answer adds no fetch while the values are good.
+  It never runs `bw sync`. The report adds "unchanged (<age> s)".
