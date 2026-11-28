@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **a mine child takes its redact needles from the writer that spawned it, and the refresher fetches only items whose revision moved** (`HEAD` — pending resolution)
+- **a mine child takes its redact needles from the writer that spawned it, and the refresher fetches only items whose revision moved** ([`25fb26f`](https://github.com/techempower-org/mempalace/commit/25fb26f))
   Every `mempalace mine` child fetched each configured vault item itself
   (`bw get password`, serially, 30 s limit each). Under a burst of mines one
   fetch took about 8 s and some passed 30 s, so a child with no last good

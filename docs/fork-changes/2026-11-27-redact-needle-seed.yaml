@@ -2,7 +2,7 @@ seq: 217
 id: redact-needle-seed
 date: '2026-11-27'
 bucket: Changed
-commit: HEAD
+commit: 25fb26f
 area: Reliability
 summary: a mine child takes its redact needles from the writer that spawned it, and the refresher fetches only items whose revision moved
 body: |
