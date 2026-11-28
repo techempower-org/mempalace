@@ -297,6 +297,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | Description | Upstream PR | Fork commit |
 |---|---|---|
+| a mine child takes its redact needles from the writer that spawned it, and the refresher fetches only items whose revision moved | — | `HEAD` — pending resolution |
 | the source_file lookup index carries id, so a common file's limited read stops walking the primary key | — | [`116337a`](https://github.com/techempower-org/mempalace/commit/116337a) |
 | redaction takes bcrypt password hashes ($2a$/$2b$/$2y$) as their own strong kind | — | [`9929cad`](https://github.com/techempower-org/mempalace/commit/9929cad) |
 | a slow or locked vault keeps the last good redact needles instead of refusing every write | — | [`bdf8f2f`](https://github.com/techempower-org/mempalace/commit/bdf8f2f) |

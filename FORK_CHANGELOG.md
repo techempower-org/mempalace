@@ -18,6 +18,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-11-27]
+
+
+### Changed
+
+
+- **a mine child takes its redact needles from the writer that spawned it, and the refresher fetches only items whose revision moved** (`HEAD` — pending resolution)
+  Every `mempalace mine` child fetched each configured vault item itself
+  (`bw get password`, serially, 30 s limit each). Under a burst of mines one
+  fetch took about 8 s and some passed 30 s, so a child with no last good
+  value failed closed and filed nothing.
+
+  `needle_seed_fd()` gives a writer the read end of a pipe holding its kept
+  values and their fetch times, written in one non-blocking write of at most
+  PIPE_BUF (4096 bytes: atomic, so the writer never waits; a larger seed or
+  a refused write is no seed); the write end is closed before it returns.
+  The writer passes it to one child (`pass_fds`) with the fd number in
+  `MEMPALACE_NEEDLE_FD`. At import the child reads it once, closes it and
+  drops the variable. No value is ever in an argv, an environment, a file or
+  a log. A seeded value counts like one the child's own refresher keeps, so
+  the child fetches nothing, and it still fails closed 24 h after the
+  writer's fetch. A child without the fd fetches as before; a malformed seed
+  is dropped whole.
+
+  `refresh_vault_needles()` reads each configured item's revisionDate from
+  the vault CLI's local copy (`data.json`, opened read-only, parsed only
+  when its inode, mtime or size changed; no CLI call, no decryption). A JSON
+  object hook keeps only `id` and `revisionDate` and drops every other field
+  as it is parsed. It fetches an item only when its revision moved since its
+  last good fetch (a sync, or an edit on this host), it has no value, or that
+  fetch is more than 6 h old. A copy it cannot read, of an unknown shape, or
+  missing an id means every item is fetched, as before. It never runs
+  `bw sync`. The report adds "unchanged (<age> s)". `bw list items` was
+  measured and refused: it returns every item in the vault, decrypted.
+
+
 ## [2026-11-24]
 
 
